@@ -1,0 +1,10 @@
+# Normalizar finales de linea entre plataformas
+* text=auto
+
+# Scripts batch requieren CRLF en Windows
+*.bat text eol=crlf
+
+# Imagenes y binarios
+*.png binary
+*.ico binary
+*.exe binary

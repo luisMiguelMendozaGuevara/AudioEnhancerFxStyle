@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.venv/
+venv/
+audio_enhancer_venv/
+
+# Configuración local y secretos
+*.env
+.env
+config.json
+
+# PyInstaller y compilación
+build/
+dist/
+actual/
+artefactos_compilacion/
+versiones_anteriores/
+*.spec
+*.toc
+*.pkg
+
+# Ejecutables y accesos directos generados localmente
+*.exe
+*.lnk
+
+# IDE / sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
