@@ -23,7 +23,7 @@ The app detects your Windows language automatically on startup:
 
 - Windows in English → English interface.
 - Windows in Spanish → Spanish interface.
-- Any other language → English as fallback.
+- Any other language → English as fallback (default).
 
 No configuration needed. If you change your Windows language, the app will pick it up on the next launch.
 

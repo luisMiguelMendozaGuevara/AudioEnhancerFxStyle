@@ -69,7 +69,7 @@ SAMPLE_RATE = 48000
 CHUNK = 1024
 RING_SECONDS = 0.2
 
-# Localización: español es el idioma de respaldo.
+# Localización: inglés es el idioma de respaldo.
 TRANSLATIONS = {
     "Audio Enhancer": "Audio Enhancer",
     "Procesamiento del audio del sistema vía WASAPI loopback": "System audio processing via WASAPI loopback",
@@ -107,12 +107,12 @@ TRANSLATIONS = {
 
 
 def detect_system_language():
-    """Devuelve 'en' para Windows en inglés y 'es' para el resto."""
+    """Devuelve 'es' para Windows en español y 'en' para el resto."""
     try:
         lang = locale.getlocale()[0] or ""
     except Exception:
         lang = ""
-    return "en" if lang.lower().startswith("en") else "es"
+    return "es" if lang.lower().startswith("es") else "en"
 
 
 def translate(text, language):
