@@ -169,6 +169,16 @@ python -c "import numpy, scipy, customtkinter, pyaudiowpatch; print('Dependencie
 - Test at low volume first to avoid unexpected peaks.
 - Actual audio processing depends on installed devices and cannot be guaranteed by a synthetic test alone.
 
+## Support / Donate
+
+This project is developed and maintained in my free time, for free. If Audio Enhancer FxStyle has been useful to you and you'd like to support its development, you can make a donation. Any amount helps and is greatly appreciated:
+
+👉 [Donate via PayPal](https://paypal.me/BLACWARG)
+
+Thank you for your support!
+
+---
+
 ## Contributing
 
 Contributions are welcome. When opening an issue, please include:
