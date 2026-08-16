@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests del motor de audio (audio_enhancer.engine.AudioEngine) con PortAudio
 simulado: apertura de streams, formato de muestreo, ring buffer con
 wrap-around, huecos con fundido y ajuste de deriva."""
@@ -63,6 +62,7 @@ def _noise(n=2048, seed=3):
 
 # ---------- apertura de streams ----------
 
+
 def test_start_capture_usa_constantes_del_modulo(fake_pa, engine):
     pa_mod, pa = fake_pa
     engine.start_capture(pa, in_idx=7, rate=48000)
@@ -100,6 +100,7 @@ def test_stop_cierra_streams_y_es_idempotente(fake_pa, engine):
 
 # ---------- ring buffer ----------
 
+
 def test_ring_fill_y_lectura_contigua(engine):
     engine.configure_ring(48000)
     assert engine.nframes == int(48000 * 0.2)
@@ -123,10 +124,13 @@ def test_ring_wraparound_descarta_lo_mas_viejo(engine):
     # _put descarta lo mas viejo poniendo a cero una ventana del ring: la
     # lectura empieza con `dropped` ceros y el resto es stream[dropped*2:].
     out = engine._read(nframes)
-    expected = np.concatenate([
-        np.zeros((dropped, 2), dtype=np.float32),
-        stream[dropped * 2:],
-    ], axis=0)
+    expected = np.concatenate(
+        [
+            np.zeros((dropped, 2), dtype=np.float32),
+            stream[dropped * 2 :],
+        ],
+        axis=0,
+    )
     assert out.shape == (nframes, 2)
     assert np.array_equal(out, expected)
 
@@ -134,16 +138,16 @@ def test_ring_wraparound_descarta_lo_mas_viejo(engine):
 def test_hueco_devuelve_silencio_con_fundido(engine):
     engine.configure_ring(48000)
     n = 1024
-    out = engine._read(n)              # ring vacio
+    out = engine._read(n)  # ring vacio
     assert np.all(out == 0.0)
     assert engine.in_gap is True
     assert engine.fadein_frames > 0
 
     block = np.ones((2048, 2), dtype=np.float32)
     engine._put(block)
-    out = engine._read(n)              # sale del hueco: fundido de entrada
+    out = engine._read(n)  # sale del hueco: fundido de entrada
     assert float(out[0, 0]) <= 0.02
-    assert 0.4 <= float(out[120, 0]) <= 0.6   # 120/239 ~= 0.50
+    assert 0.4 <= float(out[120, 0]) <= 0.6  # 120/239 ~= 0.50
     assert float(out[239, 0]) > 0.95
     assert engine.in_gap is False
 
@@ -162,7 +166,6 @@ def test_deriva_corrige_limitando_a_frames_maximos(engine):
     engine._rhead = engine._drift_target + 200  # salida rezagada (mucha deriva)
     engine._whead = 0
     with engine.lock:
-        n_adj = int(np.trunc(
-            (engine._rhead - engine._whead - engine._drift_target) * engine._drift_gain))
+        n_adj = int(np.trunc((engine._rhead - engine._whead - engine._drift_target) * engine._drift_gain))
         n_adj = max(-engine._max_drift_frames, min(engine._max_drift_frames, n_adj))
     assert -engine._max_drift_frames <= n_adj <= engine._max_drift_frames

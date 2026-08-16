@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests del motor DSP (audio_enhancer.dsp.Enhancer).
 
 Se prueban comportamientos deterministas con tonos sinteticos: bypass A/B,
@@ -41,6 +40,7 @@ def noise():
 
 # ---------- bypass A/B ----------
 
+
 def test_bypass_directo_devuelve_entrada_identica(noise):
     e = Enhancer()
     e.blend = 0.0
@@ -61,6 +61,7 @@ def test_bypass_mono_mantiene_forma():
 
 
 # ---------- volumen ----------
+
 
 def test_volumen_estado_estacionario(noise):
     e = Enhancer()
@@ -84,6 +85,7 @@ def test_volumen_1_0_passthrough(noise):
 
 
 # ---------- limitador suave ----------
+
 
 def test_limitador_suaviza_sin_recorte_duro():
     x = _stereo(0.8, 220.0)
@@ -118,6 +120,7 @@ def test_limitador_nunca_supera_1_0():
 
 
 # ---------- compresor RMS ----------
+
 
 def test_compresor_atentua_material_fuerte():
     x = np.full((N, 2), 0.9, dtype=np.float32)
@@ -155,6 +158,7 @@ def test_sin_compresor_passthrough():
 
 # ---------- ecualizador ----------
 
+
 def test_bass_boost_incrementa_energia_en_graves():
     x = _stereo(0.2, 60.0)
     e = Enhancer()
@@ -190,6 +194,7 @@ def test_banda_eq_negativa_atenua():
 
 # ---------- salida acotada y analizador ----------
 
+
 def test_salida_siempre_acotada_a_1():
     rng = np.random.default_rng(7)
     x = (rng.standard_normal((N, 2)) * 3.0).astype(np.float32)
@@ -210,8 +215,8 @@ def test_espectro_64_barras_validas():
     sp = e.spectrum
     assert sp is not None and sp.shape == (64,)
     assert np.isfinite(sp).all()
-    assert float(sp.max()) <= 0.0            # dBFS: senal <= 1.0 -> <= 0 dB
-    assert int(np.sum(sp > -60.0)) >= 1      # el tono debe marcar bins calidos
+    assert float(sp.max()) <= 0.0  # dBFS: senal <= 1.0 -> <= 0 dB
+    assert int(np.sum(sp > -60.0)) >= 1  # el tono debe marcar bins calidos
 
 
 def test_espectro_silencio_queda_en_piso():

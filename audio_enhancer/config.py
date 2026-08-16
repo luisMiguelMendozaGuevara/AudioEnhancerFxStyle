@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Persistencia: carga/guardado del config.json en %APPDATA%."""
 
 import json
@@ -11,7 +10,7 @@ from .constants import CONFIG_PATH
 def load_config(path: str = CONFIG_PATH) -> dict[str, Any]:
     """Carga la configuración. Devuelve {} si no existe o está dañada."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception:
         return {}

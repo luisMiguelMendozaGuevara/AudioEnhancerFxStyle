@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests de persistencia (audio_enhancer.config): round-trip, creacion de
 directorios y tolerancia a archivos corruptos."""
 

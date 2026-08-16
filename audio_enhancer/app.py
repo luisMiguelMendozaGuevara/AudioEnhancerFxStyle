@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Capa de interfaz: ventana principal, dispositivos, presets, medidor y tray.
 
 App coordina: descubrimiento de dispositivos (PortAudio + WASAPI loopback),
@@ -7,6 +6,7 @@ y el icono de bandeja. Todo el trabajo pesado corre en hilos y la UI se
 actualiza desde el hilo principal.
 """
 
+import contextlib
 import logging
 import math
 import os
@@ -18,12 +18,30 @@ import tkinter as tk
 import customtkinter as ctk
 
 from .config import load_config, save_config
-from .constants import (ACCENT, CABLE_KEYWORDS, CONFIG_PATH, DANGER, DEFAULT_PRESET,
-                        OK, VIRTUAL_CABLE_KEYWORDS, WARN, WINDOW_TITLE,
-                        resource_path)
+from .constants import (
+    ACCENT,
+    CABLE_KEYWORDS,
+    CONFIG_PATH,
+    DANGER,
+    DEFAULT_PRESET,
+    OK,
+    VIRTUAL_CABLE_KEYWORDS,
+    WARN,
+    WINDOW_TITLE,
+    resource_path,
+)
 from .dsp import Enhancer
 from .engine import AudioEngine, _pa
-from .i18n import EQ_EXPLAIN, EQ_EXPLAIN_EN, EXPLAIN, EXPLAIN_EN, PRESETS, detect_system_language, translate
+from .i18n import (
+    CABLE_GUIDE,
+    EQ_EXPLAIN,
+    EQ_EXPLAIN_EN,
+    EXPLAIN,
+    EXPLAIN_EN,
+    PRESETS,
+    detect_system_language,
+    translate,
+)
 from .tray import TrayIcon
 from .widgets import ScrollBody, ToolTip
 
@@ -31,6 +49,7 @@ logger = logging.getLogger("audio_enhancer.app")
 
 try:
     import pystray  # noqa: F401
+
     _HAVE_TRAY = True
 except Exception:
     _HAVE_TRAY = False
@@ -53,10 +72,10 @@ class App:
         self._closing = False
         self.pa = None
         self.tray_icon = None
-        self.loopbacks = []          # lista de dicts: indices loopback WASAPI
-        self.speakers = []           # lista de dicts: salidas fisicas WASAPI
+        self.loopbacks = []  # lista de dicts: indices loopback WASAPI
+        self.speakers = []  # lista de dicts: salidas fisicas WASAPI
         self.go = False
-        self._keep_src = ""          # selecciones a conservar tras refresh
+        self._keep_src = ""  # selecciones a conservar tras refresh
         self._keep_out = ""
         # Atributos creados por _scale/_build_ui; se declaran aquí para que
         # existan antes de aplicar la configuración persistida y sean visibles
@@ -107,7 +126,7 @@ class App:
         speaker_names = [d["name"] for d in self.speakers]
         self.source_box.configure(values=loop_names)
         self.output_box.configure(values=speaker_names)
-        self._apply_config()   # reintenta seleccionar los dispositivos guardados
+        self._apply_config()  # reintenta seleccionar los dispositivos guardados
         if self._keep_src in loop_names:
             self.source_var.set(self._keep_src)
         if self._keep_out in speaker_names:
@@ -153,8 +172,7 @@ class App:
                 self.speakers.append(d)
 
     def _has_cable(self):
-        return any(any(k in m["name"].lower() for k in CABLE_KEYWORDS)
-                   for m in self.loopbacks)
+        return any(any(k in m["name"].lower() for k in CABLE_KEYWORDS) for m in self.loopbacks)
 
     def _refresh_devices(self):
         """Hot-plug: re-descubre dispositivos (en hilo) sin congelar la UI."""
@@ -194,8 +212,7 @@ class App:
                     break
             else:
                 for i, d in enumerate(self.loopbacks):
-                    if any(k in d["name"].lower() for k in VIRTUAL_CABLE_KEYWORDS) \
-                            and not self._is_fxsound(d["name"]):
+                    if any(k in d["name"].lower() for k in VIRTUAL_CABLE_KEYWORDS) and not self._is_fxsound(d["name"]):
                         idx = i
                         break
             self.source_var.set(self.loopbacks[idx]["name"])
@@ -226,10 +243,15 @@ class App:
 
         header = ctk.CTkFrame(root, corner_radius=0, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 2))
-        ctk.CTkLabel(header, text=self._t("Audio Enhancer"), font=("Segoe UI", 26, "bold"),
-                     text_color=ACCENT).pack(anchor="w")
-        ctk.CTkLabel(header, text=self._t("Procesamiento del audio del sistema vía WASAPI loopback"),
-                     font=("Segoe UI", 12), text_color=("gray30", "gray70")).pack(anchor="w")
+        ctk.CTkLabel(header, text=self._t("Audio Enhancer"), font=("Segoe UI", 26, "bold"), text_color=ACCENT).pack(
+            anchor="w"
+        )
+        ctk.CTkLabel(
+            header,
+            text=self._t("Procesamiento del audio del sistema vía WASAPI loopback"),
+            font=("Segoe UI", 12),
+            text_color=("gray30", "gray70"),
+        ).pack(anchor="w")
 
         body = ScrollBody(root, corner_radius=0, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
@@ -238,29 +260,49 @@ class App:
         # Dispositivos y ruteo
         card = ctk.CTkFrame(body.inner, corner_radius=14)
         card.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(card, text=self._t("Dispositivos y ruteo"), font=("Segoe UI", 16, "bold"),
-                     anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(12, 6))
+        ctk.CTkLabel(card, text=self._t("Dispositivos y ruteo"), font=("Segoe UI", 16, "bold"), anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(12, 6)
+        )
 
-        ctk.CTkLabel(card, text=self._t("Captura (loopback):"), anchor="w").grid(row=1, column=0, sticky="w", padx=16, pady=4)
+        ctk.CTkLabel(card, text=self._t("Captura (loopback):"), anchor="w").grid(
+            row=1, column=0, sticky="w", padx=16, pady=4
+        )
         self.source_var = ctk.StringVar()
-        self.source_box = ctk.CTkComboBox(card, variable=self.source_var, state="readonly",
-                                          values=[d["name"] for d in self.loopbacks],
-                                          command=self._route_guard)
+        self.source_box = ctk.CTkComboBox(
+            card,
+            variable=self.source_var,
+            state="readonly",
+            values=[d["name"] for d in self.loopbacks],
+            command=self._route_guard,
+        )
         self.source_box.grid(row=1, column=1, sticky="ew", padx=16, pady=4)
 
-        ctk.CTkLabel(card, text=self._t("Salida (física):"), anchor="w").grid(row=2, column=0, sticky="w", padx=16, pady=4)
+        ctk.CTkLabel(card, text=self._t("Salida (física):"), anchor="w").grid(
+            row=2, column=0, sticky="w", padx=16, pady=4
+        )
         self.output_var = ctk.StringVar()
-        self.output_box = ctk.CTkComboBox(card, variable=self.output_var, state="readonly",
-                                          values=[d["name"] for d in self.speakers],
-                                          command=self._route_guard)
+        self.output_box = ctk.CTkComboBox(
+            card,
+            variable=self.output_var,
+            state="readonly",
+            values=[d["name"] for d in self.speakers],
+            command=self._route_guard,
+        )
         self.output_box.grid(row=2, column=1, sticky="ew", padx=16, pady=4)
 
-        self.route_label = ctk.CTkLabel(card, text="", font=("Segoe UI", 12, "bold"), wraplength=560,
-                                        justify="left", anchor="w")
+        self.route_label = ctk.CTkLabel(
+            card, text="", font=("Segoe UI", 12, "bold"), wraplength=560, justify="left", anchor="w"
+        )
         self.route_label.grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(8, 4))
-        self.refresh_btn = ctk.CTkButton(card, text=self._t("Actualizar dispositivos"), height=32,
-                                         corner_radius=8, fg_color=("gray70", "gray25"),
-                                         font=("Segoe UI", 12), command=self._refresh_devices)
+        self.refresh_btn = ctk.CTkButton(
+            card,
+            text=self._t("Actualizar dispositivos"),
+            height=32,
+            corner_radius=8,
+            fg_color=("gray70", "gray25"),
+            font=("Segoe UI", 12),
+            command=self._refresh_devices,
+        )
         self.refresh_btn.grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
         card.grid_columnconfigure(1, weight=1)
 
@@ -268,85 +310,154 @@ class App:
         fx = ctk.CTkFrame(body.inner, corner_radius=14)
         fx.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(fx, text=self._t("Efectos"), font=("Segoe UI", 16, "bold"), anchor="w").grid(
-            row=0, column=0, columnspan=4, sticky="ew", padx=16, pady=(12, 4))
+            row=0, column=0, columnspan=4, sticky="ew", padx=16, pady=(12, 4)
+        )
 
         preset_row = ctk.CTkFrame(fx, fg_color="transparent")
         preset_row.grid(row=1, column=0, columnspan=4, sticky="ew", padx=16, pady=(0, 6))
         ctk.CTkLabel(preset_row, text=self._t("Configuración:"), font=("Segoe UI", 12, "bold")).pack(side="left")
         self.preset_var = ctk.StringVar(value=DEFAULT_PRESET)
-        self.preset_box = ctk.CTkComboBox(preset_row, variable=self.preset_var, state="readonly",
-                                          values=list(PRESETS.keys()), width=240,
-                                          command=self.apply_preset)
+        self.preset_box = ctk.CTkComboBox(
+            preset_row,
+            variable=self.preset_var,
+            state="readonly",
+            values=list(PRESETS.keys()),
+            width=240,
+            command=self.apply_preset,
+        )
         self.preset_box.pack(side="left", padx=8)
         # Boton A/B: compara el audio procesado con el directo (sin efectos)
-        self.ab_button = ctk.CTkButton(preset_row, text=self._t("A: Efectos ON"),
-                                       width=120, height=30, corner_radius=8,
-                                       font=("Segoe UI", 12, "bold"), fg_color=ACCENT,
-                                       command=self.toggle_ab)
+        self.ab_button = ctk.CTkButton(
+            preset_row,
+            text=self._t("A: Efectos ON"),
+            width=120,
+            height=30,
+            corner_radius=8,
+            font=("Segoe UI", 12, "bold"),
+            fg_color=ACCENT,
+            command=self.toggle_ab,
+        )
         self.ab_button.pack(side="right")
 
         # Presets personalizados: guardar el estado actual / borrar el seleccionado
         custom_row = ctk.CTkFrame(fx, fg_color="transparent")
         custom_row.grid(row=2, column=0, columnspan=4, sticky="ew", padx=16, pady=(0, 6))
         ctk.CTkLabel(custom_row, text=self._t("Nuevo preset:"), font=("Segoe UI", 12)).pack(side="left")
-        self.preset_entry = ctk.CTkEntry(custom_row, placeholder_text=self._t("nombre del preset"), width=220,
-                                         font=("Segoe UI", 12))
+        self.preset_entry = ctk.CTkEntry(
+            custom_row, placeholder_text=self._t("nombre del preset"), width=220, font=("Segoe UI", 12)
+        )
         self.preset_entry.pack(side="left", padx=8)
-        ctk.CTkButton(custom_row, text=self._t("Guardar"), width=90, height=30, corner_radius=8,
-                      font=("Segoe UI", 12, "bold"), command=self._save_custom_preset).pack(
-                      side="left", padx=(0, 6))
-        ctk.CTkButton(custom_row, text=self._t("Borrar"), width=90, height=30, corner_radius=8,
-                      fg_color=DANGER, font=("Segoe UI", 12, "bold"),
-                      command=self._delete_custom_preset).pack(side="left")
+        ctk.CTkButton(
+            custom_row,
+            text=self._t("Guardar"),
+            width=90,
+            height=30,
+            corner_radius=8,
+            font=("Segoe UI", 12, "bold"),
+            command=self._save_custom_preset,
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            custom_row,
+            text=self._t("Borrar"),
+            width=90,
+            height=30,
+            corner_radius=8,
+            fg_color=DANGER,
+            font=("Segoe UI", 12, "bold"),
+            command=self._delete_custom_preset,
+        ).pack(side="left")
 
-        self._scale(fx, self._t("Volumen"), 0.0, 2.0, 1.0, 200, 3, self.set_volume, "mult", "vol_label",
-                    help_text=self._help("volumen"))
-        self._scale(fx, self._t("Bass Boost (dB)"), 0, 12, 0, 200, 4, self.set_bass, "db", "bass_label",
-                    help_text=self._help("bass"))
-        self._scale(fx, self._t("Treble Boost (dB)"), 0, 12, 0, 200, 5, self.set_treble, "db", "treble_label",
-                    help_text=self._help("treble"))
+        self._scale(
+            fx,
+            self._t("Volumen"),
+            0.0,
+            2.0,
+            1.0,
+            200,
+            3,
+            self.set_volume,
+            "mult",
+            "vol_label",
+            help_text=self._help("volumen"),
+        )
+        self._scale(
+            fx,
+            self._t("Bass Boost (dB)"),
+            0,
+            12,
+            0,
+            200,
+            4,
+            self.set_bass,
+            "db",
+            "bass_label",
+            help_text=self._help("bass"),
+        )
+        self._scale(
+            fx,
+            self._t("Treble Boost (dB)"),
+            0,
+            12,
+            0,
+            200,
+            5,
+            self.set_treble,
+            "db",
+            "treble_label",
+            help_text=self._help("treble"),
+        )
         for idx in range(1, 5):
             fx.grid_columnconfigure(idx, weight=1)
 
         # Limitador, compresor + medidor de nivel
         meter_row = ctk.CTkFrame(fx, fg_color="transparent")
         meter_row.grid(row=6, column=0, columnspan=4, sticky="ew", padx=16, pady=(4, 0))
-        self.limiter_switch = ctk.CTkSwitch(meter_row, text=self._t("Limitador suave"), font=("Segoe UI", 12),
-                                            command=self.toggle_limiter)
+        self.limiter_switch = ctk.CTkSwitch(
+            meter_row, text=self._t("Limitador suave"), font=("Segoe UI", 12), command=self.toggle_limiter
+        )
         self.limiter_switch.select()
         self.limiter_switch.pack(side="left")
         ToolTip(self.limiter_switch, self._help("limiter"))
-        self.comp_switch = ctk.CTkSwitch(meter_row, text=self._t("Compresor RMS"), font=("Segoe UI", 12),
-                                         command=self.toggle_compressor)
+        self.comp_switch = ctk.CTkSwitch(
+            meter_row, text=self._t("Compresor RMS"), font=("Segoe UI", 12), command=self.toggle_compressor
+        )
         self.comp_switch.select()
         self.comp_switch.pack(side="left", padx=(12, 0))
         ToolTip(self.comp_switch, self._help("compressor"))
-        ctk.CTkLabel(meter_row, text=self._t("Nivel:"), font=("Segoe UI", 11, "bold"),
-                     text_color=("gray30", "gray60")).pack(side="left", padx=(12, 4))
-        self.meter_bar = ctk.CTkProgressBar(meter_row, width=200, height=12,
-                                            fg_color=("gray78", "gray22"))
+        ctk.CTkLabel(
+            meter_row, text=self._t("Nivel:"), font=("Segoe UI", 11, "bold"), text_color=("gray30", "gray60")
+        ).pack(side="left", padx=(12, 4))
+        self.meter_bar = ctk.CTkProgressBar(meter_row, width=200, height=12, fg_color=("gray78", "gray22"))
         self.meter_bar.set(0)
         self.meter_bar.pack(side="left")
-        self.meter_label = ctk.CTkLabel(meter_row, text="0 dB", width=70,
-                                        font=("Segoe UI Mono", 11), text_color=("gray30", "gray70"))
+        self.meter_label = ctk.CTkLabel(
+            meter_row, text="0 dB", width=70, font=("Segoe UI Mono", 11), text_color=("gray30", "gray70")
+        )
         self.meter_label.pack(side="left", padx=6)
 
         # Ecualizador
         eq = ctk.CTkFrame(body.inner, corner_radius=14)
         eq.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(eq, text=self._t("Ecualizador (9 bandas)"), font=("Segoe UI", 16, "bold"), anchor="w").grid(
-            row=0, column=0, columnspan=9, sticky="ew", padx=16, pady=(10, 4))
+            row=0, column=0, columnspan=9, sticky="ew", padx=16, pady=(10, 4)
+        )
         self.eq_scales = []
         eq_explain = EQ_EXPLAIN_EN if self.language == "en" else EQ_EXPLAIN
         for i, freq in enumerate(self.enhancer.eq_bands):
             frame = ctk.CTkFrame(eq, fg_color="transparent")
             frame.grid(row=1, column=i, padx=4, sticky="ns")
             label = "%d Hz" % freq if freq < 1000 else "%d kHz" % (freq // 1000)
-            ctk.CTkLabel(frame, text=label, font=("Segoe UI", 10, "bold"),
-                         text_color=("gray30", "gray65")).pack()
-            slider = ctk.CTkSlider(frame, from_=-12, to=12, number_of_steps=48, height=104,
-                                   orientation="vertical", width=22,
-                                   command=lambda v, idx=i: self.set_eq(idx, v))
+            ctk.CTkLabel(frame, text=label, font=("Segoe UI", 10, "bold"), text_color=("gray30", "gray65")).pack()
+            slider = ctk.CTkSlider(
+                frame,
+                from_=-12,
+                to=12,
+                number_of_steps=48,
+                height=104,
+                orientation="vertical",
+                width=22,
+                command=lambda v, idx=i: self.set_eq(idx, v),
+            )
             slider.set(0)
             slider.pack(pady=2)
             band_help = eq_explain.get(freq, EXPLAIN["eq"])
@@ -356,8 +467,9 @@ class App:
         # Analizador de espectro
         spec = ctk.CTkFrame(body.inner, corner_radius=14)
         spec.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(spec, text=self._t("Analizador de espectro"), font=("Segoe UI", 16, "bold"),
-                     anchor="w").grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
+        ctk.CTkLabel(spec, text=self._t("Analizador de espectro"), font=("Segoe UI", 16, "bold"), anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=16, pady=(10, 4)
+        )
         self.spec_canvas = tk.Canvas(spec, height=80, bg="#16181d", highlightthickness=0)
         self.spec_canvas.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
         spec.grid_columnconfigure(0, weight=1)
@@ -365,31 +477,55 @@ class App:
         # Acciones
         actions = ctk.CTkFrame(body.inner, corner_radius=14, fg_color="transparent")
         actions.grid(row=4, column=0, sticky="ew")
-        self.start_button = ctk.CTkButton(actions, text="▶  " + self._t("Iniciar audio del sistema"),
-                                          command=self.toggle, corner_radius=10, height=40,
-                                          font=("Segoe UI", 15, "bold"))
+        self.start_button = ctk.CTkButton(
+            actions,
+            text="▶  " + self._t("Iniciar audio del sistema"),
+            command=self.toggle,
+            corner_radius=10,
+            height=40,
+            font=("Segoe UI", 15, "bold"),
+        )
         self.start_button.pack(fill="x", padx=4, pady=3)
         btn_row = ctk.CTkFrame(actions, fg_color="transparent")
         btn_row.pack(fill="x", padx=4)
-        ctk.CTkButton(btn_row, text=self._t("Instalar loopback propio (VB-CABLE)"),
-                      command=self._show_cable_guide, corner_radius=10, height=34,
-                      fg_color=("gray70", "gray25"), font=("Segoe UI", 12)).pack(
-                      side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(btn_row, text=self._t("Restablecer"), command=self.reset, corner_radius=10,
-                      height=34, fg_color=("gray75", "gray30")).pack(
-                      side="left", fill="x", expand=True, padx=(4, 0))
+        ctk.CTkButton(
+            btn_row,
+            text=self._t("Instalar loopback propio (VB-CABLE)"),
+            command=self._show_cable_guide,
+            corner_radius=10,
+            height=34,
+            fg_color=("gray70", "gray25"),
+            font=("Segoe UI", 12),
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            btn_row,
+            text=self._t("Restablecer"),
+            command=self.reset,
+            corner_radius=10,
+            height=34,
+            fg_color=("gray75", "gray30"),
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
         self.autostart_var = ctk.BooleanVar(value=self._auto_start_enabled())
-        ctk.CTkCheckBox(btn_row, text=self._t("Iniciar con Windows"), variable=self.autostart_var,
-                        command=self._on_autostart_toggle, font=("Segoe UI", 12)).pack(
-                        side="left", fill="x", expand=True, padx=(8, 0))
+        ctk.CTkCheckBox(
+            btn_row,
+            text=self._t("Iniciar con Windows"),
+            variable=self.autostart_var,
+            command=self._on_autostart_toggle,
+            font=("Segoe UI", 12),
+        ).pack(side="left", fill="x", expand=True, padx=(8, 0))
 
-        self.status = ctk.CTkLabel(root, text=self._t("Listo. Configura el ruteo y pulsa Iniciar."),
-                                   font=("Segoe UI", 12, "bold"), text_color=OK)
+        self.status = ctk.CTkLabel(
+            root,
+            text=self._t("Listo. Configura el ruteo y pulsa Iniciar."),
+            font=("Segoe UI", 12, "bold"),
+            text_color=OK,
+        )
         self.status.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
 
     def _scale(self, parent, text, lo, hi, value, steps, row, callback, fmt, label_attr, help_text=None):
         ctk.CTkLabel(parent, text=text, font=("Segoe UI", 12), anchor="w").grid(
-            row=row, column=0, sticky="w", padx=16, pady=6)
+            row=row, column=0, sticky="w", padx=16, pady=6
+        )
         _label = ctk.CTkLabel(parent, text="", width=64, font=("Segoe UI Mono", 12, "bold"))
         _label.grid(row=row, column=3, sticky="e", padx=(12, 16), pady=6)
         if fmt == "db":
@@ -402,8 +538,13 @@ class App:
                 return "+%.1f dB" % float(v)
             return "%.2fx" % float(v)
 
-        slider = ctk.CTkSlider(parent, from_=lo, to=hi, number_of_steps=steps,
-                               command=lambda v, f=callback, l=_label, fm=_fmt: (f(v), l.configure(text=fm(v))))
+        slider = ctk.CTkSlider(
+            parent,
+            from_=lo,
+            to=hi,
+            number_of_steps=steps,
+            command=lambda v, f=callback, lb=_label, fm=_fmt: (f(v), lb.configure(text=fm(v))),
+        )
         slider.set(value)
         slider.grid(row=row, column=1, columnspan=2, sticky="ew", padx=8, pady=6)
         setattr(self, label_attr, _label)
@@ -418,10 +559,17 @@ class App:
 
     # ---------- logica ----------
 
-    def set_volume(self, v): self.enhancer.volume = float(v)
-    def set_bass(self, v): self.enhancer.bass = float(v)
-    def set_treble(self, v): self.enhancer.treble = float(v)
-    def set_eq(self, i, v): self.enhancer.eq_gains[i] = float(v)
+    def set_volume(self, v):
+        self.enhancer.volume = float(v)
+
+    def set_bass(self, v):
+        self.enhancer.bass = float(v)
+
+    def set_treble(self, v):
+        self.enhancer.treble = float(v)
+
+    def set_eq(self, i, v):
+        self.enhancer.eq_gains[i] = float(v)
 
     # ---------- A/B, limitador, medidor, autoinicio ----------
 
@@ -438,20 +586,21 @@ class App:
 
     def toggle_limiter(self):
         self.enhancer.limiter = bool(self.limiter_switch.get())
-        self.status.configure(text=self._t("Limitador suave: %s") % ("ON" if self.enhancer.limiter else "OFF"),
-                              text_color=OK)
+        self.status.configure(
+            text=self._t("Limitador suave: %s") % ("ON" if self.enhancer.limiter else "OFF"), text_color=OK
+        )
 
     def toggle_compressor(self):
         self.enhancer.compressor = bool(self.comp_switch.get())
-        self.status.configure(text=self._t("Compresor RMS: %s") % ("ON" if self.enhancer.compressor else "OFF"),
-                              text_color=OK)
+        self.status.configure(
+            text=self._t("Compresor RMS: %s") % ("ON" if self.enhancer.compressor else "OFF"), text_color=OK
+        )
 
     def _on_autostart_toggle(self):
         ok = self._set_auto_start(bool(self.autostart_var.get()))
         if not ok:
             self.autostart_var.set(not self.autostart_var.get())
-        text = (self._t("Inicio con Windows: activado") if ok
-                else self._t("Inicio con Windows: fallo al configurar"))
+        text = self._t("Inicio con Windows: activado") if ok else self._t("Inicio con Windows: fallo al configurar")
         self.status.configure(text=text, text_color=OK if ok else DANGER)
 
     def _update_meter(self):
@@ -460,7 +609,6 @@ class App:
             return
         try:
             peak = self.enhancer.level_peak
-            rms = self.enhancer.level_rms
             # escala visual: 0..1 -> dBFS (0 dB = 1.0)
             bar = float(min(peak, 1.0))
             self.meter_bar.set(bar)
@@ -496,8 +644,7 @@ class App:
             n = len(spec)
             if getattr(self, "_spec_ids", None) is None or len(self._spec_ids) != n:
                 cv.delete("all")
-                self._spec_ids = [cv.create_rectangle(0, 0, 0, 0, fill=ACCENT, outline="")
-                                  for _ in range(n)]
+                self._spec_ids = [cv.create_rectangle(0, 0, 0, 0, fill=ACCENT, outline="") for _ in range(n)]
             bw = w / n
             for i, db in enumerate(spec):
                 # escala: -60 dBFS..0 -> altura
@@ -524,7 +671,7 @@ class App:
         self.vol_label.configure(text="%.2fx" % self.enhancer.volume)
         self.bass_label.configure(text="+%.1f dB" % self.enhancer.bass)
         self.treble_label.configure(text="+%.1f dB" % self.enhancer.treble)
-        for s, g in zip(self.eq_scales, self.enhancer.eq_gains):
+        for s, g in zip(self.eq_scales, self.enhancer.eq_gains, strict=False):
             s.set(g)
 
     def apply_preset(self, name):
@@ -557,13 +704,14 @@ class App:
     def _save_custom_preset(self):
         name = self.preset_entry.get().strip()
         if not name:
-            self.status.configure(text=self._t("Escribe un nombre para el preset personalizado."),
-                                  text_color=WARN)
+            self.status.configure(text=self._t("Escribe un nombre para el preset personalizado."), text_color=WARN)
             return
         self.custom_presets[name] = (
-            float(self.enhancer.volume), float(self.enhancer.bass),
+            float(self.enhancer.volume),
+            float(self.enhancer.bass),
             float(self.enhancer.treble),
-            [float(g) for g in self.enhancer.eq_gains])
+            [float(g) for g in self.enhancer.eq_gains],
+        )
         self.preset_entry.delete(0, "end")
         self._refresh_preset_list(keep=name)
         self._save_config()
@@ -572,8 +720,7 @@ class App:
     def _delete_custom_preset(self):
         name = self.preset_var.get()
         if name not in self.custom_presets:
-            self.status.configure(text=self._t("Selecciona un preset personalizado para borrarlo."),
-                                  text_color=WARN)
+            self.status.configure(text=self._t("Selecciona un preset personalizado para borrarlo."), text_color=WARN)
             return
         del self.custom_presets[name]
         self._refresh_preset_list(keep=DEFAULT_PRESET)
@@ -591,8 +738,7 @@ class App:
             self._start_tray()
             self._save_config()
             self.root.withdraw()
-            self.status.configure(text=self._t("Procesando en segundo plano (icono en bandeja)."),
-                                  text_color=WARN)
+            self.status.configure(text=self._t("Procesando en segundo plano (icono en bandeja)."), text_color=WARN)
             return
         self._shutdown()
 
@@ -625,14 +771,17 @@ class App:
             if os.path.exists(ico):
                 self.root.iconbitmap(default=ico)
         except Exception:
-            pass
+            # Sin icono la app funciona igual; solo interesa para depuración
+            logger.debug("No se pudo aplicar el icono de ventana", exc_info=True)
 
     def _tray_image(self):
         try:
             from PIL import Image
+
             path = resource_path("tray.png")
             return Image.open(path)
         except Exception:
+            logger.debug("No se pudo cargar la imagen del tray", exc_info=True)
             return None
 
     def _start_tray(self):
@@ -641,10 +790,9 @@ class App:
         img = self._tray_image()
         if img is None:
             return
-        self.tray_icon = TrayIcon(self.root, img,
-                                  show_hide=self._do_toggle_show,
-                                  toggle_audio=self.toggle,
-                                  on_quit=self._shutdown)
+        self.tray_icon = TrayIcon(
+            self.root, img, show_hide=self._do_toggle_show, toggle_audio=self.toggle, on_quit=self._shutdown
+        )
         self.tray_icon.start()
 
     def _tray_toggle_show(self, icon=None, item=None):
@@ -669,30 +817,34 @@ class App:
     def _auto_start_enabled(self):
         try:
             import winreg
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                 r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ
+            )
             try:
                 val, _ = winreg.QueryValueEx(key, "AudioEnhancerFxStyle")
                 return bool(val)
             finally:
                 winreg.CloseKey(key)
         except Exception:
+            # Sin la clave de autostart el arranque es normal
+            logger.debug("No se pudo leer el autostart del registro", exc_info=True)
             return False
 
     def _set_auto_start(self, enable):
         try:
             import winreg
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                 r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE
+            )
             if enable:
                 exe = sys.executable
                 target = '"%s" "%s"' % (exe, os.path.abspath(sys.argv[0]))
                 winreg.SetValueEx(key, "AudioEnhancerFxStyle", 0, winreg.REG_SZ, target)
             else:
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     winreg.DeleteValue(key, "AudioEnhancerFxStyle")
-                except FileNotFoundError:
-                    pass
             winreg.CloseKey(key)
             return True
         except Exception:
@@ -766,8 +918,7 @@ class App:
 
         if not src_name or not out_name:
             self.go = False
-            label.configure(text=self._t("Selecciona una fuente de captura y una salida física."),
-                            text_color=WARN)
+            label.configure(text=self._t("Selecciona una fuente de captura y una salida física."), text_color=WARN)
             return
 
         same = self._norm(src_name) == self._norm(out_name)
@@ -778,35 +929,50 @@ class App:
         if same:
             self.go = False
             label.configure(
-                text=self._t("⚠  ECO: capturas y reproduces el mismo dispositivo (A → A). "
-                             "Selecciona como captura el cable virtual donde suenan las apps "
-                             "(p. ej. CABLE Input de VB-Audio) y como salida la física."),
-                text_color=DANGER)
+                text=self._t(
+                    "⚠  ECO: capturas y reproduces el mismo dispositivo (A → A). "
+                    "Selecciona como captura el cable virtual donde suenan las apps "
+                    "(p. ej. CABLE Input de VB-Audio) y como salida la física."
+                ),
+                text_color=DANGER,
+            )
             return
 
         if out_is_virtual:
             self.go = False
             label.configure(
-                text=self._t("⚠  La salida es virtual (cable). Reproduce en la salida FÍSICA "
-                             "(parlantes reales) para no realimentar el cable."),
-                text_color=DANGER)
+                text=self._t(
+                    "⚠  La salida es virtual (cable). Reproduce en la salida FÍSICA "
+                    "(parlantes reales) para no realimentar el cable."
+                ),
+                text_color=DANGER,
+            )
             return
 
         if src_is_fxsound:
             label.configure(
-                text=self._t("⚠  Estás capturando el loopback de FxSound (otra app). Si no percibes "
-                             "efecto o hay conflicto, instala VB-CABLE y captura 'CABLE Input'."),
-                text_color=WARN)
+                text=self._t(
+                    "⚠  Estás capturando el loopback de FxSound (otra app). Si no percibes "
+                    "efecto o hay conflicto, instala VB-CABLE y captura 'CABLE Input'."
+                ),
+                text_color=WARN,
+            )
         elif src_is_virtual:
             label.configure(
-                text=self._t("✔  Ruteo correcto: capturas tu cable virtual y solo la salida física "
-                             "reproduce el audio procesado. Cierra FxSound para no duplicar el efecto."),
-                text_color=OK)
+                text=self._t(
+                    "✔  Ruteo correcto: capturas tu cable virtual y solo la salida física "
+                    "reproduce el audio procesado. Cierra FxSound para no duplicar el efecto."
+                ),
+                text_color=OK,
+            )
         else:
             label.configure(
-                text=self._t("Info: capturas un parlante físico. Asegúrate de que sea el dispositivo "
-                             "donde suenan las apps y que la salida sea otro distinto."),
-                text_color=("gray30", "gray60"))
+                text=self._t(
+                    "Info: capturas un parlante físico. Asegúrate de que sea el dispositivo "
+                    "donde suenan las apps y que la salida sea otro distinto."
+                ),
+                text_color=("gray30", "gray60"),
+            )
         self.go = True
 
     def toggle(self):
@@ -816,8 +982,9 @@ class App:
         src, out = self._selected()
         if not self.go or src is None or out is None:
             self._route_guard()
-            self.status.configure(text=self._t("Revisa el ruteo: no captures y reproduzcas el mismo dispositivo."),
-                                  text_color=DANGER)
+            self.status.configure(
+                text=self._t("Revisa el ruteo: no captures y reproduzcas el mismo dispositivo."), text_color=DANGER
+            )
             return
         try:
             self._start(src, out)
@@ -876,8 +1043,7 @@ class App:
             self.status.configure(text=self._t("No se pudo iniciar el loopback: %s") % exc, text_color=DANGER)
             return
         src_name, out_name = self._active_names
-        self.status.configure(text=self._t("Activo (ring buffer): %s → %s") % (src_name, out_name),
-                              text_color=OK)
+        self.status.configure(text=self._t("Activo (ring buffer): %s → %s") % (src_name, out_name), text_color=OK)
 
     def _stop(self):
         self.engine.stop()
@@ -890,29 +1056,17 @@ class App:
     def _open_cable_folder(self):
         import subprocess
         import tempfile
+
         folder = os.path.join(tempfile.gettempdir(), "opencode", "VBCABLE", "extracted")
         if os.path.isdir(folder):
             subprocess.Popen(["explorer", folder])
-            self.status.configure(text=self._t("Se abrió la carpeta con el instalador de VB-CABLE."),
-                                  text_color=OK)
+            self.status.configure(text=self._t("Se abrió la carpeta con el instalador de VB-CABLE."), text_color=OK)
         else:
-            self.status.configure(text=self._t("Carpeta del instalador VB-CABLE no encontrada."),
-                                  text_color=DANGER)
+            self.status.configure(text=self._t("Carpeta del instalador VB-CABLE no encontrada."), text_color=DANGER)
 
     def _show_cable_guide(self):
-        msg = (
-            "Para un loopback propio (sin el APO de FxSound) hace falta el driver "
-            "virtual VB-CABLE.\n\n"
-            "1) Se abrió la carpeta con el instalador descargado.\n"
-            "2) Ejecuta VBCABLE_Setup_x64.exe COMO ADMINISTRADOR "
-            "(clic derecho > Ejecutar como administrador).\n"
-            "3) Pulsa 'Install Driver' y espera el mensaje de éxito.\n"
-            "4) Reinicia Windows.\n"
-            "5) En Sonido > Salida, pon 'CABLE Input (VB-Audio Virtual Cable)' "
-            "como dispositivo predeterminado.\n\n"
-            "Después, esta app capturará 'CABLE Input' y solo la salida física sonará. "
-            "No necesita FxSound."
-        )
         from tkinter import messagebox
-        self.root.after(0, lambda: messagebox.showinfo("Loopback propio (VB-CABLE)", msg))
+
+        title = self._t("Loopback propio (VB-CABLE)")
+        self.root.after(0, lambda: messagebox.showinfo(title, self._t(CABLE_GUIDE)))
         self.root.after(100, self._open_cable_folder)

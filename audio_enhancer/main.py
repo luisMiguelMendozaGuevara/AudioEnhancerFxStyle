@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Punto de entrada: instancia única + ventana + tray + logging rotativo.
 
 La lógica de instancia única (detección por título + mutex nombrado) cubre
@@ -28,8 +27,7 @@ def setup_logging() -> None:
     root = logging.getLogger()
     if root.handlers:
         return
-    fh = logging.handlers.RotatingFileHandler(
-        LOG_FILE, maxBytes=256 * 1024, backupCount=2, encoding="utf-8")
+    fh = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=256 * 1024, backupCount=2, encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(fh)
     root.setLevel(logging.WARNING)
@@ -43,6 +41,7 @@ def _bring_existing_to_front() -> bool:
     try:
         import ctypes
         from ctypes import wintypes
+
         u32 = ctypes.windll.user32
         k32 = ctypes.windll.kernel32
 
@@ -77,7 +76,7 @@ def _bring_existing_to_front() -> bool:
         u32.EnumWindows(_cb, 0)
         if found:
             hwnd = found[0]
-            u32.ShowWindow(hwnd, 9)      # SW_RESTORE
+            u32.ShowWindow(hwnd, 9)  # SW_RESTORE
             u32.SetForegroundWindow(hwnd)
             return True
         return False

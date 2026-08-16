@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Cadena DSP de Audio Enhancer FxStyle (puro numpy/scipy, sin UI).
 
 ``Enhancer`` procesa bloques de audio en el hilo de captura de PortAudio.
@@ -9,6 +8,8 @@ objetivos con una rampa exponencial por bloque; los filtros se rediseñan cada
 bloque con el valor suavizado. Nunca se escribe el estado del DSP desde el
 callback.
 """
+
+import math
 
 import numpy as np
 from scipy import signal
@@ -33,21 +34,26 @@ class Enhancer:
         self.bass: float = 0.0
         self.treble: float = 0.0
         self.volume: float = 1.0
-        self.bass_freq: float = 150.0       # corte del Low Shelf
-        self.treble_freq: float = 6000.0    # corte del High Shelf
-        self.eq_q: float = 1.4              # Q de las bandas peaking
+        self.bass_freq: float = 150.0  # corte del Low Shelf
+        self.treble_freq: float = 6000.0  # corte del High Shelf
+        self.eq_q: float = 1.4  # Q de las bandas peaking
         # Limitador suave (seguridad nivel final)
         self.limiter: bool = True
         self.limiter_threshold: float = 0.95
         self.limiter_strength: float = 0.6
         # Compresor RMS dinámico (loudness)
         self.compressor: bool = True
-        self.comp_threshold: float = 0.85        # ~-1.4 dBFS
-        self.comp_ratio: float = 4.0             # compresión 4:1
-        self.comp_attack: float = 0.005          # segundos
-        self.comp_release: float = 0.2           # segundos
+        self.comp_threshold: float = 0.85  # ~-1.4 dBFS
+        self.comp_ratio: float = 4.0  # compresión 4:1
+        self.comp_attack: float = 0.005  # segundos
+        self.comp_release: float = 0.2  # segundos
         self.comp_makeup: float = 1.0
         self._gain_db: float = 0.0
+        # Umbral del compresor en dB: solo depende de comp_threshold, que la UI
+        # cambia rara vez; se recalcula al detectar el cambio (evita un log10
+        # escalar por bloque).
+        self._thr_src: float = self.comp_threshold
+        self._thr_db: float = 20.0 * math.log10(max(self.comp_threshold, 1e-9))
         # A/B crossfade: blend=1 efectos, blend=0 directo
         self.blend: float = 1.0
         # Medidor
@@ -63,13 +69,13 @@ class Enhancer:
         self._states: dict[str, np.ndarray] = {}
         self._sos_cache: dict[str, tuple] = {}
         self._channels: int | None = None
-        self.spectrum: np.ndarray | None = None   # 64 barras (dB) para el canvas
+        self.spectrum: np.ndarray | None = None  # 64 barras (dB) para el canvas
         self.spectrum_enabled: bool = True
         self._snapshot: np.ndarray | None = None  # copia mono del último bloque
         self._win: np.ndarray | None = None
         self._win_n: int = 0
-        self._spec_meta: tuple | None = None      # cache (n, sample_rate, idx)
-        self._ramp_cache: dict = {}               # cache (n, sample_rate) -> rampa
+        self._spec_meta: tuple | None = None  # cache (n, sample_rate, idx)
+        self._ramp_cache: dict = {}  # cache (n, sample_rate) -> rampa
 
     # ---------- diseño de filtros RBJ (Audio EQ Cookbook) ----------
 
@@ -179,8 +185,7 @@ class Enhancer:
         alpha_eq = 1.0 - np.exp(-block_sec / 0.03)
         self._c_bass = self._ramp(self._c_bass, self.bass, alpha_eq)
         self._c_treble = self._ramp(self._c_treble, self.treble, alpha_eq)
-        self._c_eq = self._ramp(self._c_eq,
-                                np.asarray(self.eq_gains, dtype=np.float32), alpha_eq)
+        self._c_eq = self._ramp(self._c_eq, np.asarray(self.eq_gains, dtype=np.float32), alpha_eq)
         bass = float(self._c_bass)
         treb = float(self._c_treble)
         # Apila las secciones activas en una sola matriz SOS: sosfilt aplica la
@@ -188,23 +193,20 @@ class Enhancer:
         # por sección, con una única ida y vuelta a scipy.
         sections = []
         if abs(bass) >= SECTION_GAIN_EPS and self.bass_freq < nyquist:
-            b0, b1, b2, a1, a2 = self._shelf(self.bass_freq, bass,
-                                             self.sample_rate, 1.0, low=True)
+            b0, b1, b2, a1, a2 = self._shelf(self.bass_freq, bass, self.sample_rate, 1.0, low=True)
             sections.append(self._section("bass", b0, b1, b2, a1, a2))
         if abs(treb) >= SECTION_GAIN_EPS and self.treble_freq < nyquist:
-            b0, b1, b2, a1, a2 = self._shelf(self.treble_freq, treb,
-                                             self.sample_rate, 1.0, low=False)
+            b0, b1, b2, a1, a2 = self._shelf(self.treble_freq, treb, self.sample_rate, 1.0, low=False)
             sections.append(self._section("treble", b0, b1, b2, a1, a2))
-        for i, (freq, g) in enumerate(zip(self.eq_bands, self._c_eq)):
+        for i, (freq, g) in enumerate(zip(self.eq_bands, self._c_eq, strict=False)):
             if abs(float(g)) >= SECTION_GAIN_EPS and freq < nyquist:
-                b0, b1, b2, a1, a2 = self._peaking(freq, float(g),
-                                                   self.sample_rate, self.eq_q)
+                b0, b1, b2, a1, a2 = self._peaking(freq, float(g), self.sample_rate, self.eq_q)
                 sections.append(self._section("eq_%d" % i, b0, b1, b2, a1, a2))
         if sections:
             sos = np.concatenate([s[1] for s in sections], axis=0)
             zi = np.stack([s[2] for s in sections])
             out, zi_out = signal.sosfilt(sos, y, axis=0, zi=zi)
-            for s, z in zip(sections, zi_out):
+            for s, z in zip(sections, zi_out, strict=False):
                 self._states[s[0]] = np.asarray(z, dtype=np.float32)
             y = out
         y = self._apply_volume(y, block_sec)
@@ -241,17 +243,19 @@ class Enhancer:
     def _compress(self, y, block_sec):
         """Compresor RMS feed-forward con attack/release y make-up gain."""
         rms = float(np.sqrt(np.mean(y * y))) if y.size else 0.0
-        db = 20.0 * np.log10(rms) if rms > 1e-9 else -90.0
-        thr = 20.0 * np.log10(max(self.comp_threshold, 1e-9))
-        over = db - thr
+        db = 20.0 * math.log10(rms) if rms > 1e-9 else -90.0
+        if self._thr_src != self.comp_threshold:
+            self._thr_src = self.comp_threshold
+            self._thr_db = 20.0 * math.log10(max(self.comp_threshold, 1e-9))
+        over = db - self._thr_db
         # over > 0 => la senal supera el umbral: la reduccion va en dB negativos
         # (atenuar). El monolito original usaba el valor positivo, lo que
         # amplificaba en vez de comprimir.
         target_db = -over * (1.0 - 1.0 / self.comp_ratio) if over > 0 else 0.0
         if target_db < self._gain_db:
-            coeff = 1.0 - np.exp(-block_sec / max(self.comp_attack, 1e-4))
+            coeff = 1.0 - math.exp(-block_sec / max(self.comp_attack, 1e-4))
         else:
-            coeff = 1.0 - np.exp(-block_sec / max(self.comp_release, 1e-4))
+            coeff = 1.0 - math.exp(-block_sec / max(self.comp_release, 1e-4))
         self._gain_db += (target_db - self._gain_db) * coeff
         gain = (10.0 ** (self._gain_db / 20.0)) * self.comp_makeup
         return y * gain
@@ -260,10 +264,12 @@ class Enhancer:
     def _soft_limiter(x, threshold, strength):
         """Curva de ganancia suave: deja pasar <=threshold, comprime después."""
         a = np.abs(x)
-        over = a - threshold
-        if not np.any(over > 0):
+        # Caso común (bloque por debajo del umbral): una sola reducción y
+        # salir, sin alocar los arrays temporales de la curva de ganancia.
+        if a.size == 0 or float(np.max(a)) <= threshold:
             return x
-        k = 1.0 / (1.0 + np.exp(-5.0 * over))   # transición suave 0..1
+        over = a - threshold
+        k = 1.0 / (1.0 + np.exp(-5.0 * over))  # transición suave 0..1
         g = 1.0 - strength * (over / (threshold + 1e-9)) * k
         g = np.clip(g, 0.0, 1.0)
         return x * np.where(over > 0, g, 1.0)
@@ -312,6 +318,6 @@ class Enhancer:
     def _measure_levels(self, y) -> None:
         """Actualiza el medidor de nivel (RMS y pico suavizados) del bloque."""
         peak = float(np.max(np.abs(y))) if y.size else 0.0
-        rms = float(np.sqrt(np.mean(y ** 2))) if y.size else 0.0
+        rms = float(np.sqrt(np.mean(y**2))) if y.size else 0.0
         self.level_peak = self.level_peak * 0.7 + peak * 0.3
         self.level_rms = self.level_rms * 0.85 + rms * 0.15

@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 """Widgets reutilizables (customtkinter/tk)."""
 
+import contextlib
 import tkinter as tk
 
 import customtkinter as ctk
@@ -41,10 +41,9 @@ class ToolTip:
         for attr in ("_after_id", "_hide_after_id"):
             ident = getattr(self, attr)
             if ident is not None:
-                try:
+                # after_cancel puede fallar si el widget ya fue destruido
+                with contextlib.suppress(Exception):
                     self.widget.after_cancel(ident)
-                except Exception:
-                    pass
                 setattr(self, attr, None)
 
     # ---------- mostrar / ocultar ----------
@@ -59,11 +58,16 @@ class ToolTip:
             self.tip.wm_overrideredirect(True)
             self.tip.geometry("+%d+%d" % (x, y))
             self.tip.attributes("-topmost", True)
-            label = ctk.CTkLabel(self.tip, text=self.text, wraplength=300,
-                                 justify="left", font=("Segoe UI", 11),
-                                 fg_color=("gray88", "gray18"),
-                                 text_color=("gray10", "gray90"),
-                                 corner_radius=8)
+            label = ctk.CTkLabel(
+                self.tip,
+                text=self.text,
+                wraplength=300,
+                justify="left",
+                font=("Segoe UI", 11),
+                fg_color=("gray88", "gray18"),
+                text_color=("gray10", "gray90"),
+                corner_radius=8,
+            )
             label.pack(padx=8, pady=6)
             self._make_click_through(label)
             self.tip.lift()
@@ -77,8 +81,8 @@ class ToolTip:
         """La ventana del tooltip no intercepta clics (WS_EX_TRANSPARENT)."""
         try:
             import ctypes
-            hwnd = ctypes.windll.user32.GetAncestor(
-                ctypes.windll.user32.GetParent(label.winfo_id()), 2)  # GA_ROOT=2
+
+            hwnd = ctypes.windll.user32.GetAncestor(ctypes.windll.user32.GetParent(label.winfo_id()), 2)  # GA_ROOT=2
             gwl = -20  # GWL_EXSTYLE
             wsex = ctypes.windll.user32.GetWindowLongW(hwnd, gwl)
             # WS_EX_TRANSPARENT(0x20) | WS_EX_NOACTIVATE(0x08000000) | WS_EX_TOOLWINDOW(0x80)
@@ -90,10 +94,8 @@ class ToolTip:
         if self._after_id is not None or self._hide_after_id is not None:
             self._cancel_scheduled()
         if self.tip is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.tip.destroy()
-            except Exception:
-                pass
             self.tip = None
 
 
@@ -108,11 +110,9 @@ class ScrollBody(ctk.CTkFrame):
     def __init__(self, master, **kw):
         super().__init__(master, **kw)
         self.canvas = tk.Canvas(
-            self, highlightthickness=0, bd=0,
-            bg=ctk.ThemeManager.theme["CTk"]["fg_color"][1],
-            yscrollincrement=24)
-        self._vsb = ctk.CTkScrollbar(self, orientation="vertical",
-                                     command=self.canvas.yview, corner_radius=8)
+            self, highlightthickness=0, bd=0, bg=ctk.ThemeManager.theme["CTk"]["fg_color"][1], yscrollincrement=24
+        )
+        self._vsb = ctk.CTkScrollbar(self, orientation="vertical", command=self.canvas.yview, corner_radius=8)
         self.canvas.configure(yscrollcommand=self._on_vsb_needed)
         self.canvas.pack(side="left", fill="both", expand=True)
         self._vsb.pack(side="right", fill="y", padx=(2, 1))
@@ -123,7 +123,7 @@ class ScrollBody(ctk.CTkFrame):
         self.canvas.bind("<Configure>", self._on_canvas_cfg)
         self.canvas.bind("<Enter>", lambda _: self._bind_wheel(True))
         self.canvas.bind("<Leave>", lambda _: self._bind_wheel(False))
-        self.canvas.bind("<Button-4>", self._wheel_up)   # soporte Linux
+        self.canvas.bind("<Button-4>", self._wheel_up)  # soporte Linux
         self.canvas.bind("<Button-5>", self._wheel_down)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
 

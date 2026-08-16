@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Audio Enhancer FxStyle - paquete (import ligero: sólo constantes y version)."""
 
 from .constants import APP_NAME, APP_VERSION

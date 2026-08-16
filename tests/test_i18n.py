@@ -1,20 +1,21 @@
-# -*- coding: utf-8 -*-
 """Tests de localizacion (audio_enhancer.i18n): traducciones es->en por defecto,
 deteccion de idioma y la integridad de presets y textos de ayuda."""
 
 import pytest
 
+from audio_enhancer.constants import DEFAULT_PRESET
 from audio_enhancer.dsp import Enhancer
 from audio_enhancer.i18n import (
+    CABLE_GUIDE,
+    CABLE_GUIDE_EN,
+    EQ_EXPLAIN,
     EXPLAIN,
     EXPLAIN_EN,
-    EQ_EXPLAIN,
     PRESETS,
     TRANSLATIONS,
     detect_system_language,
     translate,
 )
-from audio_enhancer.constants import DEFAULT_PRESET
 
 
 def test_translate_es_devuelve_el_mismo_texto():
@@ -24,6 +25,14 @@ def test_translate_es_devuelve_el_mismo_texto():
 def test_translate_en_usa_diccionario():
     assert translate("Volumen", "en") == "Volume"
     assert translate("Guardar", "en") == "Save"
+
+
+def test_guia_vbcable_traducida_sin_divergencia():
+    # La constante es la clave de TRANSLATIONS: la UI no puede divergir del texto
+    assert TRANSLATIONS[CABLE_GUIDE] == CABLE_GUIDE_EN
+    assert translate(CABLE_GUIDE, "en") == CABLE_GUIDE_EN
+    assert translate(CABLE_GUIDE, "en") != CABLE_GUIDE
+    assert translate("Loopback propio (VB-CABLE)", "en") != "Loopback propio (VB-CABLE)"
 
 
 def test_translate_desconocido_passthrough():
@@ -42,6 +51,7 @@ def test_detect_language_retorna_es_o_en():
 
 
 # ---------- presets ----------
+
 
 def test_presets_incluyen_el_predeterminado():
     assert DEFAULT_PRESET in PRESETS
@@ -66,6 +76,7 @@ def test_preset_plano_esta_plano():
 
 
 # ---------- textos de ayuda ----------
+
 
 @pytest.mark.parametrize("clave", ["volumen", "bass", "treble", "eq", "limiter", "compressor"])
 def test_explain_cubre_todos_los_controles(clave):

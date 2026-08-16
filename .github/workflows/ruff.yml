@@ -1,4 +1,4 @@
-name: Pylint
+name: Lint
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  pylint:
+  ruff:
     runs-on: windows-latest
 
     steps:
@@ -22,10 +22,13 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pylint
+      - name: Install ruff
+        run: python -m pip install ruff
 
-      - name: Run Pylint error checks
-        run: python -m pylint AudioEnhancer_FxStyle.py build_icon.py --disable=all --enable=E,F --score=no
+      - name: Ruff lint
+        run: python -m ruff check .
+
+      - name: Ruff format check
+        run: python -m ruff format --check .

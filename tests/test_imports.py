@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Smoke test: los modulos de la app importan y las constantes son coherentes
 (sin instanciar la GUI, que requiere pantalla/Tk)."""
 

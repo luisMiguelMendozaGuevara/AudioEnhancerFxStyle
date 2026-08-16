@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Constantes globales de Audio Enhancer FxStyle.
 
 Este modulo no depende de tkinter, numpy ni scipy: cualquier capa puede

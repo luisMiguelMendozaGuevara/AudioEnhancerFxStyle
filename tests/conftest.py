@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Configuracion compartida de pytest: asegura que el paquete sea importable
 desde la raiz del proyecto (sin necesidad de instalarlo)."""
 

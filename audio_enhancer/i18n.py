@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Localización: diccionarios de traducción y detección de idioma.
 
 Codigo es->en: el nombre de la clave es el texto en español y el valor la
@@ -7,6 +6,9 @@ inglés (respaldo).
 """
 
 import locale
+import logging
+
+logger = logging.getLogger("audio_enhancer.i18n")
 
 # Localización: inglés es el idioma de respaldo.
 TRANSLATIONS = {
@@ -45,7 +47,8 @@ TRANSLATIONS = {
     "Dispositivos actualizados.": "Devices refreshed.",
     "Detectando dispositivos...": "Detecting devices...",
     "Selecciona una fuente de captura y una salida física.": "Select a capture source and a physical output.",
-    "Revisa el ruteo: no captures y reproduzcas el mismo dispositivo.": "Check the routing: don't capture and play through the same device.",
+    "Revisa el ruteo: no captures y reproduzcas el mismo dispositivo.": "Check the routing: don't capture and play "
+    "through the same device.",
     "A/B: audio directo sin efectos (B)": "A/B: direct audio without effects (B)",
     "A/B: audio procesado con efectos (A)": "A/B: processed audio with effects (A)",
     "Limitador suave: %s": "Soft limiter: %s",
@@ -66,70 +69,109 @@ TRANSLATIONS = {
     "Inicio con Windows: fallo al configurar": "Start with Windows: failed to configure",
     "⚠  ECO: capturas y reproduces el mismo dispositivo (A → A). "
     "Selecciona como captura el cable virtual donde suenan las apps "
-    "(p. ej. CABLE Input de VB-Audio) y como salida la física.":
-    "⚠  ECHO: you capture and play through the same device (A -> A). "
-    "Pick the virtual cable where the apps play as capture "
+    "(p. ej. CABLE Input de VB-Audio) y como salida la física.": "⚠  ECHO: you capture and play through the "
+    "same device (A -> A). Pick the virtual cable where the apps play as capture "
     "(e.g. VB-Audio CABLE Input) and a physical device as output.",
     "⚠  La salida es virtual (cable). Reproduce en la salida FÍSICA "
-    "(parlantes reales) para no realimentar el cable.":
-    "⚠  The output is virtual (cable). Use a PHYSICAL output "
+    "(parlantes reales) para no realimentar el cable.": "⚠  The output is virtual (cable). Use a PHYSICAL output "
     "(real speakers) to avoid feeding the cable back.",
     "⚠  Estás capturando el loopback de FxSound (otra app). Si no percibes "
-    "efecto o hay conflicto, instala VB-CABLE y captura 'CABLE Input'.":
-    "⚠  You are capturing the FxSound loopback (another app). If you hear no "
-    "effect or there is a conflict, install VB-CABLE and capture 'CABLE Input'.",
+    "efecto o hay conflicto, instala VB-CABLE y captura 'CABLE Input'.": "⚠  You are capturing the FxSound loopback "
+    "(another app). If you hear no effect or there is a conflict, install "
+    "VB-CABLE and capture 'CABLE Input'.",
     "✔  Ruteo correcto: capturas tu cable virtual y solo la salida física "
-    "reproduce el audio procesado. Cierra FxSound para no duplicar el efecto.":
-    "✔  Correct routing: you capture your virtual cable and only the physical "
-    "output plays processed audio. Close FxSound to avoid a doubled effect.",
+    "reproduce el audio procesado. Cierra FxSound para no duplicar el efecto.": "✔  Correct routing: you capture your "
+    "virtual cable and only the physical output plays processed audio. "
+    "Close FxSound to avoid a doubled effect.",
     "Info: capturas un parlante físico. Asegúrate de que sea el dispositivo "
-    "donde suenan las apps y que la salida sea otro distinto.":
-    "Info: you are capturing a physical speaker. Make sure it is the device "
-    "where your apps play and that the output is a different one.",
+    "donde suenan las apps y que la salida sea otro distinto.": "Info: you are capturing a physical speaker. "
+    "Make sure it is the device where your apps play and that the output is a different one.",
 }
+
+# Guía de instalación de VB-CABLE (messagebox). Se define como constante y se
+# registra en TRANSLATIONS para que la clave usada desde la UI no pueda divergir
+# del literal de este módulo.
+CABLE_GUIDE = (
+    "Para un loopback propio (sin el APO de FxSound) hace falta el driver "
+    "virtual VB-CABLE.\n\n"
+    "1) Se abrió la carpeta con el instalador descargado.\n"
+    "2) Ejecuta VBCABLE_Setup_x64.exe COMO ADMINISTRADOR "
+    "(clic derecho > Ejecutar como administrador).\n"
+    "3) Pulsa 'Install Driver' y espera el mensaje de éxito.\n"
+    "4) Reinicia Windows.\n"
+    "5) En Sonido > Salida, pon 'CABLE Input (VB-Audio Virtual Cable)' "
+    "como dispositivo predeterminado.\n\n"
+    "Después, esta app capturará 'CABLE Input' y solo la salida física sonará. "
+    "No necesita FxSound."
+)
+
+CABLE_GUIDE_EN = (
+    "For your own loopback (without FxSound's APO) you need the VB-CABLE "
+    "virtual driver.\n\n"
+    "1) The folder with the downloaded installer has been opened.\n"
+    "2) Run VBCABLE_Setup_x64.exe AS ADMINISTRATOR "
+    "(right click > Run as administrator).\n"
+    "3) Press 'Install Driver' and wait for the success message.\n"
+    "4) Restart Windows.\n"
+    "5) In Sound > Output, set 'CABLE Input (VB-Audio Virtual Cable)' as the "
+    "default device.\n\n"
+    "After that, this app will capture 'CABLE Input' and only the physical "
+    "output will play. FxSound is not needed."
+)
+
+TRANSLATIONS[CABLE_GUIDE] = CABLE_GUIDE_EN
+TRANSLATIONS["Loopback propio (VB-CABLE)"] = "Own loopback (VB-CABLE)"
 
 # Descripciones mostradas en los tooltips de la interfaz.
 EXPLAIN = {
     "volumen": "Ganancia final del audio procesado. 1.0x mantiene el nivel; "
-               "valores mayores aumentan el volumen y pueden activar el limitador. "
-               "Úsalo con moderación para evitar saturación y fatiga auditiva.",
+    "valores mayores aumentan el volumen y pueden activar el limitador. "
+    "Úsalo con moderación para evitar saturación y fatiga auditiva.",
     "bass": "Refuerzo tipo shelf de graves, aproximadamente por debajo de 150 Hz. "
-            "Aporta peso a bombos, bajos y explosiones. Si retumba o distorsiona, "
-            "reduce este control o el volumen.",
+    "Aporta peso a bombos, bajos y explosiones. Si retumba o distorsiona, "
+    "reduce este control o el volumen.",
     "treble": "Refuerzo tipo shelf de agudos, aproximadamente por encima de 6 kHz. "
-              "Aporta claridad a voces, platos y detalles. Demasiado puede producir "
-              "sibilancias o un sonido áspero.",
+    "Aporta claridad a voces, platos y detalles. Demasiado puede producir "
+    "sibilancias o un sonido áspero.",
     "eq": "Cada banda aumenta o reduce una zona de frecuencias alrededor de su "
-          "frecuencia central. Los valores positivos (+dB) realzan y los negativos "
-          "(-dB) atenúan. Q=1.4 produce una curva de anchura media; mueve poco a "
-          "poco los controles para evitar cambios bruscos.",
+    "frecuencia central. Los valores positivos (+dB) realzan y los negativos "
+    "(-dB) atenúan. Q=1.4 produce una curva de anchura media; mueve poco a "
+    "poco los controles para evitar cambios bruscos.",
     "limiter": "Limitador suave: evita que los picos superen aproximadamente "
-                "-0.4 dBFS. En lugar de cortar la señal de golpe, reduce la ganancia "
-                "progresivamente para disminuir clipping y distorsión. Puede reducir "
-                "algo la dinámica si el nivel es muy alto.",
+    "-0.4 dBFS. En lugar de cortar la señal de golpe, reduce la ganancia "
+    "progresivamente para disminuir clipping y distorsión. Puede reducir "
+    "algo la dinámica si el nivel es muy alto.",
     "compressor": "Compresor RMS: calcula el nivel medio de cada bloque de audio y "
-                  "reduce gradualmente las partes demasiado fuertes. Suaviza la "
-                  "dinámica y hace más uniforme el volumen entre voces y música; "
-                  "no es un aumento de volumen automático y un exceso puede sonar "
-                  "aplastado.",
+    "reduce gradualmente las partes demasiado fuertes. Suaviza la "
+    "dinámica y hace más uniforme el volumen entre voces y música; "
+    "no es un aumento de volumen automático y un exceso puede sonar "
+    "aplastado.",
 }
 
 EXPLAIN_EN = {
-    "volumen": "Final gain of the processed audio. 1.0x keeps the level; higher values increase volume and may engage the limiter.",
-    "bass": "Low-shelf boost below approximately 150 Hz. Adds weight to kick drums and bass; reduce it if the sound becomes boomy.",
-    "treble": "High-shelf boost above approximately 6 kHz. Adds clarity and detail; too much can sound harsh or sibilant.",
-    "eq": "Each band boosts (+dB) or cuts (-dB) a frequency range around its center frequency. Q=1.4 gives a medium-width curve.",
-    "limiter": "Soft limiter: gently reduces peaks near 0 dBFS to prevent clipping and distortion instead of cutting them abruptly.",
-    "compressor": "RMS compressor: measures average loudness and gradually reduces overly loud sections, making volume more consistent.",
+    "volumen": "Final gain of the processed audio. 1.0x keeps the level; higher values "
+    "increase volume and may engage the limiter.",
+    "bass": "Low-shelf boost below approximately 150 Hz. Adds weight to kick drums and "
+    "bass; reduce it if the sound becomes boomy.",
+    "treble": "High-shelf boost above approximately 6 kHz. Adds clarity and detail; "
+    "too much can sound harsh or sibilant.",
+    "eq": "Each band boosts (+dB) or cuts (-dB) a frequency range around its center "
+    "frequency. Q=1.4 gives a medium-width curve.",
+    "limiter": "Soft limiter: gently reduces peaks near 0 dBFS to prevent clipping and "
+    "distortion instead of cutting them abruptly.",
+    "compressor": "RMS compressor: measures average loudness and gradually reduces overly "
+    "loud sections, making volume more consistent.",
 }
 
 EQ_EXPLAIN = {
-    60: "Subgrave y grave profundo: golpes de bombo, sub-bajo y rumble. Realzarlo da peso; reducirlo limpia vibraciones.",
+    60: "Subgrave y grave profundo: golpes de bombo, sub-bajo y rumble. "
+    "Realzarlo da peso; reducirlo limpia vibraciones.",
     150: "Grave alto: cuerpo de bombos, bajos y voces masculinas. Demasiado produce sonido boomy o retumbante.",
     250: "Grave medio: calidez y cuerpo. Reducirlo puede quitar barro; aumentarlo puede engrosar guitarras y voces.",
     500: "Medio bajo: cuerpo de instrumentos y voces. Atenuarlo ayuda a limpiar una mezcla congestionada.",
     1000: "Medio central: presencia general de voces, guitarras y teclados. Cambios aquí son muy perceptibles.",
-    2000: "Medio alto: inteligibilidad y ataque. Realzarlo mejora definición, pero puede volver el sonido nasal o agresivo.",
+    2000: "Medio alto: inteligibilidad y ataque. Realzarlo mejora definición, "
+    "pero puede volver el sonido nasal o agresivo.",
     4000: "Presencia: detalle de consonantes, guitarras y percusión. Demasiado puede sonar duro o fatigante.",
     8000: "Agudo: brillo, platos y aire inicial. Útil para claridad; exceso aumenta sibilancias y ruido.",
     12000: "Aire: brillo fino y sensación de apertura. Realza detalles sutiles; reducirlo suaviza grabaciones ásperas.",
@@ -172,6 +214,8 @@ def detect_system_language():
     try:
         lang = locale.getlocale()[0] or ""
     except Exception:
+        # Sin locale detectado se cae al respaldo en inglés
+        logger.debug("No se pudo detectar el locale del sistema", exc_info=True)
         lang = ""
     return "es" if lang.lower().startswith("es") else "en"
 

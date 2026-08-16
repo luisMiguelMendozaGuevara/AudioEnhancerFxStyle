@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Audio Enhancer FxStyle (estilo FxSound con WASAPI loopback) - lanzador fino.
 
 La implementación vivía en un monolito; ahora reside en el paquete
@@ -14,7 +13,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from audio_enhancer.main import main  # noqa: E402
-
 
 if __name__ == "__main__":
     main()

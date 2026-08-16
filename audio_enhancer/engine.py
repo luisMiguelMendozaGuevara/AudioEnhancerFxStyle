@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Motor de audio: ring buffer + callbacks de PortAudio con compensación de deriva.
 
 Separa la captura (loopback WASAPI, paquetes irregulares) de la salida física
@@ -8,11 +7,14 @@ Tk. ``start_capture``/``open_output``/``stop`` permiten un arranque no bloqueant
 orquestado desde el hilo de la UI.
 """
 
+import logging
 import threading
 
 import numpy as np
 
 from .constants import CHUNK, RING_SECONDS
+
+logger = logging.getLogger("audio_enhancer.engine")
 
 _pa_mod = None
 
@@ -22,6 +24,7 @@ def _pa():
     global _pa_mod
     if _pa_mod is None:
         import pyaudiowpatch
+
         _pa_mod = pyaudiowpatch
     return _pa_mod
 
@@ -33,13 +36,13 @@ class AudioEngine:
         self.enhancer = enhancer
         self.lock = threading.Lock()
         self.pa = None
-        self._pa_mod = None       # módulo pyaudiowpatch (para paFloat32/paContinue)
-        self.stream = None       # captura (input)
-        self.out_stream = None   # salida (output)
+        self._pa_mod = None  # módulo pyaudiowpatch (para paFloat32/paContinue)
+        self.stream = None  # captura (input)
+        self.out_stream = None  # salida (output)
         # Estado del ring
         self.ring: np.ndarray | None = None
-        self.rhead: int = 0      # posición de escritura (frames)
-        self.whead: int = 0      # posición de lectura (frames)
+        self.rhead: int = 0  # posición de escritura (frames)
+        self.whead: int = 0  # posición de lectura (frames)
         self.fadein_frames: int = 0
         self.in_gap: bool = False
         self.nframes: int = 0
@@ -60,7 +63,7 @@ class AudioEngine:
         self.whead = 0
         self.fadein_frames = 0
         self.in_gap = False
-        self._fade = max(1, int(rate * 0.005))   # fundido ~5 ms
+        self._fade = max(1, int(rate * 0.005))  # fundido ~5 ms
         self._drift_target = nframes // 2
         self._drift_deadband = max(CHUNK // 8, int(rate * 0.0025))
         self._drift_accum = 0.0
@@ -109,7 +112,9 @@ class AudioEngine:
                     s.stop_stream()
                     s.close()
                 except Exception:
-                    pass
+                    # Cerrar dos veces o tras un error de PortAudio es esperable
+                    # durante la limpieza: se deja rastro y se continúa.
+                    logger.debug("Error al cerrar stream en stop()", exc_info=True)
         self.stream = None
         self.out_stream = None
         self.ring = None
@@ -127,18 +132,18 @@ class AudioEngine:
                 self.whead += drop
                 idx = self.whead % nframes
                 if idx + drop <= nframes:
-                    self.ring[idx:idx + drop] = 0.0
+                    self.ring[idx : idx + drop] = 0.0
                 else:
                     a = nframes - idx
                     self.ring[idx:] = 0.0
-                    self.ring[:drop - a] = 0.0
+                    self.ring[: drop - a] = 0.0
             idx = self.rhead % nframes
             if idx + n <= nframes:
-                self.ring[idx:idx + n] = data
+                self.ring[idx : idx + n] = data
             else:
                 a = nframes - idx
                 self.ring[idx:] = data[:a]
-                self.ring[:n - a] = data[a:]
+                self.ring[: n - a] = data[a:]
             self.rhead += n
 
     def _read(self, n):
@@ -153,10 +158,10 @@ class AudioEngine:
         if avail >= n:
             idx = self.whead % nframes
             if idx + n <= nframes:
-                data = self.ring[idx:idx + n].copy()
+                data = self.ring[idx : idx + n].copy()
             else:
                 a = nframes - idx
-                data = np.concatenate([self.ring[idx:], self.ring[:n - a]])
+                data = np.concatenate([self.ring[idx:], self.ring[: n - a]])
             self.whead += n
             # Solo se aplica fade-in al salir de un hueco. Mantener el estado
             # explícito evita perderlo en huecos consecutivos.
@@ -174,16 +179,16 @@ class AudioEngine:
         if m > 0:
             idx = self.whead % nframes
             if idx + m <= nframes:
-                real = self.ring[idx:idx + m].copy()
+                real = self.ring[idx : idx + m].copy()
             else:
                 a = nframes - idx
-                real = np.concatenate([self.ring[idx:], self.ring[:m - a]])
+                real = np.concatenate([self.ring[idx:], self.ring[: m - a]])
             self.whead += m
             out[:m] = real
             f = min(self._fade, m)
             if f > 0:
                 fade_out = np.linspace(1.0, 0.0, f, dtype=np.float32)
-                out[m - f:m] *= fade_out[:, None]
+                out[m - f : m] *= fade_out[:, None]
         self.in_gap = True
         self.fadein_frames = max(self.fadein_frames, self._fade)
         return out
@@ -214,8 +219,7 @@ class AudioEngine:
                 # se reparte como un frame ocasional, no como un salto fijo.
                 self._drift_accum += error * self._drift_gain
                 n_adj = int(np.trunc(self._drift_accum))
-                n_adj = max(-self._max_drift_frames,
-                            min(self._max_drift_frames, n_adj))
+                n_adj = max(-self._max_drift_frames, min(self._max_drift_frames, n_adj))
                 self._drift_accum -= n_adj
             data = self._read(max(1, frame_count + n_adj))
         data = self._match_frame_count(data, frame_count)
@@ -236,7 +240,9 @@ class AudioEngine:
             return np.resize(data, (frame_count, 2)).astype(np.float32, copy=False)
         positions = np.linspace(0.0, count - 1.0, frame_count, dtype=np.float32)
         base = np.arange(count, dtype=np.float32)
-        return np.column_stack((
-            np.interp(positions, base, data[:, 0]),
-            np.interp(positions, base, data[:, 1]),
-        )).astype(np.float32, copy=False)
+        return np.column_stack(
+            (
+                np.interp(positions, base, data[:, 0]),
+                np.interp(positions, base, data[:, 1]),
+            )
+        ).astype(np.float32, copy=False)

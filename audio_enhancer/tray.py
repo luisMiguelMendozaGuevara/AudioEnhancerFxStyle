@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Icono de bandeja del sistema (pystray).
 
 Los handlers de pystray se ejecutan en un hilo distinto al de Tk: todos
@@ -6,9 +5,12 @@ arrancan con ``root.after(0, ...)`` para marshallar la llamada al hilo
 principal y evitar el crash de Tk (ver Fase 1 del plan).
 """
 
+import logging
 import threading
 
 from .constants import WINDOW_TITLE
+
+logger = logging.getLogger("audio_enhancer.tray")
 
 
 class TrayIcon:
@@ -25,6 +27,7 @@ class TrayIcon:
     def start(self):
         """Crea el icono y lo corre en su propio hilo daemon."""
         import pystray
+
         if self._icon is not None:
             return
         menu = pystray.Menu(
@@ -42,7 +45,7 @@ class TrayIcon:
             try:
                 self._icon.stop()
             except Exception:
-                pass
+                logger.debug("Error al detener el icono de bandeja", exc_info=True)
 
     # ---------- handlers (marshaled al hilo de Tk) ----------
 
