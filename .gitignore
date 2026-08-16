@@ -35,3 +35,6 @@ versiones_anteriores/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Documentación local para agentes IA (no publicar)
+AGENTS.md
