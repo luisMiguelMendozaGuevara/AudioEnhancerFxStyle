@@ -647,6 +647,16 @@ class App:
         self.go = False
         self._keep_src = ""          # selecciones a conservar tras refresh
         self._keep_out = ""
+        # Atributos creados por _scale/_build_ui; se declaran aquí para que
+        # existan antes de aplicar la configuración persistida y sean visibles
+        # para analizadores estáticos como Pylint.
+        self.volumen_slider = None
+        self.bass_slider = None
+        self.treble_slider = None
+        self.vol_label = None
+        self.bass_label = None
+        self.treble_label = None
+        self._spec_ids = None
 
         self._build_ui()
         self._apply_config()
