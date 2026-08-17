@@ -9,6 +9,7 @@ import logging
 import threading
 
 from .constants import WINDOW_TITLE
+from .i18n import detect_system_language, translate
 
 logger = logging.getLogger("audio_enhancer.tray")
 
@@ -30,11 +31,12 @@ class TrayIcon:
 
         if self._icon is not None:
             return
+        lang = detect_system_language()
         menu = pystray.Menu(
-            pystray.MenuItem("Show / Hide", self._toggle_show, default=True),
-            pystray.MenuItem("Start / Stop", self._toggle_audio_cb),
+            pystray.MenuItem(translate("Mostrar / Ocultar", lang), self._toggle_show, default=True),
+            pystray.MenuItem(translate("Iniciar / Detener", lang), self._toggle_audio_cb),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", self._quit_cb),
+            pystray.MenuItem(translate("Salir", lang), self._quit_cb),
         )
         icon = pystray.Icon("AudioEnhancerFxStyle", self.image, WINDOW_TITLE, menu)
         self._icon = icon

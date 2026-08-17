@@ -578,10 +578,10 @@ class App:
         target = 0.0 if self.enhancer.blend > 0.5 else 1.0
         self.enhancer.blend = target
         if target == 0.0:
-            self.ab_button.configure(text="B: Directo (OFF)", fg_color=("gray60", "gray40"))
+            self.ab_button.configure(text=self._t("B: Directo (OFF)"), fg_color=("gray60", "gray40"))
             self.status.configure(text=self._t("A/B: audio directo sin efectos (B)"), text_color=WARN)
         else:
-            self.ab_button.configure(text="A: Efectos ON", fg_color=ACCENT)
+            self.ab_button.configure(text=self._t("A: Efectos ON"), fg_color=ACCENT)
             self.status.configure(text=self._t("A/B: audio procesado con efectos (A)"), text_color=OK)
 
     def toggle_limiter(self):

@@ -5,8 +5,10 @@ traducción al inglés. Para idiomas distintos del español se usa la versión e
 inglés (respaldo).
 """
 
+import ctypes
 import locale
 import logging
+import sys
 
 logger = logging.getLogger("audio_enhancer.i18n")
 
@@ -210,14 +212,23 @@ PRESETS = {
 
 
 def detect_system_language():
-    """Devuelve 'es' para Windows en español y 'en' para el resto."""
+    """Devuelve 'es' si la interfaz de Windows está en español y 'en' en el resto."""
+    if sys.platform == "win32":
+        try:
+            lang_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+        except Exception:
+            # Sin idioma de interfaz disponible se cae al respaldo en inglés
+            logger.debug("No se pudo consultar el idioma de interfaz de Windows", exc_info=True)
+            return "en"
+        # Primary Language ID = bits 0-9 del LANGID; español = 0x0A
+        return "es" if (lang_id & 0x3FF) == 0x0A else "en"
+    # Fuera de Windows: respaldo con el locale del entorno
     try:
-        lang = locale.getlocale()[0] or ""
+        lang = (locale.getlocale()[0] or "").lower()
     except Exception:
-        # Sin locale detectado se cae al respaldo en inglés
         logger.debug("No se pudo detectar el locale del sistema", exc_info=True)
         lang = ""
-    return "es" if lang.lower().startswith("es") else "en"
+    return "es" if "spanish" in lang or lang.startswith("es") else "en"
 
 
 def translate(text, language):

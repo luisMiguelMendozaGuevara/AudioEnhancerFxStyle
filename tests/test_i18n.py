@@ -1,6 +1,8 @@
 """Tests de localizacion (audio_enhancer.i18n): traducciones es->en por defecto,
 deteccion de idioma y la integridad de presets y textos de ayuda."""
 
+import sys
+
 import pytest
 
 from audio_enhancer.constants import DEFAULT_PRESET
@@ -48,6 +50,70 @@ def test_translate_con_formato_conserva_placeholder():
 def test_detect_language_retorna_es_o_en():
     lang = detect_system_language()
     assert lang in ("es", "en")
+
+
+# En Windows la detección usa GetUserDefaultUILanguage (LANGID de la interfaz);
+# se mockea para que el resultado no dependa del idioma real del equipo.
+_Solo_WINDOWS = pytest.mark.skipif(sys.platform != "win32", reason="requiere la API de Windows")
+
+
+@_Solo_WINDOWS
+@pytest.mark.parametrize(
+    "lang_id, expected",
+    [
+        (0x0C0A, "es"),  # español (España)
+        (0x080A, "es"),  # español (México)
+        (0x240A, "es"),  # español (Colombia)
+        (0x0409, "en"),  # inglés (EE. UU.)
+        (0x0809, "en"),  # inglés (Reino Unido)
+        (0x0407, "en"),  # alemán -> respaldo en inglés
+        (0x0411, "en"),  # japonés -> respaldo en inglés
+        (0x0000, "en"),  # LANGID neutro/desconocido -> respaldo en inglés
+    ],
+)
+def test_detect_language_windows_ui(lang_id, expected, monkeypatch):
+    import ctypes
+
+    monkeypatch.setattr(ctypes.windll.kernel32, "GetUserDefaultUILanguage", lambda: lang_id)
+    assert detect_system_language() == expected
+
+
+@_Solo_WINDOWS
+def test_detect_language_fallo_api_windows(monkeypatch):
+    import ctypes
+
+    def _boom():
+        raise OSError("API no disponible")
+
+    monkeypatch.setattr(ctypes.windll.kernel32, "GetUserDefaultUILanguage", _boom)
+    assert detect_system_language() == "en"
+
+
+@pytest.mark.parametrize(
+    "locale_name, expected",
+    [
+        ("es_ES", "es"),
+        ("es_CO", "es"),
+        ("Spanish_Colombia", "es"),
+        ("Spanish_Spain", "es"),
+        ("Spanish_Argentina", "es"),
+        ("en_US", "en"),
+        ("English_United States", "en"),
+        ("fr_FR", "en"),
+        ("", "en"),
+    ],
+)
+def test_detect_language_fallback_no_windows(locale_name, expected, monkeypatch):
+    import locale as _locale
+
+    import audio_enhancer.i18n as i18n_mod
+
+    def fake_getlocale():
+        return (locale_name, "UTF-8") if locale_name else ("", "")
+
+    monkeypatch.setattr(i18n_mod.sys, "platform", "linux")
+    monkeypatch.setattr(_locale, "getlocale", fake_getlocale)
+    assert detect_system_language() == expected
 
 
 # ---------- presets ----------
