@@ -48,11 +48,13 @@ class AudioEngine:
         self.nframes: int = 0
         self._fade: int = 1
         # Control de deriva alrededor del punto medio del ring
+        # (los valores se ajustan en configure_ring; aqui quedan los por
+        # defecto para construccion directa en tests)
         self._drift_target: int = 0
         self._drift_deadband: int = 0
-        self._drift_gain: float = 0.0001
+        self._drift_gain: float = 0.02
         self._drift_accum: float = 0.0
-        self._max_drift_frames: int = 4
+        self._max_drift_frames: int = 8
 
     def configure_ring(self, rate: int) -> None:
         """Configura el ring para la tasa dada (tamaño, fundidos, deriva)."""
@@ -65,7 +67,10 @@ class AudioEngine:
         self.in_gap = False
         self._fade = max(1, int(rate * 0.005))  # fundido ~5 ms
         self._drift_target = nframes // 2
-        self._drift_deadband = max(CHUNK // 8, int(rate * 0.0025))
+        # Banda muerta estrecha (~0.3 ms): deja que el control ignore el ruido
+        # del ring y NO deje acumular latencia. Antes era CHUNK/8 (~2.7 ms) y
+        # eso dejaba que el ring derivara decenas de ms.
+        self._drift_deadband = max(CHUNK // 64, int(rate * 0.00015))
         self._drift_accum = 0.0
 
     def start_capture(self, pa, in_idx: int, rate: int) -> None:

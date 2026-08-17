@@ -161,6 +161,43 @@ def test_lectura_con_frame_count_distinto():
     assert same is data
 
 
+def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
+    """Con deriva sostenida de reloj el control debe mantener el ring lejos de
+    los limites (sin descartar audio ni emitir huecos de silencio), en lugar de
+    dejar que la latencia crezca hasta saturar a los ~20 s y saltar."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    # prellenar a la mitad como hace la app real (latencia inicial ~100 ms)
+    for _ in range(engine.nframes // 2 // 1024):
+        engine._cap_callback(np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024, None, 0)
+
+    def _simulate(skew):
+        # salida mas lenta (skew<0) tiende a llenar el ring; mas rapida (skew>0)
+        # tiende a vaciarlo. Ambos eran el disparador del lagazo a los ~20 s.
+        out_cb = 1024 / (1.0 + skew)
+        cap_t = 0.0
+        out_t = 0.0
+        high = -1
+        low = engine.nframes + 1
+        while min(cap_t, out_t) < 48000 * 120:
+            if cap_t <= out_t:
+                engine._cap_callback(np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024, None, 0)
+                cap_t += 1024
+            else:
+                engine._out_callback(None, 1024, None, 0)
+                out_t += out_cb
+            with engine.lock:
+                f = engine.rhead - engine.whead
+                high = max(high, f)
+                low = min(low, f)
+        return low, high
+
+    for skew in (-2000e-6, 2000e-6):
+        low, high = _simulate(skew)
+        assert 0 < low < engine.nframes, f"hueco/desborde con skew={skew}"
+        assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
+
+
 def test_deriva_corrige_limitando_a_frames_maximos(engine):
     engine.configure_ring(48000)
     engine._rhead = engine._drift_target + 200  # salida rezagada (mucha deriva)

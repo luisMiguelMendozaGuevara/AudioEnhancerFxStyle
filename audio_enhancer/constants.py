@@ -8,7 +8,7 @@ import os
 import sys
 
 APP_NAME = "Audio Enhancer FxStyle"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.1"
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 # Título de ventana/bandeja. Se usa también en "traer al frente" de instancia
