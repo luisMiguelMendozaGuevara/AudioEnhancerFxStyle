@@ -42,10 +42,21 @@ from .i18n import (
     detect_system_language,
     translate,
 )
+from .startup_metrics import StartupMetrics
 from .tray import TrayIcon
 from .widgets import ScrollBody, ToolTip
 
 logger = logging.getLogger("audio_enhancer.app")
+
+STARTUP_PHASES = ("shell", "content", "devices_ready")
+
+
+def device_controls_state(*, waiting: bool, has_loopbacks: bool, has_speakers: bool) -> str:
+    """Devuelve el estado visual de los selectores durante el descubrimiento."""
+    if waiting:
+        return "disabled"
+    return "readonly"
+
 
 try:
     import pystray  # noqa: F401
@@ -56,8 +67,9 @@ except Exception:
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, startup_metrics: StartupMetrics | None = None):
         self.root = root
+        self.startup_metrics = startup_metrics or StartupMetrics()
         self.language = detect_system_language()
         self.root.title(WINDOW_TITLE)
         self.root.geometry("860x740")
@@ -91,18 +103,9 @@ class App:
         self._prefill_deadline = 0.0
         self._open_output_args = None
 
-        self._build_ui()
-        self._apply_config()
-        self._refresh_preset_list(keep=None)
-        self._update_meter()
-        self._set_window_icon()
-        # el descubrimiento de dispositivos (PortAudio + enumerar WASAPI) va en
-        # un hilo para que la ventana aparezca de inmediato. Un sondeo desde el
-        # hilo principal (root.after) recoge el resultado: llamar a Tk desde un
-        # hilo secundario falla en Windows.
         self._waiting_devices = True
-        threading.Thread(target=self._discover_in_thread, daemon=True).start()
-        self.root.after(50, self._poll_devices)
+        self._device_poll_id = None
+        self._build_ui()
 
     # ---------- deteccion de dispositivos ----------
 
@@ -114,10 +117,11 @@ class App:
         self._waiting_devices = False
 
     def _poll_devices(self):
+        self._device_poll_id = None
         if self._closing:
             return
         if self._waiting_devices:
-            self.root.after(50, self._poll_devices)
+            self._schedule_device_poll()
             return
         self._on_devices_ready()
 
@@ -133,7 +137,16 @@ class App:
             self.output_var.set(self._keep_out)
         if not self.source_var.get() or not self.output_var.get():
             self._auto_select()
+        state = device_controls_state(
+            waiting=False,
+            has_loopbacks=bool(loop_names),
+            has_speakers=bool(speaker_names),
+        )
+        self.source_box.configure(state=state)
+        self.output_box.configure(state=state)
         self._route_guard()
+        self.startup_metrics.mark("devices_ready")
+        logger.warning("Dispositivos listos: %s", self.startup_metrics.summary())
         if self._keep_src or self._keep_out:
             self.status.configure(text=self._t("Dispositivos actualizados."), text_color=OK)
         self._keep_src = ""
@@ -193,7 +206,7 @@ class App:
         self.status.configure(text=self._t("Detectando dispositivos..."), text_color=WARN)
         self._waiting_devices = True
         threading.Thread(target=self._discover_in_thread, daemon=True).start()
-        self.root.after(50, self._poll_devices)
+        self._schedule_device_poll()
 
     def _is_fxsound(self, name):
         return "fxsound" in name.lower()
@@ -237,6 +250,7 @@ class App:
     # ---------- interfaz ----------
 
     def _build_ui(self):
+        """Construye el shell y difiere el contenido al primer ciclo de Tk."""
         root = self.root
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(1, weight=1)
@@ -253,9 +267,38 @@ class App:
             text_color=("gray30", "gray70"),
         ).pack(anchor="w")
 
-        body = ScrollBody(root, corner_radius=0, fg_color="transparent")
-        body.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
-        body.inner.grid_columnconfigure(0, weight=1)
+        self.body = ScrollBody(root, corner_radius=0, fg_color="transparent")
+        self.body.grid(row=1, column=0, sticky="nsew", padx=20, pady=8)
+        self.body.inner.grid_columnconfigure(0, weight=1)
+        self.status = ctk.CTkLabel(
+            root,
+            text=self._t("Preparando interfaz…"),
+            font=("Segoe UI", 12, "bold"),
+            text_color=WARN,
+        )
+        self.status.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
+        self.startup_metrics.mark("shell")
+        self.root.after_idle(self._build_content_after_first_paint)
+
+    def _build_content_after_first_paint(self):
+        self.startup_metrics.mark("first_paint")
+        self._build_content()
+        self._apply_config()
+        self._refresh_preset_list(keep=None)
+        self._set_window_icon()
+        self.startup_metrics.mark("ui_ready")
+        logger.warning("Interfaz lista: %s", self.startup_metrics.summary())
+        self.status.configure(text=self._t("Detectando dispositivos…"), text_color=WARN)
+        threading.Thread(target=self._discover_in_thread, daemon=True).start()
+        self._schedule_device_poll()
+        self._update_meter()
+
+    def _schedule_device_poll(self):
+        if self._device_poll_id is None:
+            self._device_poll_id = self.root.after(50, self._poll_devices)
+
+    def _build_content(self):
+        body = self.body
 
         # Dispositivos y ruteo
         card = ctk.CTkFrame(body.inner, corner_radius=14)
@@ -271,8 +314,8 @@ class App:
         self.source_box = ctk.CTkComboBox(
             card,
             variable=self.source_var,
-            state="readonly",
-            values=[d["name"] for d in self.loopbacks],
+            state=device_controls_state(waiting=True, has_loopbacks=False, has_speakers=False),
+            values=[self._t("Detectando dispositivos…")],
             command=self._route_guard,
         )
         self.source_box.grid(row=1, column=1, sticky="ew", padx=16, pady=4)
@@ -284,8 +327,8 @@ class App:
         self.output_box = ctk.CTkComboBox(
             card,
             variable=self.output_var,
-            state="readonly",
-            values=[d["name"] for d in self.speakers],
+            state=device_controls_state(waiting=True, has_loopbacks=False, has_speakers=False),
+            values=[self._t("Detectando dispositivos…")],
             command=self._route_guard,
         )
         self.output_box.grid(row=2, column=1, sticky="ew", padx=16, pady=4)
@@ -513,14 +556,6 @@ class App:
             command=self._on_autostart_toggle,
             font=("Segoe UI", 12),
         ).pack(side="left", fill="x", expand=True, padx=(8, 0))
-
-        self.status = ctk.CTkLabel(
-            root,
-            text=self._t("Listo. Configura el ruteo y pulsa Iniciar."),
-            font=("Segoe UI", 12, "bold"),
-            text_color=OK,
-        )
-        self.status.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
 
     def _scale(self, parent, text, lo, hi, value, steps, row, callback, fmt, label_attr, help_text=None):
         ctk.CTkLabel(parent, text=text, font=("Segoe UI", 12), anchor="w").grid(

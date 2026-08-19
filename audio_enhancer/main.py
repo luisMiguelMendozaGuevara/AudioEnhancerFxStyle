@@ -12,6 +12,7 @@ import customtkinter as ctk
 
 from .app import App
 from .constants import APP_NAME, WINDOW_TITLE
+from .startup_metrics import StartupMetrics
 
 LOG_FILE = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")),
@@ -121,7 +122,9 @@ def main() -> None:
     if mutex is None:
         return  # ya hay otra instancia corriendo
     root = ctk.CTk()
-    app = App(root)
+    metrics = StartupMetrics()
+    metrics.mark("root_created")
+    app = App(root, startup_metrics=metrics)
     root.protocol("WM_DELETE_WINDOW", app._on_close)
     # icono de bandeja desde el arranque (no solo al cerrar la ventana)
     app.root.after(600, app._start_tray)
