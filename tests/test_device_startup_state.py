@@ -1,4 +1,4 @@
-from audio_enhancer.app import device_controls_state
+from audio_enhancer.device_state import device_controls_state
 
 
 def test_device_controls_are_disabled_while_discovery_is_pending():

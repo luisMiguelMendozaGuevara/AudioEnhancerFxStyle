@@ -41,3 +41,12 @@ Las métricas de CPU/RAM no se registraron porque `psutil` no está disponible d
 **RECOMENDADO MIGRAR GRADUALMENTE A PRUEBA CONTROLADA**, no reemplazar aún la UI original.
 
 La evidencia inicial favorece PySide6 en arranque y representación del spectrum, pero la decisión definitiva requiere validar la ruta de audio real y CPU/RAM con herramientas de medición disponibles en el entorno del usuario.
+
+## Actualización: migración total (prueba de capacidad)
+
+El 2026-08-20 se ejecutó la migración total a PySide6 como prueba de capacidad:
+
+- La UI CustomTkinter fue eliminada (`app.py`, `widgets.py`, `tray.py`) y `main.py` pasó a ser la entrada única Qt.
+- La UI Tk anterior queda preservada en la rama `legacy/tk-ui`.
+- El modo `tk` de `benchmarks/ui_benchmark.py` se eliminó; solo queda el modo `qt` (`python benchmarks/ui_benchmark.py qt`).
+- Sigue pendiente la validación con audio activo (microcortes y CPU/RAM), que es el criterio go/no-go definitivo antes de considerar la migración como definitiva.

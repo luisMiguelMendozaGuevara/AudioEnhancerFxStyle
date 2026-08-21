@@ -1,8 +1,11 @@
-"""Benchmark comparable de la UI Tk actual y la UI Qt experimental.
+"""Benchmark de la UI PySide6 (tras la migración total).
 
 Se ejecuta sin iniciar audio real: mide construcción, pintura, scroll sintético y
 representación de un snapshot de spectrum. Las pruebas con audio activo siguen
 siendo manuales porque dependen del dispositivo WASAPI elegido.
+
+Histórico: el modo ``tk`` se eliminó en la migración total (la UI CustomTkinter
+ya no existe); sus mediciones quedaron registradas en docs/qt-migration-benchmark.md.
 """
 
 from __future__ import annotations
@@ -63,57 +66,6 @@ class ProcessSampler:
         return round(statistics.mean(values), 2) if values else None
 
 
-def benchmark_tk():
-    import customtkinter as ctk
-
-    from audio_enhancer.app import App
-    from audio_enhancer.startup_metrics import StartupMetrics
-
-    root = ctk.CTk()
-    metrics = StartupMetrics()
-    metrics.mark("root_created")
-    app = App(root, startup_metrics=metrics)
-    state = {"frames": 0, "scroll": []}
-    sampler = ProcessSampler()
-
-    def begin_visual_probe():
-        sampler.set_phase("ui_scroll")
-        app.enhancer.spectrum = [-30.0] * 64
-        app.running = True
-        original_draw = app._draw_spectrum
-
-        def counted_draw():
-            state["frames"] += 1
-            original_draw()
-
-        app._draw_spectrum = counted_draw
-        for _ in range(100):
-            start = time.perf_counter()
-            app.body.canvas.yview_scroll(1, "units")
-            state["scroll"].append((time.perf_counter() - start) * 1000.0)
-
-    root.after(1000, begin_visual_probe)
-    root.after(3000, root.destroy)
-    started = time.perf_counter()
-    root.mainloop()
-    sampler.stop()
-    duration = max(0.001, time.perf_counter() - started - 1.0)
-    return {
-        "toolkit": "CustomTkinter",
-        "root_to_shell_ms": elapsed(metrics, "root_created", "shell"),
-        "root_to_first_paint_ms": elapsed(metrics, "root_created", "first_paint"),
-        "root_to_ui_ready_ms": elapsed(metrics, "root_created", "ui_ready"),
-        "root_to_devices_ready_ms": elapsed(metrics, "root_created", "devices_ready"),
-        "spectrum_fps": round(state["frames"] / duration, 2),
-        "scroll_max_latency_ms": round(max(state["scroll"], default=0.0), 4),
-        "cpu_idle": sampler.mean("idle"),
-        "cpu_audio": None,
-        "cpu_audio_scroll": sampler.mean("ui_scroll"),
-        "memory_mb": round(sampler.rss_mb, 2) if sampler.process is not None else None,
-        "notes": "audio no iniciado; scroll sintético y snapshot fijo",
-    }
-
-
 def benchmark_qt():
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
@@ -170,4 +122,7 @@ if __name__ == "__main__":
     import sys
 
     mode = sys.argv[1] if len(sys.argv) > 1 else "qt"
-    print(json.dumps(benchmark_qt() if mode == "qt" else benchmark_tk(), ensure_ascii=False))
+    if mode != "qt":
+        print(json.dumps({"toolkit": "N/A", "error": "UI Tk eliminada tras la migracion; solo existe modo qt"}))
+    else:
+        print(json.dumps(benchmark_qt(), ensure_ascii=False))

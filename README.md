@@ -157,7 +157,7 @@ The executable will be generated at `dist\AudioEnhancerFxStyle.exe`. Binaries, v
 
 ```bat
 python -m py_compile AudioEnhancer_FxStyle.py
-python -c "import numpy, scipy, customtkinter, pyaudiowpatch; print('Dependencies OK')"
+python -c "import numpy, scipy, PySide6, pyaudiowpatch; print('Dependencies OK')"
 ```
 
 ## Known Limitations
