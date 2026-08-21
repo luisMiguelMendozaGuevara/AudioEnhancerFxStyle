@@ -2,11 +2,37 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QFrame, QWidget
+from PySide6.QtWidgets import QFrame, QToolTip, QWidget
+
+
+class TooltipFilter(QObject):
+    """Muestra un QToolTip al entrar en el widget y lo oculta al salir.
+
+    Basado en eventos (Enter/Leave), sin timers de sondeo periódico.
+    """
+
+    def __init__(self, widget: QWidget, text_getter: Callable[[], str], parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.widget = widget
+        self._text_getter = text_getter
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - API de Qt
+        if obj is self.widget:
+            if event.type() == QEvent.Type.Enter:
+                text = self._text_getter()
+                if text:
+                    QToolTip.showText(
+                        self.widget.mapToGlobal(self.widget.rect().center()),
+                        text,
+                        self.widget,
+                    )
+            elif event.type() == QEvent.Type.Leave:
+                QToolTip.hideText()
+        return super().eventFilter(obj, event)
 
 
 class CardFrame(QFrame):

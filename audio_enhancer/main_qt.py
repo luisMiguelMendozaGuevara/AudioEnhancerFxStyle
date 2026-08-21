@@ -1,4 +1,4 @@
-"""Entrada independiente de la interfaz experimental PySide6."""
+"""Entrada de la interfaz PySide6 (instancia única + ventana Qt)."""
 
 from __future__ import annotations
 
@@ -7,15 +7,21 @@ import logging
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from .startup_metrics import StartupMetrics
+from .constants import APP_NAME
+from .single_instance import acquire_single_instance, setup_logging
 from .ui.qt_main_window import QtMainWindow
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.WARNING)
+    setup_logging()
+    logger = logging.getLogger("audio_enhancer.main")
+    logger.warning("Arranque de %s", APP_NAME)
+    if acquire_single_instance() is None:
+        return 0  # ya hay otra instancia corriendo
     app = QApplication.instance() or QApplication([])
-    metrics = StartupMetrics()
-    window = QtMainWindow(startup_metrics=metrics)
+    # Ocultar a la bandeja no debe terminar la aplicación.
+    app.setQuitOnLastWindowClosed(False)
+    window = QtMainWindow()
     window.show()
     # Permite que Qt pinte el shell antes de construir la jerarquía completa.
     QTimer.singleShot(0, window.build_content)

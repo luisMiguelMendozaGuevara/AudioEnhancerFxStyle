@@ -1,4 +1,8 @@
-"""Ventana experimental PySide6 conectada al motor de audio existente."""
+"""Ventana PySide6 conectada al motor de audio existente (UI principal).
+
+Tras la migración total es la única interfaz: reemplaza a la antigua
+``audio_enhancer.app.App`` (CustomTkinter) manteniendo el núcleo DSP/audio.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ import time
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -20,10 +25,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSlider,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -42,11 +49,31 @@ from ..constants import (
 )
 from ..dsp import Enhancer
 from ..engine import AudioEngine, _pa
-from ..i18n import PRESETS, detect_system_language, translate
+from ..i18n import (
+    CABLE_GUIDE,
+    EQ_EXPLAIN,
+    EQ_EXPLAIN_EN,
+    EXPLAIN,
+    EXPLAIN_EN,
+    PRESETS,
+    detect_system_language,
+    translate,
+)
 from ..startup_metrics import StartupMetrics
-from .qt_widgets import CardFrame, SpectrumWidget
+from .qt_widgets import CardFrame, SpectrumWidget, TooltipFilter
 
 logger = logging.getLogger("audio_enhancer.qt")
+
+# Clave de registro compartida con la UI anterior para no romper el autostart
+# ya configurado en máquinas existentes.
+AUTOSTART_KEY = "AudioEnhancerFxStyle"
+
+# Texto de ayuda de cada control horizontal, por etiqueta mostrada.
+_SLIDER_HELP = {
+    "Volumen": "volumen",
+    "Bass Boost (dB)": "bass",
+    "Treble Boost (dB)": "treble",
+}
 
 
 class DeviceDiscoveryWorker(QObject):
@@ -116,7 +143,7 @@ class SpectrumWorker(QThread):
 
 
 class QtMainWindow(QMainWindow):
-    """Ventana Qt paralela; no sustituye ``audio_enhancer.app.App``."""
+    """Ventana principal PySide6."""
 
     def __init__(self, startup_metrics: StartupMetrics | None = None) -> None:
         super().__init__()
@@ -134,17 +161,23 @@ class QtMainWindow(QMainWindow):
         self._closing = False
         self._open_output_args: tuple[int, int] | None = None
         self._prefill_deadline = 0.0
+        self._active_names: tuple[str, str] = ("", "")
+        self._keep_src = ""  # selecciones a conservar tras refresh
+        self._keep_out = ""
         self._latest_spectrum: list[float] | None = None
         self._discovery_thread: QThread | None = None
         self._discovery_worker: DeviceDiscoveryWorker | None = None
         self._spectrum_worker = SpectrumWorker(self.enhancer, self)
+        self._tooltip_filters: list[TooltipFilter] = []
+        self.tray: QSystemTrayIcon | None = None
 
-        self.setWindowTitle(WINDOW_TITLE + " [Qt experimental]")
+        self.setWindowTitle(WINDOW_TITLE)
         self.resize(860, 740)
         self.setMinimumSize(760, 560)
         self.setWindowIcon(QIcon(resource_path("app.ico")))
         self.setStyleSheet(self._stylesheet())
         self._build_shell()
+        self._build_tray()
 
     def _t(self, text: str) -> str:
         return translate(text, self.language)
@@ -206,6 +239,23 @@ class QtMainWindow(QMainWindow):
         root_layout.addWidget(self.status, 2, 0)
         self.metrics.mark("shell")
 
+    def _build_tray(self) -> None:
+        """Icono de bandeja nativo (QSystemTrayIcon)."""
+        self.tray = QSystemTrayIcon(QIcon(resource_path("app.ico")), self)
+        menu = QMenu()
+        show_action = menu.addAction(self._t("Mostrar / Ocultar"))
+        show_action.triggered.connect(self._toggle_show)
+        audio_action = menu.addAction(self._t("Iniciar / Detener"))
+        audio_action.triggered.connect(self.toggle_audio)
+        menu.addSeparator()
+        quit_action = menu.addAction(self._t("Salir"))
+        quit_action.triggered.connect(self._quit_from_tray)
+        self.tray.setContextMenu(menu)
+        self.tray.setToolTip(WINDOW_TITLE)
+        self.tray.activated.connect(self._on_tray_activated)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.show()
+
     def build_content(self) -> None:
         """Construye todos los controles en una sola transición visual."""
         if hasattr(self, "content"):
@@ -224,7 +274,7 @@ class QtMainWindow(QMainWindow):
         self.scroll.setWidget(self.content)
         self._apply_config()
         self.metrics.mark("ui_ready")
-        self.status.setText(self._t("Detectando dispositivos…"))
+        self.status.setText(self._t("Detectando dispositivos..."))
         self._start_discovery()
         self._spectrum_worker.spectrum_ready.connect(self._receive_spectrum)
         self._spectrum_worker.start()
@@ -239,6 +289,19 @@ class QtMainWindow(QMainWindow):
         label.setObjectName("section")
         parent.addWidget(label)
 
+    # ---------- ayuda / tooltips ----------
+
+    def _explain(self, key: str) -> str:
+        table = EXPLAIN_EN if self.language == "en" else EXPLAIN
+        return table.get(key, "")
+
+    def _attach_help(self, widget: QWidget, getter) -> None:
+        filt = TooltipFilter(widget, getter)
+        self._tooltip_filters.append(filt)
+        widget.installEventFilter(filt)
+
+    # ---------- dispositivos ----------
+
     def _build_devices(self, parent: QVBoxLayout) -> None:
         card = CardFrame()
         layout = QGridLayout(card)
@@ -246,13 +309,13 @@ class QtMainWindow(QMainWindow):
         self._section_title(layout, "Dispositivos y ruteo")
         layout.addWidget(QLabel(self._t("Captura (loopback):")), 1, 0)
         self.source_combo = QComboBox()
-        self.source_combo.setPlaceholderText(self._t("Detectando dispositivos…"))
+        self.source_combo.setPlaceholderText(self._t("Detectando dispositivos..."))
         self.source_combo.setEnabled(False)
         self.source_combo.currentTextChanged.connect(self._route_guard)
         layout.addWidget(self.source_combo, 1, 1)
         layout.addWidget(QLabel(self._t("Salida (física):")), 2, 0)
         self.output_combo = QComboBox()
-        self.output_combo.setPlaceholderText(self._t("Detectando dispositivos…"))
+        self.output_combo.setPlaceholderText(self._t("Detectando dispositivos..."))
         self.output_combo.setEnabled(False)
         self.output_combo.currentTextChanged.connect(self._route_guard)
         layout.addWidget(self.output_combo, 2, 1)
@@ -264,6 +327,155 @@ class QtMainWindow(QMainWindow):
         layout.addWidget(self.refresh_button, 4, 0, 1, 2)
         layout.setColumnStretch(1, 1)
         parent.addWidget(card)
+
+    def _start_discovery(self) -> None:
+        if self._discovery_thread is not None and self._discovery_thread.isRunning():
+            return
+        # Conservar la selección actual antes de limpiar los combos.
+        if self.source_combo.count():
+            self._keep_src = self.source_combo.currentText()
+        if self.output_combo.count():
+            self._keep_out = self.output_combo.currentText()
+        self.source_combo.clear()
+        self.output_combo.clear()
+        self.source_combo.setEnabled(False)
+        self.output_combo.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.status.setText(self._t("Detectando dispositivos..."))
+        thread = QThread(self)
+        worker = DeviceDiscoveryWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_devices_ready)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_discovery_refs)
+        self._discovery_thread = thread
+        self._discovery_worker = worker
+        thread.start()
+
+    @Slot(object, object, object, str)
+    def _on_devices_ready(self, pa, loopbacks, speakers, error) -> None:
+        self.pa = pa
+        self.loopbacks = list(loopbacks)
+        self.speakers = list(speakers)
+        self.source_combo.addItems([device["name"] for device in self.loopbacks])
+        self.output_combo.addItems([device["name"] for device in self.speakers])
+        self._restore_device_selection()
+        self.source_combo.setEnabled(True)
+        self.output_combo.setEnabled(True)
+        self.refresh_button.setEnabled(True)
+        if error:
+            self._set_status(self._t("No se pudieron detectar dispositivos: %s") % error, DANGER)
+        else:
+            self._auto_select()
+            self._route_guard()
+            self._set_status(self._t("Dispositivos listos."), OK)
+        self.metrics.mark("devices_ready")
+        logger.warning("Qt dispositivos listos: %s", self.metrics.summary())
+
+    def _restore_device_selection(self) -> None:
+        """Restaura la selección de dispositivos guardada (config o refresh)."""
+        source_names = [device["name"] for device in self.loopbacks]
+        output_names = [device["name"] for device in self.speakers]
+        if self._keep_src in source_names:
+            self.source_combo.setCurrentText(self._keep_src)
+        if self._keep_out in output_names:
+            self.output_combo.setCurrentText(self._keep_out)
+        self._keep_src = ""
+        self._keep_out = ""
+
+    def _clear_discovery_refs(self) -> None:
+        self._discovery_thread = None
+        self._discovery_worker = None
+
+    def _auto_select(self) -> None:
+        if self.loopbacks and not self.source_combo.currentText():
+            index = 0
+            for candidate, device in enumerate(self.loopbacks):
+                if any(key in device["name"].lower() for key in CABLE_KEYWORDS):
+                    index = candidate
+                    break
+            self.source_combo.setCurrentIndex(index)
+        if self.speakers and not self.output_combo.currentText():
+            self.output_combo.setCurrentIndex(0)
+
+    @staticmethod
+    def _norm(name: str) -> str:
+        return "".join(name.lower().split())
+
+    @staticmethod
+    def _is_fxsound(name: str) -> bool:
+        return "fxsound" in name.lower()
+
+    def _route_guard(self, *_args) -> None:
+        """Valida el ruteo con los mismos 5 casos que la UI anterior."""
+        src_name = self.source_combo.currentText() or ""
+        out_name = self.output_combo.currentText() or ""
+        label = self.route_label
+
+        if not src_name or not out_name:
+            self.go = False
+            label.setText(self._t("Selecciona una fuente de captura y una salida física."))
+            label.setStyleSheet(f"color: {WARN};")
+            return
+
+        same = self._norm(src_name) == self._norm(out_name)
+        src_is_virtual = any(k in src_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
+        src_is_fxsound = self._is_fxsound(src_name)
+        out_is_virtual = any(k in out_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
+
+        if same:
+            self.go = False
+            label.setText(
+                self._t(
+                    "⚠  ECO: capturas y reproduces el mismo dispositivo (A → A). "
+                    "Selecciona como captura el cable virtual donde suenan las apps "
+                    "(p. ej. CABLE Input de VB-Audio) y como salida la física."
+                )
+            )
+            label.setStyleSheet(f"color: {DANGER};")
+            return
+
+        if out_is_virtual:
+            self.go = False
+            label.setText(
+                self._t(
+                    "⚠  La salida es virtual (cable). Reproduce en la salida FÍSICA "
+                    "(parlantes reales) para no realimentar el cable."
+                )
+            )
+            label.setStyleSheet(f"color: {DANGER};")
+            return
+
+        if src_is_fxsound:
+            label.setText(
+                self._t(
+                    "⚠  Estás capturando el loopback de FxSound (otra app). Si no percibes "
+                    "efecto o hay conflicto, instala VB-CABLE y captura 'CABLE Input'."
+                )
+            )
+            label.setStyleSheet(f"color: {WARN};")
+        elif src_is_virtual:
+            label.setText(
+                self._t(
+                    "✔  Ruteo correcto: capturas tu cable virtual y solo la salida física "
+                    "reproduce el audio procesado. Cierra FxSound para no duplicar el efecto."
+                )
+            )
+            label.setStyleSheet(f"color: {OK};")
+        else:
+            label.setText(
+                self._t(
+                    "Info: capturas un parlante físico. Asegúrate de que sea el dispositivo "
+                    "donde suenan las apps y que la salida sea otro distinto."
+                )
+            )
+            label.setStyleSheet("color: #80868b;")
+        self.go = True
+
+    # ---------- efectos ----------
 
     def _build_effects(self, parent: QVBoxLayout) -> None:
         card = CardFrame()
@@ -304,9 +516,11 @@ class QtMainWindow(QMainWindow):
         self.limiter_check = QCheckBox(self._t("Limitador suave"))
         self.limiter_check.setChecked(True)
         self.limiter_check.toggled.connect(self.toggle_limiter)
+        self._attach_help(self.limiter_check, lambda: self._explain("limiter"))
         self.compressor_check = QCheckBox(self._t("Compresor RMS"))
         self.compressor_check.setChecked(True)
         self.compressor_check.toggled.connect(self.toggle_compressor)
+        self._attach_help(self.compressor_check, lambda: self._explain("compressor"))
         toggles.addWidget(self.limiter_check)
         toggles.addWidget(self.compressor_check)
         toggles.addWidget(QLabel(self._t("Nivel:")))
@@ -354,6 +568,8 @@ class QtMainWindow(QMainWindow):
         setattr(self, attr, slider)
         setattr(self, attr.replace("_slider", "_label"), label_widget)
         label_widget.setText(self._format_value(value, fmt))
+        help_key = _SLIDER_HELP[label]
+        self._attach_help(slider, lambda key=help_key: self._explain(key))
 
     @staticmethod
     def _format_value(value: float, fmt: str) -> str:
@@ -379,6 +595,10 @@ class QtMainWindow(QMainWindow):
             column.addWidget(slider, 1, Qt.AlignmentFlag.AlignHCenter)
             grid.addLayout(column, 0, index)
             self.eq_sliders.append(slider)
+            if self.language == "en":
+                self._attach_help(slider, lambda freq=frequency: EQ_EXPLAIN_EN.get(freq, ""))
+            else:
+                self._attach_help(slider, lambda freq=frequency: EQ_EXPLAIN.get(freq, ""))
         layout.addLayout(grid)
         parent.addWidget(card)
 
@@ -410,121 +630,27 @@ class QtMainWindow(QMainWindow):
         layout.addLayout(row)
         parent.addWidget(card)
 
-    def _start_discovery(self) -> None:
-        if self._discovery_thread is not None and self._discovery_thread.isRunning():
-            return
-        self.source_combo.clear()
-        self.output_combo.clear()
-        self.source_combo.setEnabled(False)
-        self.output_combo.setEnabled(False)
-        self.refresh_button.setEnabled(False)
-        self.status.setText(self._t("Detectando dispositivos…"))
-        thread = QThread(self)
-        worker = DeviceDiscoveryWorker()
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._on_devices_ready)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._clear_discovery_refs)
-        self._discovery_thread = thread
-        self._discovery_worker = worker
-        thread.start()
+    # ---------- bandeja del sistema ----------
 
-    @Slot(object, object, object, str)
-    def _on_devices_ready(self, pa, loopbacks, speakers, error) -> None:
-        self.pa = pa
-        self.loopbacks = list(loopbacks)
-        self.speakers = list(speakers)
-        self.source_combo.addItems([device["name"] for device in self.loopbacks])
-        self.output_combo.addItems([device["name"] for device in self.speakers])
-        self.source_combo.setEnabled(True)
-        self.output_combo.setEnabled(True)
-        self.refresh_button.setEnabled(True)
-        if error:
-            self.status.setText(self._t("No se pudieron detectar dispositivos: %s") % error)
-            self.status.setStyleSheet(f"color: {DANGER};")
+    def _on_tray_activated(self, reason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._toggle_show()
+
+    def _toggle_show(self) -> None:
+        if self.isVisible():
+            self.hide()
         else:
-            self._auto_select()
-            self._route_guard()
-            self.status.setText(self._t("Dispositivos listos."))
-            self.status.setStyleSheet(f"color: {OK};")
-        self.metrics.mark("devices_ready")
-        logger.warning("Qt dispositivos listos: %s", self.metrics.summary())
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
 
-    def _clear_discovery_refs(self) -> None:
-        self._discovery_thread = None
-        self._discovery_worker = None
+    def _quit_from_tray(self) -> None:
+        self._shutdown()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
-    def _auto_select(self) -> None:
-        if self.loopbacks and not self.source_combo.currentText():
-            index = 0
-            for candidate, device in enumerate(self.loopbacks):
-                if any(key in device["name"].lower() for key in CABLE_KEYWORDS):
-                    index = candidate
-                    break
-            self.source_combo.setCurrentIndex(index)
-        if self.speakers and not self.output_combo.currentText():
-            self.output_combo.setCurrentIndex(0)
-
-    def _route_guard(self, *_args) -> None:
-        source = self.source_combo.currentText()
-        output = self.output_combo.currentText()
-        if not source or not output:
-            self.go = False
-            self.route_label.setText(self._t("Selecciona una fuente de captura y una salida física."))
-            self.route_label.setStyleSheet(f"color: {WARN};")
-            return
-        source_lower = source.lower()
-        output_lower = output.lower()
-        same = "".join(source_lower.split()) == "".join(output_lower.split())
-        output_virtual = any(key in output_lower for key in VIRTUAL_CABLE_KEYWORDS)
-        if same or output_virtual:
-            self.go = False
-            text = self._t("Revisa el ruteo: la salida debe ser física y distinta de la captura.")
-            self.route_label.setText(text)
-            self.route_label.setStyleSheet(f"color: {DANGER};")
-            return
-        self.go = True
-        self.route_label.setText(self._t("Ruteo listo: captura virtual → salida física."))
-        self.route_label.setStyleSheet(f"color: {OK};")
-
-    def set_volume(self, value: float) -> None:
-        self.enhancer.volume = float(value)
-
-    def set_bass(self, value: float) -> None:
-        self.enhancer.bass = float(value)
-
-    def set_treble(self, value: float) -> None:
-        self.enhancer.treble = float(value)
-
-    def set_eq(self, index: int, value: int) -> None:
-        self.enhancer.eq_gains[index] = float(value)
-
-    def toggle_ab(self) -> None:
-        self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0
-        enabled = self.enhancer.blend > 0.5
-        self.ab_button.setText(self._t("A: Efectos ON") if enabled else self._t("B: Directo (OFF)"))
-        self._set_status(self._t("A/B actualizado."), OK if enabled else WARN)
-
-    def toggle_limiter(self, enabled: bool) -> None:
-        self.enhancer.limiter = bool(enabled)
-
-    def toggle_compressor(self, enabled: bool) -> None:
-        self.enhancer.compressor = bool(enabled)
-
-    def _refresh_visuals(self) -> None:
-        peak = max(0.0, float(self.enhancer.level_peak))
-        self.meter_bar.setValue(min(100, int(peak * 100)))
-        self.meter_label.setText("%.1f dB" % (20.0 * __import__("math").log10(peak) if peak > 1e-6 else -60.0))
-        if self._latest_spectrum is not None:
-            self.spectrum_widget.set_spectrum(self._latest_spectrum)
-            self._latest_spectrum = None
-
-    @Slot(object)
-    def _receive_spectrum(self, values) -> None:
-        self._latest_spectrum = values
+    # ---------- presets / configuración ----------
 
     def _all_presets(self):
         presets = dict(PRESETS)
@@ -602,6 +728,9 @@ class QtMainWindow(QMainWindow):
         if not config:
             self._refresh_preset_list(DEFAULT_PRESET)
             return
+        # dispositivos guardados por nombre (estable frente a cambios de indice)
+        self._keep_src = str(config.get("source", "") or "")
+        self._keep_out = str(config.get("output", "") or "")
         custom = config.get("custom_presets")
         if isinstance(custom, dict):
             self.custom_presets = {}
@@ -618,12 +747,19 @@ class QtMainWindow(QMainWindow):
         self.enhancer.compressor = bool(config.get("compressor", True))
         self._refresh_preset_list(config.get("preset", DEFAULT_PRESET))
         self._sync_ui_from_state()
+        # reflejar el estado real de autostart del registro (no asumir nada)
+        self.autostart_check.blockSignals(True)
+        self.autostart_check.setChecked(self._autostart_enabled())
+        self.autostart_check.blockSignals(False)
 
     def _save_config(self) -> None:
+        source = getattr(self, "source_combo", None)
+        output = getattr(self, "output_combo", None)
+        preset = getattr(self, "preset_combo", None)
         config = {
-            "source": self.source_combo.currentText(),
-            "output": self.output_combo.currentText(),
-            "preset": self.preset_combo.currentText(),
+            "source": source.currentText() if source is not None else "",
+            "output": output.currentText() if output is not None else "",
+            "preset": preset.currentText() if preset is not None else DEFAULT_PRESET,
             "volume": float(self.enhancer.volume),
             "bass": float(self.enhancer.bass),
             "treble": float(self.enhancer.treble),
@@ -640,6 +776,47 @@ class QtMainWindow(QMainWindow):
         output = next((item for item in self.speakers if item["name"] == self.output_combo.currentText()), None)
         return source, output
 
+    # ---------- audio ----------
+
+    def set_volume(self, value: float) -> None:
+        self.enhancer.volume = float(value)
+
+    def set_bass(self, value: float) -> None:
+        self.enhancer.bass = float(value)
+
+    def set_treble(self, value: float) -> None:
+        self.enhancer.treble = float(value)
+
+    def set_eq(self, index: int, value: int) -> None:
+        self.enhancer.eq_gains[index] = float(value)
+
+    def toggle_ab(self) -> None:
+        self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0
+        enabled = self.enhancer.blend > 0.5
+        self.ab_button.setText(self._t("A: Efectos ON") if enabled else self._t("B: Directo (OFF)"))
+        if enabled:
+            self._set_status(self._t("A/B: audio procesado con efectos (A)"), OK)
+        else:
+            self._set_status(self._t("A/B: audio directo sin efectos (B)"), WARN)
+
+    def toggle_limiter(self, enabled: bool) -> None:
+        self.enhancer.limiter = bool(enabled)
+
+    def toggle_compressor(self, enabled: bool) -> None:
+        self.enhancer.compressor = bool(enabled)
+
+    def _refresh_visuals(self) -> None:
+        peak = max(0.0, float(self.enhancer.level_peak))
+        self.meter_bar.setValue(min(100, int(peak * 100)))
+        self.meter_label.setText("%.1f dB" % (20.0 * __import__("math").log10(peak) if peak > 1e-6 else -60.0))
+        if self._latest_spectrum is not None:
+            self.spectrum_widget.set_spectrum(self._latest_spectrum)
+            self._latest_spectrum = None
+
+    @Slot(object)
+    def _receive_spectrum(self, values) -> None:
+        self._latest_spectrum = values
+
     def toggle_audio(self) -> None:
         if self.running:
             self._stop_audio()
@@ -647,7 +824,7 @@ class QtMainWindow(QMainWindow):
         source, output = self._selected()
         if not self.go or source is None or output is None:
             self._route_guard()
-            self._set_status(self._t("Revisa el ruteo antes de iniciar."), DANGER)
+            self._set_status(self._t("Revisa el ruteo: no captures y reproduzcas el mismo dispositivo."), DANGER)
             return
         try:
             self._start_audio(source, output)
@@ -670,6 +847,8 @@ class QtMainWindow(QMainWindow):
         self.running = True
         self._spectrum_worker.set_active(True)
         self.start_button.setText("⏹  " + self._t("Detener audio del sistema"))
+        self._set_status(self._t("Activando salida física..."), WARN)
+        self._active_names = (source["name"], output["name"])
         self._prefill_deadline = time.time() + 0.5
         self._open_output_args = (output["index"], rate)
         QTimer.singleShot(10, self._poll_prefill)
@@ -689,8 +868,11 @@ class QtMainWindow(QMainWindow):
         self._open_output_args = None
         try:
             self.engine.open_output(out_index, rate)
-            self._set_status(self._t("Audio activo."), OK)
+            src_name, out_name = self._active_names
+            self._set_status(self._t("Activo (ring buffer): %s → %s") % (src_name, out_name), OK)
         except Exception as exc:
+            # Rollback: si la salida no pudo abrirse, la captura no debe quedar
+            # abierta y activa para siempre (fuga de stream).
             self.engine.stop()
             self.running = False
             self._spectrum_worker.set_active(False)
@@ -708,42 +890,80 @@ class QtMainWindow(QMainWindow):
         self.status.setText(text)
         self.status.setStyleSheet(f"color: {color};")
 
-    def _toggle_autostart(self, enabled: bool) -> None:
+    # ---------- autostart ----------
+
+    def _autostart_enabled(self) -> bool:
         try:
             import winreg
 
             key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0,
-                winreg.KEY_SET_VALUE,
+                winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ
             )
-            if enabled:
+            try:
+                val, _ = winreg.QueryValueEx(key, AUTOSTART_KEY)
+                return bool(val)
+            finally:
+                winreg.CloseKey(key)
+        except Exception:
+            # Sin la clave de autostart el arranque es normal
+            logger.debug("No se pudo leer el autostart del registro", exc_info=True)
+            return False
+
+    def _set_auto_start(self, enable: bool) -> bool:
+        try:
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE
+            )
+            if enable:
                 target = '"%s" "%s"' % (sys.executable, os.path.abspath(sys.argv[0]))
-                winreg.SetValueEx(key, "AudioEnhancerFxStyleQt", 0, winreg.REG_SZ, target)
+                winreg.SetValueEx(key, AUTOSTART_KEY, 0, winreg.REG_SZ, target)
             else:
                 with contextlib.suppress(FileNotFoundError):
-                    winreg.DeleteValue(key, "AudioEnhancerFxStyleQt")
+                    winreg.DeleteValue(key, AUTOSTART_KEY)
             winreg.CloseKey(key)
+            return True
         except Exception:
-            logger.exception("Fallo al configurar el inicio Qt con Windows")
+            logger.exception("Fallo al configurar el inicio con Windows")
+            return False
+
+    def _toggle_autostart(self, enabled: bool) -> None:
+        if self._set_auto_start(enabled):
+            self._set_status(self._t("Inicio con Windows: activado"), OK)
+        else:
+            self._set_status(self._t("Inicio con Windows: fallo al configurar"), DANGER)
             self.autostart_check.blockSignals(True)
             self.autostart_check.setChecked(not enabled)
             self.autostart_check.blockSignals(False)
 
-    def _show_cable_guide(self) -> None:
-        QMessageBox.information(
-            self,
-            self._t("Loopback propio (VB-CABLE)"),
-            self._t("Instala VB-CABLE y selecciona CABLE Input como captura y una salida física como destino."),
-        )
+    # ---------- guía VB-CABLE ----------
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - API de Qt
+    def _open_cable_folder(self) -> None:
+        import subprocess
+        import tempfile
+
+        folder = os.path.join(tempfile.gettempdir(), "opencode", "VBCABLE", "extracted")
+        if os.path.isdir(folder):
+            subprocess.Popen(["explorer", folder])
+            self._set_status(self._t("Se abrió la carpeta con el instalador de VB-CABLE."), OK)
+        else:
+            self._set_status(self._t("Carpeta del instalador VB-CABLE no encontrada."), DANGER)
+
+    def _show_cable_guide(self) -> None:
+        QMessageBox.information(self, self._t("Loopback propio (VB-CABLE)"), self._t(CABLE_GUIDE))
+        self._open_cable_folder()
+
+    # ---------- cierre ----------
+
+    def _shutdown(self) -> None:
+        """Detiene audio, guarda config, cierra bandeja y recursos."""
         self._closing = True
         if getattr(self, "visual_timer", None) is not None:
             self.visual_timer.stop()
         if self.running:
-            self._stop_audio()
+            with contextlib.suppress(Exception):
+                self._stop_audio()
         self._spectrum_worker.stop()
         self._save_config()
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
@@ -752,4 +972,16 @@ class QtMainWindow(QMainWindow):
         with contextlib.suppress(Exception):
             if self.pa is not None:
                 self.pa.terminate()
-        event.accept()
+        if self.tray is not None:
+            self.tray.hide()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - API de Qt
+        """Al cerrar la ventana: si hay bandeja, minimiza a ella; si no, sale."""
+        if self.tray is not None and self.tray.isVisible():
+            self._save_config()
+            self.hide()
+            self._set_status(self._t("Procesando en segundo plano (icono en bandeja)."), WARN)
+            event.ignore()
+        else:
+            self._shutdown()
+            event.accept()

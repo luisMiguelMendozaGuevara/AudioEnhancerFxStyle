@@ -88,6 +88,9 @@ TRANSLATIONS = {
     "Info: capturas un parlante físico. Asegúrate de que sea el dispositivo "
     "donde suenan las apps y que la salida sea otro distinto.": "Info: you are capturing a physical speaker. "
     "Make sure it is the device where your apps play and that the output is a different one.",
+    "Preparando interfaz…": "Preparing interface…",
+    "No se pudieron detectar dispositivos: %s": "Could not detect devices: %s",
+    "Dispositivos listos.": "Devices ready.",
 }
 
 # Guía de instalación de VB-CABLE (messagebox). Se define como constante y se
