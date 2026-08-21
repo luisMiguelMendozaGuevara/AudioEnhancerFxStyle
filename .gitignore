@@ -38,3 +38,7 @@ Thumbs.db
 
 # Documentación local para agentes IA (no publicar)
 AGENTS.md
+
+# Artefactos locales de herramientas de agentes IA
+.codebase-memory/
+.hermes/
