@@ -13,8 +13,13 @@ from __future__ import annotations
 import json
 import os
 import statistics
+import sys
 import threading
 import time
+
+# La raíz del proyecto en sys.path para poder importar audio_enhancer
+# independientemente del directorio desde el que se invoque el benchmark.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
