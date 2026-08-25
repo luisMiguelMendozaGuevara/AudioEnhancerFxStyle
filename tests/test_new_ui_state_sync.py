@@ -67,6 +67,20 @@ def test_state_volume_reaches_enhancer(qapp):
     assert window.enhancer.volume == pytest.approx(0.75)
 
 
+def test_eq_curve_band_change_reaches_enhancer(qapp):
+    """Arrastrar la curva del EQ (mutacion por banda) llega al DSP.
+
+    Regresion: _on_band_changed hacia eq_gains[i] = gain (mutacion in place
+    que se salta el property setter y no emite eq_changed)."""
+    window = _window(qapp)
+    page = window._pages["equalizer"]
+    page._on_band_changed(0, 6.0)
+    page._on_band_changed(8, -4.0)
+    assert window.enhancer.eq_gains[0] == pytest.approx(6.0)
+    assert window.enhancer.eq_gains[8] == pytest.approx(-4.0)
+    assert window.state.eq_gains[0] == pytest.approx(6.0)
+
+
 def test_dsp_processes_with_eq_active(qapp):
     """El DSP aplica ganancia real cuando el EQ esta activo."""
     import numpy as np

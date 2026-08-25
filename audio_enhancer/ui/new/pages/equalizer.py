@@ -213,7 +213,12 @@ class EqualizerPage(QWidget):
         layout.addLayout(btn_row)
 
     def _on_band_changed(self, index: int, gain: float) -> None:
-        self._state.eq_gains[index] = gain
+        # Asignar la lista COMPLETA (no eq_gains[i] = gain): la mutacion in
+        # place se salta el property setter y eq_changed nunca se emite, por
+        # lo que el DSP no se enteraria del cambio.
+        gains = list(self._state.eq_gains)
+        gains[index] = gain
+        self._state.eq_gains = gains
 
     def _reset_all(self) -> None:
         self._eq_curve.reset()
