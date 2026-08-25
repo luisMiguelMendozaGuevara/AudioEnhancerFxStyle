@@ -59,7 +59,9 @@ class EQCurveWidget(QWidget):
             targets[band] = max(targets[band], float(values[i]))
         for b in range(9):
             norm = max(0.0, min(1.0, (targets[b] + 60.0) / 60.0))
-            self._bars[b] += (norm - self._bars[b]) * 0.35
+            # Amplificacion visual: gamma < 1 levanta los niveles medios y la
+            # ganancia 1.25 lleva los picos tipicos (-15..-10 dB) cerca del tope.
+            self._bars[b] += (min(1.0, norm**0.65 * 1.25) - self._bars[b]) * 0.35
         self.update()
 
     def _freq_to_band(self, freq: float) -> int:
@@ -115,7 +117,7 @@ class EQCurveWidget(QWidget):
         p.fillRect(self.rect(), QColor(Theme.SPECTRUM_BG))
 
         # --- Barras de espectro por banda (detras de todo lo demas) ---
-        bar_area_h = (h - mt - mb) * 0.82
+        bar_area_h = (h - mt - mb) * 0.94
         baseline = h - mb
         spacing = (w - ml - mr - 40) / 8.0
         bar_w = max(18.0, min(52.0, spacing * 0.44))
