@@ -260,6 +260,7 @@ class NewMainWindow(QMainWindow):
 
     def _wire_pages(self) -> None:
         home = self._pages["home"]
+        home._start_button.clicked.connect(self.toggle_audio)
         home._preset_combo.currentTextChanged.connect(self._on_preset_selected)
         home._ab_button.clicked.connect(self.toggle_ab)
         home._volume_slider.valueChanged.connect(self._on_volume_slider)
@@ -346,6 +347,10 @@ class NewMainWindow(QMainWindow):
             self._auto_select()
             self._route_guard()
             self._status_bar.set_status_text(self._t("Dispositivos listos."), OK)
+            # Auto-arranque: el audio queda activo al abrir (como la UI
+            # original). Solo si el ruteo es válido y no está ya corriendo.
+            if self.go and not self.running:
+                QTimer.singleShot(0, self.toggle_audio)
         self.metrics.mark("devices_ready")
 
     def _restore_device_selection(self) -> None:

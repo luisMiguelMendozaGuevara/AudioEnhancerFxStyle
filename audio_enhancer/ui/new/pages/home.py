@@ -125,6 +125,13 @@ class HomePage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         layout.setSpacing(Theme.SPACING_MD)
 
+        # Accion principal: Iniciar/Detener el procesamiento de audio.
+        self._start_button = QPushButton("Iniciar audio")
+        self._start_button.setProperty("variant", "primary")
+        self._start_button.setMinimumHeight(44)
+        self._start_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self._start_button)
+
         row_top = QHBoxLayout()
         row_top.setSpacing(Theme.SPACING_MD)
         lbl_preset = QLabel("Preset")
@@ -164,7 +171,16 @@ class HomePage(QWidget):
         layout.addLayout(row_vol)
         parent.addWidget(card)
 
+    def _set_running(self, active: bool) -> None:
+        """Refleja el estado del motor en el boton principal."""
+        self._start_button.setText("Detener audio" if active else "Iniciar audio")
+        self._start_button.setProperty("variant", "danger" if active else "primary")
+        style = self._start_button.style()
+        style.unpolish(self._start_button)
+        style.polish(self._start_button)
+
     def _on_processing_changed(self, active: bool) -> None:
+        self._set_running(active)
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 5px;")
             self._status_text.setText("ACTIVE")
