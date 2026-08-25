@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from .constants import APP_NAME
 from .single_instance import acquire_single_instance, setup_logging
-from .ui.qt_main_window import QtMainWindow
+from .ui.new import NewMainWindow
 
 
 def _preload_scipy() -> None:
@@ -41,7 +41,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication([])
     # Ocultar a la bandeja no debe terminar la aplicación.
     app.setQuitOnLastWindowClosed(False)
-    window = QtMainWindow()
+    window = NewMainWindow()
     window.show()
     threading.Thread(target=_preload_scipy, name="scipy-preload", daemon=True).start()
     # Permite que Qt pinte el shell antes de construir la jerarquía completa.
