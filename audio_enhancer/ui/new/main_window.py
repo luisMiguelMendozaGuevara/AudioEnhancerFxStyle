@@ -177,7 +177,7 @@ class NewMainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        self._sidebar = Sidebar()
+        self._sidebar = Sidebar(self._t)
         self._sidebar.page_requested.connect(self._navigate_to)
         self._sidebar.setStyleSheet(f"background: {Theme.SIDEBAR_BG};")
         root_layout.addWidget(self._sidebar)
@@ -218,17 +218,12 @@ class NewMainWindow(QMainWindow):
 
         self._stack = QStackedWidget()
         self._pages = {}
-        self._pages["home"] = HomePage(self.state)
-        self._pages["equalizer"] = EqualizerPage(self.state)
-        self._pages["effects"] = EffectsPage(self.state)
-        self._pages["audio"] = AudioPage(self.state)
-        self._pages["presets"] = PresetsPage(self.state)
-        self._pages["settings"] = SettingsPage(self.state)
+        self._create_pages()
         for page in self._pages.values():
             self._stack.addWidget(page)
         right_layout.addWidget(self._stack, 1)
 
-        self._status_bar = AppStatusBar()
+        self._status_bar = AppStatusBar(self._t)
         sep3 = QFrame()
         sep3.setFixedHeight(1)
         sep3.setStyleSheet(f"background: {Theme.BORDER};")
@@ -238,8 +233,25 @@ class NewMainWindow(QMainWindow):
         root_layout.addWidget(right, 1)
         self.metrics.mark("shell")
 
+    def _create_pages(self) -> None:
+        """Crea las 6 paginas con el traductor actual."""
+        self._pages["home"] = HomePage(self.state, self._t)
+        self._pages["equalizer"] = EqualizerPage(self.state, self._t)
+        self._pages["effects"] = EffectsPage(self.state, self._t)
+        self._pages["audio"] = AudioPage(self.state, self._t)
+        self._pages["presets"] = PresetsPage(self.state, self._t)
+        self._pages["settings"] = SettingsPage(self.state, self._t)
+
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(QIcon(resource_path("app.ico")), self)
+        self._rebuild_tray_menu()
+        self.tray.setToolTip(WINDOW_TITLE)
+        self.tray.activated.connect(self._on_tray_activated)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.show()
+
+    def _rebuild_tray_menu(self) -> None:
+        """(Re)crea el menu de bandeja con los textos del idioma actual."""
         menu = QMenu()
         show_act = menu.addAction(self._t("Mostrar / Ocultar"))
         show_act.triggered.connect(self._toggle_show)
@@ -249,10 +261,6 @@ class NewMainWindow(QMainWindow):
         quit_act = menu.addAction(self._t("Salir"))
         quit_act.triggered.connect(self._quit_from_tray)
         self.tray.setContextMenu(menu)
-        self.tray.setToolTip(WINDOW_TITLE)
-        self.tray.activated.connect(self._on_tray_activated)
-        if QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray.show()
 
     def build_content(self) -> None:
         if hasattr(self, "_content_built"):
@@ -286,20 +294,59 @@ class NewMainWindow(QMainWindow):
         self._pages["presets"]._save_btn.clicked.connect(self._save_custom_preset)
         self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
         self._pages["settings"]._autostart_check.toggled.connect(self._toggle_autostart)
-        self._pages["settings"]._theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        self._pages["settings"]._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self._pages["settings"]._lang_combo.currentTextChanged.connect(self._on_language_changed)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
-        """Guarda la preferencia de idioma (se aplica al reiniciar: las
-        paginas ya construidas no se retraducen en caliente)."""
-        self.language = "en" if text.strip().lower().startswith("engl") else "es"
-        self._save_config()
-        self._status_bar.set_status_text(self._t("Idioma guardado. Se aplicara al reiniciar."), WARN)
+        """Aplica el idioma EN CALIENTE recargando toda la interfaz."""
+        code = "en" if text.strip().lower().startswith("engl") else "es"
+        self._apply_language(code)
 
-    def _on_theme_changed(self, text: str) -> None:
-        """Cambia dark/white y reaplica QSS + repaint de todos los widgets."""
-        mode = "light" if text.lower().startswith(("blanc", "white", "clar")) else "dark"
+    def _apply_language(self, code: str) -> None:
+        """Recarga completa de la interfaz en el idioma dado.
+
+        Mas simple y robusto que retraducir widget por widget: se guarda la
+        config (con el idioma nuevo), se tira todo el contenido de la ventana
+        y build_content() lo reconstruye desde cero (lee la config guardada,
+        repuebla dispositivos y re-arranca el audio via auto-start)."""
+        if code == self.language:
+            return
+        self.language = code
+        self._save_config()
+        # 1) Parar lo que corre: audio, workers, timers, descubrimiento.
+        if self.running:
+            with contextlib.suppress(Exception):
+                self._stop_audio()
+        self._spectrum_worker.stop()
+        self._spectrum_worker = SpectrumWorker(self.enhancer, self)
+        if getattr(self, "visual_timer", None) is not None:
+            self.visual_timer.stop()
+        if self._discovery_thread is not None and self._discovery_thread.isRunning():
+            self._discovery_thread.quit()
+            self._discovery_thread.wait(1000)
+        # 2) Tirar todo el contenido de la ventana.
+        old_central = self.centralWidget()
+        if old_central is not None:
+            self.setCentralWidget(QWidget())
+            old_central.deleteLater()
+        if self.tray is not None:
+            self.tray.hide()
+            self.tray.deleteLater()
+            self.tray = None
+        self._pages = {}
+        if hasattr(self, "_content_built"):
+            del self._content_built
+        # 3) Reconstruir: shell + tray + build_content (config ya guardada
+        #    con el idioma nuevo; el auto-arranque reactiva el audio).
+        self._build_shell()
+        self._build_tray()
+        QTimer.singleShot(0, self.build_content)
+
+    def _on_theme_changed(self, index: int) -> None:
+        """Cambia dark/white por indice (estable aunque las etiquetas se
+        traduzcan) y reaplica QSS + repaint de todos los widgets."""
+        mode = "light" if index == 1 else "dark"
         if mode == Theme.mode:
             return
         Theme.set_mode(mode)
@@ -639,6 +686,9 @@ class NewMainWindow(QMainWindow):
         settings._lang_combo.blockSignals(True)
         settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
         settings._lang_combo.blockSignals(False)
+        settings._theme_combo.blockSignals(True)
+        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
+        settings._theme_combo.blockSignals(False)
 
     def _save_config(self) -> None:
         audio_page = self._pages["audio"]

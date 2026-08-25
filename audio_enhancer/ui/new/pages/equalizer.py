@@ -120,7 +120,7 @@ class EQCurveWidget(QWidget):
         bar_area_h = (h - mt - mb) * 0.94
         baseline = h - mb
         spacing = (w - ml - mr - 40) / 8.0
-        bar_w = max(18.0, min(52.0, spacing * 0.44))
+        bar_w = max(22.0, min(76.0, spacing * 0.62))
         ramp = [Theme.SPECTRUM_BAR_LOW, Theme.SPECTRUM_BAR_MID, Theme.SPECTRUM_BAR_HIGH]
         for i in range(9):
             level = self._bars[i]
@@ -250,9 +250,10 @@ class EQCurveWidget(QWidget):
 class EqualizerPage(QWidget):
     """Pagina de ecualizador con curva interactiva."""
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
         # Barras de espectro en el EQ: mismo flujo de datos que la pagina Inicio
         self._state.spectrum_changed.connect(self._on_spectrum)
@@ -265,7 +266,7 @@ class EqualizerPage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         layout.setSpacing(Theme.SPACING_LG)
 
-        title = QLabel("Ecualizador")
+        title = QLabel(self._t("Ecualizador"))
         title.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_XL}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
@@ -277,7 +278,7 @@ class EqualizerPage(QWidget):
         layout.addWidget(self._eq_curve, 1)
 
         btn_row = QHBoxLayout()
-        reset_btn = QPushButton("Reset all")
+        reset_btn = QPushButton(self._t("Restablecer todo"))
         reset_btn.setFixedWidth(100)
         reset_btn.clicked.connect(self._reset_all)
         btn_row.addWidget(reset_btn)

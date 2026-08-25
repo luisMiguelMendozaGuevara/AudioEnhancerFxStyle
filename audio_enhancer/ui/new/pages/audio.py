@@ -18,9 +18,10 @@ from ..theme.colors import Theme
 class AudioPage(QWidget):
     """Pagina de dispositivos y ruteo de audio."""
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
 
     def _build(self) -> None:
@@ -28,7 +29,7 @@ class AudioPage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         layout.setSpacing(Theme.SPACING_LG)
 
-        title = QLabel("Audio")
+        title = QLabel(self._t("Audio"))
         title.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_XL}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
@@ -41,7 +42,7 @@ class AudioPage(QWidget):
         rl.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         rl.setSpacing(Theme.SPACING_MD)
 
-        lbl = QLabel("ROUTING")
+        lbl = QLabel(self._t("RUTEO"))
         lbl.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -50,7 +51,7 @@ class AudioPage(QWidget):
 
         # Input
         row_in = QHBoxLayout()
-        lbl_in = QLabel("INPUT")
+        lbl_in = QLabel(self._t("ENTRADA (loopback)"))
         lbl_in.setFixedWidth(84)
         lbl_in.setStyleSheet(
             f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_LG}px; "
@@ -63,7 +64,7 @@ class AudioPage(QWidget):
         rl.addLayout(row_in)
 
         # Arrow
-        arrow = QLabel("↓")
+        arrow = QLabel("â†“")
         arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
         arrow.setStyleSheet(f"color: {Theme.TEXT_DIM}; font-size: 18px; background: transparent;")
         rl.addWidget(arrow)
@@ -78,14 +79,14 @@ class AudioPage(QWidget):
         rl.addWidget(app_lbl)
 
         # Arrow
-        arrow2 = QLabel("↓")
+        arrow2 = QLabel("â†“")
         arrow2.setAlignment(Qt.AlignmentFlag.AlignCenter)
         arrow2.setStyleSheet(f"color: {Theme.TEXT_DIM}; font-size: 18px; background: transparent;")
         rl.addWidget(arrow2)
 
         # Output
         row_out = QHBoxLayout()
-        lbl_out = QLabel("OUTPUT")
+        lbl_out = QLabel(self._t("SALIDA (fisica)"))
         lbl_out.setFixedWidth(84)
         lbl_out.setStyleSheet(
             f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_LG}px; "
@@ -106,7 +107,7 @@ class AudioPage(QWidget):
         rl.addWidget(self._route_label)
 
         # Refresh button
-        self._refresh_btn = QPushButton("Actualizar dispositivos")
+        self._refresh_btn = QPushButton(self._t("Actualizar dispositivos"))
         self._refresh_btn.setProperty("variant", "primary")
         self._refresh_btn.setMinimumHeight(38)
         rl.addWidget(self._refresh_btn)
@@ -119,7 +120,7 @@ class AudioPage(QWidget):
         il.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         il.setSpacing(Theme.SPACING_SM)
 
-        lbl2 = QLabel("DETAILS")
+        lbl2 = QLabel(self._t("DETALLES"))
         lbl2.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"

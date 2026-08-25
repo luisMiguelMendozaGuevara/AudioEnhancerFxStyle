@@ -38,6 +38,7 @@ def window(qapp):
 
 # ---------- UI -> DSP (controles) ----------
 
+
 def test_bass_slider_reaches_dsp(window):
     window._pages["effects"]._on_bass(6.0)
     assert window.enhancer.bass == pytest.approx(6.0)
@@ -89,6 +90,7 @@ def test_volume_slider_reaches_dsp(window):
 
 # ---------- Presets ----------
 
+
 def test_preset_selection_updates_dsp_and_state(window):
     name = next(n for n, v in window._all_presets().items() if v[1] != 0 or any(v[3]))
     window._on_preset_selected(name)
@@ -118,6 +120,7 @@ def test_presets_page_lists_all_presets(window):
 
 # ---------- Motor -> UI (feedback) ----------
 
+
 def test_processing_state_reflects_in_home(window):
     window.state.processing = True
     assert window._pages["home"]._start_button.text() == "Detener audio"
@@ -140,6 +143,7 @@ def test_route_guard_updates_audio_page(window):
 
 
 # ---------- Config / idioma ----------
+
 
 def test_language_persisted_in_config(window):
     window._on_language_changed("English")

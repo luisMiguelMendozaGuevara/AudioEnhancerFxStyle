@@ -22,9 +22,10 @@ from ..widgets.spectrum import SpectrumWidget
 class HomePage(QWidget):
     """Pagina principal: estado, spectrum, meters, preset, volumen, A/B."""
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
 
     def _build(self) -> None:
@@ -73,7 +74,7 @@ class HomePage(QWidget):
         self._status_dot.setStyleSheet(f"background: {Theme.TEXT_DIM}; border-radius: 5px;")
         layout.addWidget(self._status_dot)
 
-        self._status_text = QLabel("Detenido")
+        self._status_text = QLabel(self._t("Detenido"))
         self._status_text.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_LG}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
@@ -87,7 +88,7 @@ class HomePage(QWidget):
         card = self._card()
         layout = QVBoxLayout(card)
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
-        lbl = self._section_label("SPECTRUM")
+        lbl = self._section_label(self._t("ESPECTRO"))
         layout.addWidget(lbl)
         self._spectrum = SpectrumWidget()
         self._spectrum.setMinimumHeight(280)
@@ -101,9 +102,9 @@ class HomePage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         layout.setSpacing(Theme.SPACING_MD)
 
-        for tag, attr in [("INPUT", "_input_meter"), ("OUTPUT", "_output_meter")]:
+        for tag, attr in [("ENTRADA", "_input_meter"), ("SALIDA", "_output_meter")]:
             row = QHBoxLayout()
-            lbl = QLabel(tag)
+            lbl = QLabel(self._t(tag))
             lbl.setFixedWidth(56)
             lbl.setStyleSheet(
                 f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
@@ -126,7 +127,7 @@ class HomePage(QWidget):
         layout.setSpacing(Theme.SPACING_MD)
 
         # Accion principal: Iniciar/Detener el procesamiento de audio.
-        self._start_button = QPushButton("Iniciar audio")
+        self._start_button = QPushButton(self._t("Iniciar audio"))
         self._start_button.setProperty("variant", "primary")
         self._start_button.setMinimumHeight(44)
         self._start_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -134,7 +135,7 @@ class HomePage(QWidget):
 
         row_top = QHBoxLayout()
         row_top.setSpacing(Theme.SPACING_MD)
-        lbl_preset = QLabel("Preset")
+        lbl_preset = QLabel(self._t("Preset"))
         lbl_preset.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_SM}px; background: transparent;"
         )
@@ -153,7 +154,7 @@ class HomePage(QWidget):
 
         row_vol = QHBoxLayout()
         row_vol.setSpacing(Theme.SPACING_MD)
-        lbl_vol = QLabel("Volume")
+        lbl_vol = QLabel(self._t("Volumen"))
         lbl_vol.setFixedWidth(56)
         lbl_vol.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_SM}px; background: transparent;")
         row_vol.addWidget(lbl_vol)
@@ -173,7 +174,7 @@ class HomePage(QWidget):
 
     def _set_running(self, active: bool) -> None:
         """Refleja el estado del motor en el boton principal."""
-        self._start_button.setText("Detener audio" if active else "Iniciar audio")
+        self._start_button.setText(self._t("Detener audio") if active else self._t("Iniciar audio"))
         self._start_button.setProperty("variant", "danger" if active else "primary")
         style = self._start_button.style()
         style.unpolish(self._start_button)
@@ -183,14 +184,14 @@ class HomePage(QWidget):
         self._set_running(active)
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 5px;")
-            self._status_text.setText("ACTIVE")
+            self._status_text.setText(self._t("ACTIVO"))
             self._status_text.setStyleSheet(
                 f"color: {Theme.SUCCESS}; font-size: {Theme.FONT_SIZE_LG}px; "
                 f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
             )
         else:
             self._status_dot.setStyleSheet(f"background: {Theme.TEXT_DIM}; border-radius: 5px;")
-            self._status_text.setText("Detenido")
+            self._status_text.setText(self._t("Detenido"))
             self._status_text.setStyleSheet(
                 f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_LG}px; "
                 f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"

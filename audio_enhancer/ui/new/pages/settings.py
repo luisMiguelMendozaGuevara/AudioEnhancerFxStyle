@@ -18,9 +18,10 @@ from ..theme.colors import Theme
 class SettingsPage(QWidget):
     """Pagina de configuracion."""
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
 
     def _card(self) -> QFrame:
@@ -40,7 +41,7 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         layout.setSpacing(Theme.SPACING_LG)
 
-        title = QLabel("Config")
+        title = QLabel(self._t("Config"))
         title.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_XL}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
@@ -52,7 +53,7 @@ class SettingsPage(QWidget):
         ll = QVBoxLayout(lang_card)
         ll.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         ll.setSpacing(Theme.SPACING_SM)
-        section = QLabel("LANGUAGE")
+        section = QLabel(self._t("IDIOMA"))
         section.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -68,14 +69,14 @@ class SettingsPage(QWidget):
         al = QVBoxLayout(app_card)
         al.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         al.setSpacing(Theme.SPACING_SM)
-        section2 = QLabel("APPEARANCE")
+        section2 = QLabel(self._t("APARIENCIA"))
         section2.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
         )
         al.addWidget(section2)
         self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["Oscuro", "Blanco"])
+        self._theme_combo.addItems([self._t("Oscuro"), self._t("Blanco")])
         al.addWidget(self._theme_combo)
         layout.addWidget(app_card)
 
@@ -84,33 +85,33 @@ class SettingsPage(QWidget):
         bl = QVBoxLayout(beh_card)
         bl.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         bl.setSpacing(Theme.SPACING_MD)
-        section3 = QLabel("BEHAVIOR")
+        section3 = QLabel(self._t("COMPORTAMIENTO"))
         section3.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
         )
         bl.addWidget(section3)
 
-        self._autostart_check = QCheckBox("Iniciar con Windows")
+        self._autostart_check = QCheckBox(self._t("Iniciar con Windows"))
         self._autostart_check.setStyleSheet(
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )
         bl.addWidget(self._autostart_check)
 
-        self._tray_check = QCheckBox("Minimizar a bandeja al cerrar")
+        self._tray_check = QCheckBox(self._t("Minimizar a bandeja al cerrar"))
         self._tray_check.setChecked(True)
         self._tray_check.setStyleSheet(
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )
         bl.addWidget(self._tray_check)
 
-        self._autostart_audio_check = QCheckBox("Auto-iniciar audio al abrir")
+        self._autostart_audio_check = QCheckBox(self._t("Auto-iniciar audio al abrir"))
         self._autostart_audio_check.setStyleSheet(
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )
         bl.addWidget(self._autostart_audio_check)
 
-        self._notifications_check = QCheckBox("Notificaciones")
+        self._notifications_check = QCheckBox(self._t("Notificaciones"))
         self._notifications_check.setChecked(True)
         self._notifications_check.setStyleSheet(
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"

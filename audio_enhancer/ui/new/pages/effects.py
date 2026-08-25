@@ -31,6 +31,7 @@ class EffectCard(QFrame):
 
         row_top = QHBoxLayout()
         lbl = QLabel(title)
+        self._title_label = lbl
         lbl.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -96,9 +97,10 @@ class EffectCard(QFrame):
 class EffectsPage(QWidget):
     """Pagina de efectos: Bass, Treble, Compressor, Limiter."""
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
 
     def _build(self) -> None:
@@ -112,33 +114,33 @@ class EffectsPage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         layout.setSpacing(Theme.SPACING_LG)
 
-        title = QLabel("Efectos")
+        title = QLabel(self._t("Efectos"))
         title.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_XL}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
         )
         layout.addWidget(title)
 
-        self._bass_card = EffectCard("Bass Boost", 0.0, 12.0, 0.0, "dB")
+        self._bass_card = EffectCard(self._t("Refuerzo de graves (dB)"), 0.0, 12.0, 0.0, "dB")
         self._bass_card._slider.valueChanged.connect(lambda v: self._on_bass(v / 100))
         if self._bass_card._toggle:
             self._bass_card._toggle.toggled.connect(self._on_bass_toggle)
         layout.addWidget(self._bass_card)
 
-        self._treble_card = EffectCard("Treble Boost", 0.0, 12.0, 0.0, "dB")
+        self._treble_card = EffectCard(self._t("Refuerzo de agudos (dB)"), 0.0, 12.0, 0.0, "dB")
         self._treble_card._slider.valueChanged.connect(lambda v: self._on_treble(v / 100))
         if self._treble_card._toggle:
             self._treble_card._toggle.toggled.connect(self._on_treble_toggle)
         layout.addWidget(self._treble_card)
 
-        self._limiter_card = EffectCard("Limiter", 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._limiter_card = EffectCard(self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True)
         self._limiter_card._slider.setEnabled(False)
         self._limiter_card._toggle.setChecked(True)
         if self._limiter_card._toggle:
             self._limiter_card._toggle.toggled.connect(self._on_limiter_toggle)
         layout.addWidget(self._limiter_card)
 
-        self._compressor_card = EffectCard("Compressor", 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._compressor_card = EffectCard(self._t("Compresor RMS"), 0.0, 1.0, 1.0, "", has_toggle=True)
         self._compressor_card._slider.setEnabled(False)
         self._compressor_card._toggle.setChecked(True)
         if self._compressor_card._toggle:

@@ -56,6 +56,11 @@ class SidebarItem(QFrame):
         self._active = active
         self.update()
 
+    def set_label(self, text: str) -> None:
+        """Cambia el texto visible (cambio de idioma en caliente)."""
+        self._label_text = text
+        self._text_label.setText(text)
+
     def set_compact(self, compact: bool) -> None:
         self._text_label.setVisible(not compact)
 
@@ -109,8 +114,9 @@ class Sidebar(QWidget):
 
     page_requested = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, t=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._t = t or (lambda text: text)
         self._items: list[SidebarItem] = []
         self._current_id: str = ""
         self._compact: bool = False
@@ -132,7 +138,7 @@ class Sidebar(QWidget):
             ("settings", "Config", "⚙"),
         ]
         for pid, label, icon in pages:
-            item = SidebarItem(pid, label, icon)
+            item = SidebarItem(pid, self._t(label), icon)
             item.clicked.connect(self._on_item_clicked)
             layout.addWidget(item)
             self._items.append(item)
@@ -148,6 +154,20 @@ class Sidebar(QWidget):
         self._current_id = page_id
         for item in self._items:
             item.set_active(item.page_id == page_id)
+
+    def retranslate(self, t) -> None:
+        """Actualiza los textos de los items al idioma actual."""
+        self._t = t
+        labels = {
+            "home": "Inicio",
+            "equalizer": "Ecualizador",
+            "effects": "Efectos",
+            "audio": "Audio",
+            "presets": "Presets",
+            "settings": "Config",
+        }
+        for item in self._items:
+            item.set_label(t(labels.get(item.page_id, item.page_id)))
 
     def set_compact(self, compact: bool) -> None:
         self._compact = compact

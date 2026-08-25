@@ -21,9 +21,10 @@ class PresetsPage(QWidget):
 
     delete_requested = Signal(str)
 
-    def __init__(self, state: AudioState, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._t = t or (lambda text: text)
         self._build()
 
     def _card(self) -> QFrame:
@@ -43,7 +44,7 @@ class PresetsPage(QWidget):
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
         layout.setSpacing(Theme.SPACING_LG)
 
-        title = QLabel("Presets")
+        title = QLabel(self._t("Presets"))
         title.setStyleSheet(
             f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_XL}px; "
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
@@ -56,7 +57,7 @@ class PresetsPage(QWidget):
         nl.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         nl.setSpacing(Theme.SPACING_MD)
 
-        lbl = QLabel("SAVE PRESET")
+        lbl = QLabel(self._t("GUARDAR PRESET"))
         lbl.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -65,9 +66,9 @@ class PresetsPage(QWidget):
 
         row = QHBoxLayout()
         self._name_entry = QLineEdit()
-        self._name_entry.setPlaceholderText("nombre del preset")
+        self._name_entry.setPlaceholderText(self._t("nombre del preset"))
         row.addWidget(self._name_entry, 1)
-        self._save_btn = QPushButton("Guardar")
+        self._save_btn = QPushButton(self._t("Guardar"))
         self._save_btn.setProperty("variant", "primary")
         self._save_btn.setFixedWidth(100)
         row.addWidget(self._save_btn)
@@ -76,8 +77,8 @@ class PresetsPage(QWidget):
 
         # Import/Export
         io_row = QHBoxLayout()
-        self._import_btn = QPushButton("Importar")
-        self._export_btn = QPushButton("Exportar")
+        self._import_btn = QPushButton(self._t("Importar"))
+        self._export_btn = QPushButton(self._t("Exportar"))
         io_row.addWidget(self._import_btn)
         io_row.addWidget(self._export_btn)
         io_row.addStretch()
@@ -88,7 +89,7 @@ class PresetsPage(QWidget):
         il = QVBoxLayout(inc_card)
         il.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
 
-        lbl2 = QLabel("INCLUDED")
+        lbl2 = QLabel(self._t("INCLUIDOS"))
         lbl2.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -107,7 +108,7 @@ class PresetsPage(QWidget):
         cl = QVBoxLayout(self._custom_card)
         cl.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
 
-        lbl3 = QLabel("CUSTOM")
+        lbl3 = QLabel(self._t("PERSONALIZADOS"))
         lbl3.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
             f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -158,7 +159,7 @@ class PresetsPage(QWidget):
             lbl.setStyleSheet(f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent;")
             row.addWidget(lbl)
             row.addStretch()
-            btn = QPushButton("Eliminar")
+            btn = QPushButton(self._t("Eliminar"))
             btn.setFixedWidth(80)
             btn.clicked.connect(lambda _=False, n=name: self.delete_requested.emit(n))
             btn.setStyleSheet(
