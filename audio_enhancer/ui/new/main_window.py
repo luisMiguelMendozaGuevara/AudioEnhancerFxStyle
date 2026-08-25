@@ -124,6 +124,11 @@ class NewMainWindow(QMainWindow):
         self.metrics = startup_metrics or StartupMetrics()
         self.metrics.mark("root_created")
         self.language = detect_system_language()
+        # Idioma guardado por el usuario tiene prioridad sobre el del sistema.
+        with contextlib.suppress(Exception):
+            saved_lang = (load_config() or {}).get("language")
+            if saved_lang in ("es", "en"):
+                self.language = saved_lang
         self.enhancer = Enhancer()
         self.engine = AudioEngine(self.enhancer)
         self.state = AudioState(self)
@@ -279,9 +284,18 @@ class NewMainWindow(QMainWindow):
         audio_page._output_combo.currentTextChanged.connect(self._route_guard)
         audio_page._refresh_btn.clicked.connect(self._start_discovery)
         self._pages["presets"]._save_btn.clicked.connect(self._save_custom_preset)
+        self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
         self._pages["settings"]._autostart_check.toggled.connect(self._toggle_autostart)
         self._pages["settings"]._theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        self._pages["settings"]._lang_combo.currentTextChanged.connect(self._on_language_changed)
         self._refresh_preset_list()
+
+    def _on_language_changed(self, text: str) -> None:
+        """Guarda la preferencia de idioma (se aplica al reiniciar: las
+        paginas ya construidas no se retraducen en caliente)."""
+        self.language = "en" if text.strip().lower().startswith("engl") else "es"
+        self._save_config()
+        self._status_bar.set_status_text(self._t("Idioma guardado. Se aplicara al reiniciar."), WARN)
 
     def _on_theme_changed(self, text: str) -> None:
         """Cambia dark/white y reaplica QSS + repaint de todos los widgets."""
@@ -427,9 +441,22 @@ class NewMainWindow(QMainWindow):
     def _refresh_preset_list(self, keep=None) -> None:
         home = self._pages["home"]
         current = keep or home._preset_combo.currentText()
-        home.set_preset_items(list(self._all_presets().keys()))
+        names = list(self._all_presets().keys())
+        home.set_preset_items(names)
         if current in self._all_presets():
             home.set_preset(current)
+        # La pagina Presets muestra ambas listas (antes quedaba vacia).
+        presets_page = self._pages["presets"]
+        presets_page.set_included_presets(list(PRESETS.keys()))
+        presets_page.set_custom_presets(list(self.custom_presets.keys()))
+
+    def _delete_custom_preset(self, name: str) -> None:
+        if name not in self.custom_presets:
+            return
+        self.custom_presets.pop(name)
+        self._refresh_preset_list()
+        self._save_config()
+        self._status_bar.set_status_text(self._t("Preset eliminado: %s") % name, WARN)
 
     def _on_preset_selected(self, name: str) -> None:
         if not name or name not in self._all_presets():
@@ -467,6 +494,9 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_limiter(self.enhancer.limiter)
         self._pages["effects"].set_compressor(self.enhancer.compressor)
         home.set_ab(self.enhancer.blend > 0.5)
+        # Consistencia: AudioState alineado con el DSP (los set_* de las
+        # paginas usan blockSignals y no escriben en el estado).
+        self.state.sync_from_enhancer(self.enhancer)
 
     def _on_volume_slider(self, raw: int) -> None:
         self.enhancer.volume = raw / 100.0
@@ -606,6 +636,9 @@ class NewMainWindow(QMainWindow):
         settings._autostart_check.blockSignals(True)
         settings._autostart_check.setChecked(self._autostart_enabled())
         settings._autostart_check.blockSignals(False)
+        settings._lang_combo.blockSignals(True)
+        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
+        settings._lang_combo.blockSignals(False)
 
     def _save_config(self) -> None:
         audio_page = self._pages["audio"]
@@ -614,6 +647,7 @@ class NewMainWindow(QMainWindow):
             "source": audio_page._input_combo.currentText(),
             "output": audio_page._output_combo.currentText(),
             "preset": home._preset_combo.currentText() or DEFAULT_PRESET,
+            "language": self.language,
             "volume": float(self.enhancer.volume),
             "bass": float(self.enhancer.bass),
             "treble": float(self.enhancer.treble),

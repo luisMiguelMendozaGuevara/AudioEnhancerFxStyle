@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -18,6 +18,8 @@ from ..theme.colors import Theme
 
 class PresetsPage(QWidget):
     """Pagina de presets: incluidos, personalizados, favoritos."""
+
+    delete_requested = Signal(str)
 
     def __init__(self, state: AudioState, parent=None) -> None:
         super().__init__(parent)
@@ -158,6 +160,7 @@ class PresetsPage(QWidget):
             row.addStretch()
             btn = QPushButton("Eliminar")
             btn.setFixedWidth(80)
+            btn.clicked.connect(lambda _=False, n=name: self.delete_requested.emit(n))
             btn.setStyleSheet(
                 f"QPushButton {{ background: {Theme.DANGER_BG}; color: {Theme.DANGER};"
                 f" border: 1px solid {Theme.DANGER}; "
