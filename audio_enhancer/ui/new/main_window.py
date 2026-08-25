@@ -126,9 +126,13 @@ class NewMainWindow(QMainWindow):
         self.language = detect_system_language()
         # Idioma guardado por el usuario tiene prioridad sobre el del sistema.
         with contextlib.suppress(Exception):
-            saved_lang = (load_config() or {}).get("language")
+            saved_cfg = load_config() or {}
+            saved_lang = saved_cfg.get("language")
             if saved_lang in ("es", "en"):
                 self.language = saved_lang
+            saved_theme = saved_cfg.get("theme")
+            if saved_theme in ("dark", "light"):
+                Theme.set_mode(saved_theme)
         self.enhancer = Enhancer()
         self.engine = AudioEngine(self.enhancer)
         self.state = AudioState(self)
@@ -314,6 +318,14 @@ class NewMainWindow(QMainWindow):
             return
         self.language = code
         self._save_config()
+        self._reload_ui()
+
+    def _reload_ui(self) -> None:
+        """Tira todo el contenido de la ventana y lo reconstruye.
+
+        Usado por el cambio de idioma y el de tema: los estilos inline de las
+        paginas hornean colores/textos al construirse, asi que la unica forma
+        garantizada de aplicarlos es reconstruir."""
         # 1) Parar lo que corre: audio, workers, timers, descubrimiento.
         if self.running:
             with contextlib.suppress(Exception):
@@ -337,24 +349,25 @@ class NewMainWindow(QMainWindow):
         self._pages = {}
         if hasattr(self, "_content_built"):
             del self._content_built
-        # 3) Reconstruir: shell + tray + build_content (config ya guardada
-        #    con el idioma nuevo; el auto-arranque reactiva el audio).
+        # 3) Reconstruir: shell + tray + build_content (config ya guardada;
+        #    el auto-arranque reactiva el audio).
+        self.setStyleSheet(Theme.stylesheet())
         self._build_shell()
         self._build_tray()
         QTimer.singleShot(0, self.build_content)
 
     def _on_theme_changed(self, index: int) -> None:
-        """Cambia dark/white por indice (estable aunque las etiquetas se
-        traduzcan) y reaplica QSS + repaint de todos los widgets."""
+        """Cambia dark/white por indice recargando la interfaz.
+
+        Los estilos inline de las paginas hornean colores al construirse:
+        solo re-aplicar QSS deja etiquetas con texto del tema anterior
+        (invisible tras alternar). Recargar garantiza consistencia."""
         mode = "light" if index == 1 else "dark"
         if mode == Theme.mode:
             return
         Theme.set_mode(mode)
-        self.setStyleSheet(Theme.stylesheet())
-        from PySide6.QtWidgets import QApplication
-
-        for widget in QApplication.allWidgets():
-            widget.update()
+        self._save_config()
+        self._reload_ui()
 
     def _navigate_to(self, page_id: str) -> None:
         page = self._pages.get(page_id)
@@ -559,8 +572,11 @@ class NewMainWindow(QMainWindow):
         if self.running:
             self._stop_audio()
             return
-        src_text = self._pages["audio"]._input_combo.currentText()
-        out_text = self._pages["audio"]._output_combo.currentText()
+        audio_page = self._pages.get("audio")
+        if audio_page is None:
+            return  # recarga de interfaz en curso
+        src_text = audio_page._input_combo.currentText()
+        out_text = audio_page._output_combo.currentText()
         source = next((d for d in self.loopbacks if d["name"] == src_text), None)
         output = next((d for d in self.speakers if d["name"] == out_text), None)
         if not self.go or source is None or output is None:
@@ -704,6 +720,7 @@ class NewMainWindow(QMainWindow):
             "eq_gains": [float(g) for g in self.enhancer.eq_gains],
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
+            "theme": Theme.mode,
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
         if not save_config(config):

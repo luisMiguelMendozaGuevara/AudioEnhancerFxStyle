@@ -64,7 +64,7 @@ class AudioPage(QWidget):
         rl.addLayout(row_in)
 
         # Arrow
-        arrow = QLabel("â†“")
+        arrow = QLabel("↓")
         arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
         arrow.setStyleSheet(f"color: {Theme.TEXT_DIM}; font-size: 18px; background: transparent;")
         rl.addWidget(arrow)
@@ -79,7 +79,7 @@ class AudioPage(QWidget):
         rl.addWidget(app_lbl)
 
         # Arrow
-        arrow2 = QLabel("â†“")
+        arrow2 = QLabel("↓")
         arrow2.setAlignment(Qt.AlignmentFlag.AlignCenter)
         arrow2.setStyleSheet(f"color: {Theme.TEXT_DIM}; font-size: 18px; background: transparent;")
         rl.addWidget(arrow2)
