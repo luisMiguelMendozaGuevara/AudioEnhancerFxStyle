@@ -10,11 +10,29 @@ callback.
 """
 
 import math
+import threading
 
 import numpy as np
-from scipy import signal
 
 from .constants import SAMPLE_RATE
+
+# Import perezoso de scipy.signal: su importación cuesta ~2,3 s y solo se
+# usa sosfilt() cuando hay secciones de filtro activas. La precarga en
+# segundo plano (main.py) evita pagar el coste dentro del callback de audio.
+_signal = None
+_signal_lock = threading.Lock()
+
+
+def _scipy_signal():
+    global _signal
+    if _signal is None:
+        with _signal_lock:
+            if _signal is None:
+                from scipy import signal as _s
+
+                _signal = _s
+    return _signal
+
 
 # Umbral de activación de una sección de filtro (en dB): por debajo se
 # considera ganancia nula y la sección no se apila (estado conservado).
@@ -205,7 +223,7 @@ class Enhancer:
         if sections:
             sos = np.concatenate([s[1] for s in sections], axis=0)
             zi = np.stack([s[2] for s in sections])
-            out, zi_out = signal.sosfilt(sos, y, axis=0, zi=zi)
+            out, zi_out = _scipy_signal().sosfilt(sos, y, axis=0, zi=zi)
             for s, z in zip(sections, zi_out, strict=False):
                 self._states[s[0]] = np.asarray(z, dtype=np.float32)
             y = out
