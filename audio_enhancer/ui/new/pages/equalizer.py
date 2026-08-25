@@ -5,6 +5,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -22,21 +23,56 @@ from ..theme.colors import Theme, accent_subtle_color
 
 
 class EQCurveWidget(QWidget):
-    """Curva de ecualizador interactiva con 9 bandas arrastrables."""
+    """Curva de ecualizador interactiva con 9 bandas arrastrables.
+
+    Detras de la curva pinta barras de espectro (agregadas por banda) para
+    ver la energia real de la musica bajo cada control."""
 
     band_changed = Signal(int, float)
     EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
     DB_MIN = -12.0
     DB_MAX = 12.0
+    SPECTRUM_BINS = 64
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._gains = [0.0] * 9
         self._dragging = -1
         self._hover = -1
+        self._bars = [0.0] * 9  # nivel suavizado 0..1 por banda
         self.setMinimumHeight(200)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
+
+    def set_spectrum(self, values) -> None:
+        """Recibe el espectro (dB, bins log 20Hz-20kHz) y lo agrega por banda."""
+        if not values:
+            # Sin audio: las barras decaen hacia cero
+            self._bars = [b * 0.85 for b in self._bars]
+            self.update()
+            return
+        n = min(len(values), self.SPECTRUM_BINS)
+        targets = [-120.0] * 9  # piso bajo silencio: -60 dB debe mapear a 0
+        for i in range(n):
+            freq = 20.0 * (1000.0 ** (i / (self.SPECTRUM_BINS - 1)))
+            band = self._freq_to_band(freq)
+            targets[band] = max(targets[band], float(values[i]))
+        for b in range(9):
+            norm = max(0.0, min(1.0, (targets[b] + 60.0) / 60.0))
+            self._bars[b] += (norm - self._bars[b]) * 0.35
+        self.update()
+
+    def _freq_to_band(self, freq: float) -> int:
+        """Banda EQ cuya frecuencia central es mas cercana en escala log."""
+        import math
+
+        best, best_d = 0, float("inf")
+        log_f = math.log10(max(freq, 1.0))
+        for i, center in enumerate(self.EQ_BANDS):
+            d = abs(math.log10(center) - log_f)
+            if d < best_d:
+                best_d, best = d, i
+        return best
 
     def set_gains(self, gains: list[float]) -> None:
         self._gains = list(gains)
@@ -77,6 +113,35 @@ class EQCurveWidget(QWidget):
         ml, mr, mt, mb = 44, 12, 16, 24
 
         p.fillRect(self.rect(), QColor(Theme.SPECTRUM_BG))
+
+        # --- Barras de espectro por banda (detras de todo lo demas) ---
+        bar_area_h = (h - mt - mb) * 0.82
+        baseline = h - mb
+        spacing = (w - ml - mr - 40) / 8.0
+        bar_w = max(18.0, min(52.0, spacing * 0.44))
+        ramp = [Theme.SPECTRUM_BAR_LOW, Theme.SPECTRUM_BAR_MID, Theme.SPECTRUM_BAR_HIGH]
+        for i in range(9):
+            level = self._bars[i]
+            if level <= 0.01:
+                continue
+            x_center = self._band_to_x(i, w, ml, mr)
+            bar_h = level * bar_area_h
+            top = baseline - bar_h
+            color = QColor(ramp[0] if level < 0.4 else ramp[1] if level < 0.75 else ramp[2])
+            color.setAlpha(115)
+            grad = QLinearGradient(x_center, top, x_center, baseline)
+            grad.setColorAt(0.0, color)
+            faded = QColor(color)
+            faded.setAlpha(28)
+            grad.setColorAt(1.0, faded)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(grad))
+            p.drawRoundedRect(QRectF(x_center - bar_w / 2, top, bar_w, bar_h), 3, 3)
+            # Tapa brillante en el tope de la barra
+            cap = QColor(Theme.SPECTRUM_BAR_PEAK)
+            cap.setAlpha(190)
+            p.setBrush(cap)
+            p.drawRoundedRect(QRectF(x_center - bar_w / 2, top, bar_w, 3), 1.5, 1.5)
 
         zero_y = self._gain_to_y(0, h, mt, mb)
         p.setPen(QPen(QColor(Theme.EQ_GRID), 1, Qt.PenStyle.SolidLine))
@@ -187,6 +252,11 @@ class EqualizerPage(QWidget):
         super().__init__(parent)
         self._state = state
         self._build()
+        # Barras de espectro en el EQ: mismo flujo de datos que la pagina Inicio
+        self._state.spectrum_changed.connect(self._on_spectrum)
+
+    def _on_spectrum(self, values) -> None:
+        self._eq_curve.set_spectrum(values)
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
