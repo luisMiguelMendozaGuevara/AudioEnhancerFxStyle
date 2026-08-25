@@ -127,6 +127,16 @@ class NewMainWindow(QMainWindow):
         self.enhancer = Enhancer()
         self.engine = AudioEngine(self.enhancer)
         self.state = AudioState(self)
+        # Estado -> DSP: los controles de las paginas escriben en AudioState;
+        # sin este puente los sliders no afectan al audio (solo a la UI).
+        # En __init__ para que exista antes de cualquier interaccion.
+        state = self.state
+        state.bass_changed.connect(lambda v: setattr(self.enhancer, "bass", float(v)))
+        state.treble_changed.connect(lambda v: setattr(self.enhancer, "treble", float(v)))
+        state.eq_changed.connect(lambda g: setattr(self.enhancer, "eq_gains", [float(x) for x in g]))
+        state.limiter_changed.connect(lambda on: setattr(self.enhancer, "limiter", bool(on)))
+        state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
+        state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
         self.custom_presets = {}
         self.loopbacks = []
         self.speakers = []
