@@ -487,6 +487,7 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
     def _start_audio(self, source, output) -> None:
+        logger.warning("Auto/manual start: %s -> %s", source["name"], output["name"])
         pa_mod = _pa()
         if self.pa is None:
             self.pa = pa_mod.PyAudio()
@@ -533,6 +534,7 @@ class NewMainWindow(QMainWindow):
         try:
             self.engine.open_output(out_index, rate)
             latency = (self.engine.nframes / rate) * 1000
+            logger.warning("Audio activo: ring buffer a %d Hz, latencia %.1f ms", rate, latency)
             self._status_bar.set_latency(latency)
             self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
             self._pages["audio"].set_info(rate=rate, buffer=1024, latency=latency, status="Processing")
@@ -546,6 +548,7 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
     def _stop_audio(self) -> None:
+        logger.warning("Audio detenido por el usuario")
         self.engine.stop()
         self.running = False
         self._spectrum_worker.set_active(False)
