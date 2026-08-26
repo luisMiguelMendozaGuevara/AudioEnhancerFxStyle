@@ -49,19 +49,16 @@ class AudioPage(QWidget):
         )
         rl.addWidget(lbl)
 
-        # Input
-        row_in = QHBoxLayout()
+        # Input (etiqueta encima, combo a ancho completo: nunca se corta)
         lbl_in = QLabel(self._t("ENTRADA (loopback)"))
-        lbl_in.setFixedWidth(84)
         lbl_in.setStyleSheet(
-            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_LG}px; "
+            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_SM}px; "
             f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
         )
-        row_in.addWidget(lbl_in)
+        rl.addWidget(lbl_in)
         self._input_combo = QComboBox()
         self._input_combo.setEnabled(False)
-        row_in.addWidget(self._input_combo, 1)
-        rl.addLayout(row_in)
+        rl.addWidget(self._input_combo)
 
         # Arrow
         arrow = QLabel("↓")
@@ -85,18 +82,15 @@ class AudioPage(QWidget):
         rl.addWidget(arrow2)
 
         # Output
-        row_out = QHBoxLayout()
-        lbl_out = QLabel(self._t("SALIDA (fisica)"))
-        lbl_out.setFixedWidth(84)
+        lbl_out = QLabel(self._t("SALIDA (física)"))
         lbl_out.setStyleSheet(
-            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_LG}px; "
+            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_SM}px; "
             f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
         )
-        row_out.addWidget(lbl_out)
+        rl.addWidget(lbl_out)
         self._output_combo = QComboBox()
         self._output_combo.setEnabled(False)
-        row_out.addWidget(self._output_combo, 1)
-        rl.addLayout(row_out)
+        rl.addWidget(self._output_combo)
 
         # Route status
         self._route_label = QLabel("")
@@ -130,8 +124,7 @@ class AudioPage(QWidget):
         self._info_labels = {}
         for key, text in [("rate", "Sample Rate"), ("buffer", "Buffer"), ("latency", "Latency"), ("status", "Status")]:
             row = QHBoxLayout()
-            k = QLabel(text)
-            k.setFixedWidth(100)
+            k = QLabel(self._t(text))
             k.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent;")
             v = QLabel("--")
             v.setStyleSheet(
