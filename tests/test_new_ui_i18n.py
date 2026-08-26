@@ -26,11 +26,17 @@ def qapp():
 
 @pytest.fixture(scope="module")
 def window(qapp):
-    from audio_enhancer.ui.new.main_window import NewMainWindow
+    from audio_enhancer.ui.new import main_window as mw
 
-    w = NewMainWindow()
+    # Aislar de la config real: los tests de idioma no deben contaminar
+    # el config.json del usuario ni el arranque de otras ventanas.
+    orig_load, orig_save = mw.load_config, mw.save_config
+    mw.load_config = lambda: {}
+    mw.save_config = lambda cfg: True
+    w = mw.NewMainWindow()
     w.build_content()
     yield w
+    mw.load_config, mw.save_config = orig_load, orig_save
     w._closing = True
     w.engine.stop()
     w._spectrum_worker.stop()

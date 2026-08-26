@@ -201,6 +201,8 @@ class AudioEngine:
     # ---------- callbacks ----------
 
     def _cap_callback(self, in_data, frame_count, time_info, status):
+        if self.ring is None or self._pa_mod is None:
+            return (None, self._pa_mod.paContinue if self._pa_mod else 0)
         x = np.frombuffer(in_data, dtype=np.float32)
         x = np.asarray(x[: frame_count * 2], dtype=np.float32)
         try:
@@ -212,6 +214,8 @@ class AudioEngine:
         return (None, self._pa_mod.paContinue)
 
     def _out_callback(self, in_data, frame_count, time_info, status):
+        if self.ring is None or self._pa_mod is None:
+            return (None, self._pa_mod.paContinue if self._pa_mod else 0)
         with self.lock:
             fill = self.rhead - self.whead
             error = fill - self._drift_target

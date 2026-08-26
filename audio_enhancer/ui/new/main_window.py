@@ -60,7 +60,14 @@ AUTOSTART_KEY = "AudioEnhancerFxStyle"
 
 
 class DeviceDiscoveryWorker(QObject):
-    finished = Signal(object, object, object, str)
+    # (loopbacks, speakers, error) — sin PyAudio: cada worker usa su propia
+    # instancia temporal y la termina al acabar (PortAudio NO es thread-safe
+    # para enumerar en un hilo mientras otro hilo tiene streams abiertos en
+    # la misma instancia).
+    finished = Signal(object, object, str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
 
     @Slot()
     def run(self) -> None:
@@ -84,10 +91,15 @@ class DeviceDiscoveryWorker(QObject):
                     if "fxsound" in name or any(k in name for k in VIRTUAL_CABLE_KEYWORDS):
                         continue
                     speakers.append(device)
-            self.finished.emit(pa, loopbacks, speakers, "")
+            self.finished.emit(loopbacks, speakers, "")
         except Exception as exc:
             logger.exception("Device discovery failed")
-            self.finished.emit(pa, [], [], str(exc))
+            self.finished.emit([], [], str(exc))
+        finally:
+            # La instancia de enumeracion es efimera y privada de este worker.
+            if pa is not None:
+                with contextlib.suppress(Exception):
+                    pa.terminate()
 
 
 class SpectrumWorker(QThread):
@@ -308,66 +320,81 @@ class NewMainWindow(QMainWindow):
         self._apply_language(code)
 
     def _apply_language(self, code: str) -> None:
-        """Recarga completa de la interfaz en el idioma dado.
+        """Aplica el idioma EN CALIENTE reconstruyendo solo las paginas.
 
-        Mas simple y robusto que retraducir widget por widget: se guarda la
-        config (con el idioma nuevo), se tira todo el contenido de la ventana
-        y build_content() lo reconstruye desde cero (lee la config guardada,
-        repuebla dispositivos y re-arranca el audio via auto-start)."""
+        El motor, PyAudio y los workers no se tocan: tocar nativo con audio
+        activo provoca access violations. Las paginas se recrean y el chrome
+        (sidebar, tray, barra de estado) se retraduce en su sitio."""
         if code == self.language:
             return
         self.language = code
         self._save_config()
-        self._reload_ui()
-
-    def _reload_ui(self) -> None:
-        """Tira todo el contenido de la ventana y lo reconstruye.
-
-        Usado por el cambio de idioma y el de tema: los estilos inline de las
-        paginas hornean colores/textos al construirse, asi que la unica forma
-        garantizada de aplicarlos es reconstruir."""
-        # 1) Parar lo que corre: audio, workers, timers, descubrimiento.
-        if self.running:
-            with contextlib.suppress(Exception):
-                self._stop_audio()
-        self._spectrum_worker.stop()
-        self._spectrum_worker = SpectrumWorker(self.enhancer, self)
-        if getattr(self, "visual_timer", None) is not None:
-            self.visual_timer.stop()
-        if self._discovery_thread is not None and self._discovery_thread.isRunning():
-            self._discovery_thread.quit()
-            self._discovery_thread.wait(1000)
-        # 2) Tirar todo el contenido de la ventana.
-        old_central = self.centralWidget()
-        if old_central is not None:
-            self.setCentralWidget(QWidget())
-            old_central.deleteLater()
-        if self.tray is not None:
-            self.tray.hide()
-            self.tray.deleteLater()
-            self.tray = None
-        self._pages = {}
-        if hasattr(self, "_content_built"):
-            del self._content_built
-        # 3) Reconstruir: shell + tray + build_content (config ya guardada;
-        #    el auto-arranque reactiva el audio).
-        self.setStyleSheet(Theme.stylesheet())
-        self._build_shell()
-        self._build_tray()
-        QTimer.singleShot(0, self.build_content)
+        self._rebuild_pages()
+        self._sidebar.retranslate(self._t)
+        self._rebuild_tray_menu()
+        self._status_bar.retranslate(self._t)
 
     def _on_theme_changed(self, index: int) -> None:
-        """Cambia dark/white por indice recargando la interfaz.
+        """Cambia dark/white por indice reconstruyendo SOLO las paginas.
 
-        Los estilos inline de las paginas hornean colores al construirse:
-        solo re-aplicar QSS deja etiquetas con texto del tema anterior
-        (invisible tras alternar). Recargar garantiza consistencia."""
+        Los estilos inline hornean colores al construirse, asi que las paginas
+        deben recrearse; pero el motor, PyAudio y los workers no se tocan:
+        recargarlos provoco access violations con audio activo."""
         mode = "light" if index == 1 else "dark"
         if mode == Theme.mode:
             return
         Theme.set_mode(mode)
         self._save_config()
-        self._reload_ui()
+        self.setStyleSheet(Theme.stylesheet())
+        self._rebuild_pages()
+
+    def _rebuild_pages(self) -> None:
+        """Recrea las 6 paginas preservando motor, audio y seleccion."""
+        current_page = next(
+            (pid for pid, page in self._pages.items() if self._stack.currentWidget() is page),
+            "home",
+        )
+        audio_old = self._pages.get("audio")
+        cur_src = audio_old._input_combo.currentText() if audio_old else ""
+        cur_out = audio_old._output_combo.currentText() if audio_old else ""
+        cur_preset = self._pages["home"]._preset_combo.currentText()
+        for page in self._pages.values():
+            self._stack.removeWidget(page)
+            page.deleteLater()
+        self._pages = {}
+        self._create_pages()
+        for page in self._pages.values():
+            self._stack.addWidget(page)
+        audio_page = self._pages["audio"]
+        if self.loopbacks:
+            audio_page.set_loopbacks([d["name"] for d in self.loopbacks])
+        if self.speakers:
+            audio_page.set_speakers([d["name"] for d in self.speakers])
+        if cur_src:
+            audio_page.set_input(cur_src)
+        if cur_out:
+            audio_page.set_output(cur_out)
+        self._wire_pages()
+        # Repoblar el combo de preset sin disparar _on_preset_selected
+        # (machacaria los valores manuales del usuario).
+        home = self._pages["home"]
+        home._preset_combo.blockSignals(True)
+        self._refresh_preset_list(cur_preset or None)
+        home._preset_combo.blockSignals(False)
+        self._sync_ui_from_state()
+        self._route_guard()
+        home._set_running(self.running)
+        settings = self._pages["settings"]
+        settings._autostart_check.blockSignals(True)
+        settings._autostart_check.setChecked(self._autostart_enabled())
+        settings._autostart_check.blockSignals(False)
+        settings._lang_combo.blockSignals(True)
+        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
+        settings._lang_combo.blockSignals(False)
+        settings._theme_combo.blockSignals(True)
+        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
+        settings._theme_combo.blockSignals(False)
+        self._navigate_to(current_page)
 
     def _navigate_to(self, page_id: str) -> None:
         page = self._pages.get(page_id)
@@ -388,10 +415,18 @@ class NewMainWindow(QMainWindow):
         anim.finished.connect(lambda: page.setGraphicsEffect(None))
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
+    def _ensure_pa(self):
+        """Instancia PyAudio unica para toda la vida de la app."""
+        if self.pa is None:
+            self.pa = _pa().PyAudio()
+        return self.pa
+
     def _start_discovery(self) -> None:
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
             return
-        audio_page = self._pages["audio"]
+        audio_page = self._pages.get("audio")
+        if audio_page is None:
+            return
         if audio_page._input_combo.count():
             self._keep_src = audio_page._input_combo.currentText()
         if audio_page._output_combo.count():
@@ -413,9 +448,11 @@ class NewMainWindow(QMainWindow):
         self._discovery_worker = worker
         thread.start()
 
-    @Slot(object, object, object, str)
-    def _on_devices_ready(self, pa, loopbacks, speakers, error) -> None:
-        self.pa = pa
+    @Slot(object, object, str)
+    def _on_devices_ready(self, loopbacks, speakers, error) -> None:
+        if "audio" not in self._pages:
+            # Llegada tardia: la interfaz se recargo mientras se descubria.
+            return
         self.loopbacks = list(loopbacks)
         self.speakers = list(speakers)
         audio_page = self._pages["audio"]
@@ -591,9 +628,7 @@ class NewMainWindow(QMainWindow):
 
     def _start_audio(self, source, output) -> None:
         logger.warning("Auto/manual start: %s -> %s", source["name"], output["name"])
-        pa_mod = _pa()
-        if self.pa is None:
-            self.pa = pa_mod.PyAudio()
+        self._ensure_pa()
         rate = int(output.get("defaultSampleRate", 48000))
         if rate < 8000 or rate > 384000:
             rate = 48000
