@@ -250,7 +250,11 @@ class AudioState(QObject):
         self.ab_enabled = float(enhancer.blend) > 0.5
 
     def update_levels_from_enhancer(self, enhancer) -> None:
-        """Actualiza niveles y espectro desde el Enhancer (llamada periodica)."""
-        self.input_level = float(enhancer.level_peak)
+        """Actualiza niveles y espectro desde el Enhancer (llamada periodica).
+
+        Medidores honestos: entrada=RMS (energia del material capturado),
+        salida=pico post-DSP. Antes los tres medidores mostraban el mismo
+        valor de pico duplicado."""
+        self.input_level = float(enhancer.level_rms)
         self.output_level = float(enhancer.level_peak)
         self.peak_level = float(enhancer.level_peak)

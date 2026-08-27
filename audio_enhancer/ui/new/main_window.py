@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 import time
 
 from PySide6.QtCore import (
@@ -108,7 +109,7 @@ class SpectrumWorker(QThread):
     def __init__(self, enhancer: Enhancer, parent=None) -> None:
         super().__init__(parent)
         self.enhancer = enhancer
-        self.active = __import__("threading").Event()
+        self.active = threading.Event()
 
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
@@ -121,7 +122,11 @@ class SpectrumWorker(QThread):
                     spec = self.enhancer.spectrum
                     self.spectrum_ready.emit(None if spec is None else [float(v) for v in spec])
                 except Exception:
-                    pass
+                    # Antes tragaba la excepción en silencio: un fallo repetido
+                    # del analizador dejaba el espectro congelado sin rastro
+                    # en el log. Se deja constancia (debug: es el hilo visual,
+                    # no debe ensuciar el log de producción).
+                    logger.debug("compute_spectrum falló", exc_info=True)
             self.msleep(33)
 
     def stop(self) -> None:
@@ -700,9 +705,12 @@ class NewMainWindow(QMainWindow):
         self._latest_spectrum = values
 
     def _refresh_visuals(self) -> None:
-        peak = max(0.0, float(self.enhancer.level_peak))
-        self.state.input_level = peak
-        self.state.output_level = peak
+        # Medidores honestos: la ENTRADA es RMS (energía percibida del material
+        # capturado) y la SALIDA es pico post-DSP (lo que realmente puede
+        # acercarse al techo). Antes ambos mostraban el mismo valor.
+        self.state.input_level = float(self.enhancer.level_rms)
+        self.state.output_level = float(self.enhancer.level_peak)
+        self.state.peak_level = float(self.enhancer.level_peak)
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None

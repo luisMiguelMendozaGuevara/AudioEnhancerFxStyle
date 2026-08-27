@@ -11,6 +11,7 @@ callback.
 
 import math
 import threading
+from functools import lru_cache
 
 import numpy as np
 
@@ -34,31 +35,48 @@ def _scipy_signal():
     return _signal
 
 
-# Umbral de activación de una sección de filtro (en dB): por debajo se
-# considera ganancia nula y la sección no se apila (estado conservado).
-SECTION_GAIN_EPS = 0.1
+# Histéresis Schmitt de activación de secciones de filtro (en dB): una
+# sección ENTRA cuando |ganancia| >= SECTION_ENTER_DB y SALE cuando
+# |ganancia| < SECTION_EXIT_DB. La banda muerta intermedia evita el parpadeo
+# on/off (con sus chasquidos de estado de filtro) al rozar el umbral con un
+# slider.
+SECTION_ENTER_DB = 0.15
+SECTION_EXIT_DB = 0.05
 
 EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
 
 
+@lru_cache(maxsize=16)
+def _ramp_falling(n: int, sample_rate: int, tau: float) -> np.ndarray:
+    """Rampa exponencial descendente cacheada (solo lectura, nunca mutar).
+
+    Misma recurrencia que lfilter, expresada directamente: ramp[k] = pole**k.
+    La cache es un LRU acotado (16 entradas) en lugar de un dict sin límite:
+    antes cada (n, sample_rate) nueva alocaba para siempre, y con dispositivos
+    de tasas exóticas o bloques irregulares crecía sin control."""
+    pole = float(np.exp(-1.0 / (sample_rate * tau)))
+    steps = np.arange(1, n + 1, dtype=np.float32)
+    return np.power(pole, steps).astype(np.float32, copy=False)
+
+
 class Enhancer:
     """Cadena DSP: biquads RBJ (Low/High Shelf + Peaking) con sosfilt+zi,
-    compresor RMS dinámico, limitador suave y suavizado de parámetros."""
+    compresor RMS por muestra, limitador brickwall con look-ahead y suavizado
+    de parámetros."""
 
     def __init__(self) -> None:
         self.sample_rate: int = SAMPLE_RATE
         self.eq_bands: list[float] = list(EQ_BANDS)
-        self.eq_gains: list[float] = [0.0] * len(self.eq_bands)
+        self._eq_gains: list[float] = [0.0] * len(self.eq_bands)
         self.bass: float = 0.0
         self.treble: float = 0.0
         self.volume: float = 1.0
         self.bass_freq: float = 150.0  # corte del Low Shelf
         self.treble_freq: float = 6000.0  # corte del High Shelf
         self.eq_q: float = 1.4  # Q de las bandas peaking
-        # Limitador suave (seguridad nivel final)
+        # Limitador brickwall con look-ahead (seguridad a nivel final)
         self.limiter: bool = True
-        self.limiter_threshold: float = 0.95
-        self.limiter_strength: float = 0.6
+        self.limiter_threshold: float = 0.95  # techo (pico de salida)
         # Compresor RMS dinámico (loudness)
         self.compressor: bool = True
         self.comp_threshold: float = 0.85  # ~-1.4 dBFS
@@ -66,12 +84,18 @@ class Enhancer:
         self.comp_attack: float = 0.005  # segundos
         self.comp_release: float = 0.2  # segundos
         self.comp_makeup: float = 1.0
-        self._gain_db: float = 0.0
         # Umbral del compresor en dB: solo depende de comp_threshold, que la UI
         # cambia rara vez; se recalcula al detectar el cambio (evita un log10
         # escalar por bloque).
         self._thr_src: float = self.comp_threshold
         self._thr_db: float = 20.0 * math.log10(max(self.comp_threshold, 1e-9))
+        # Estados del compresor por muestra (dual-envelope RMS): se crean
+        # perezosamente en la primera llamada a _compress y persisten entre
+        # bloques; reset_state() los libera.
+        self._comp_zi_fast = None
+        self._comp_zi_slow = None
+        # Histéresis de secciones: clave -> bool (True = sección apilada).
+        self._section_on: dict[str, bool] = {}
         # A/B crossfade: blend=1 efectos, blend=0 directo
         self.blend: float = 1.0
         # Medidor
@@ -93,9 +117,48 @@ class Enhancer:
         self._win: np.ndarray | None = None
         self._win_n: int = 0
         self._spec_meta: tuple | None = None  # cache (n, sample_rate, idx)
-        self._ramp_cache: dict = {}  # cache (n, sample_rate) -> rampa
+
+    def reset_state(self) -> None:
+        """Reinicia todo el estado dependiente de la señal.
+
+        Imprescindible al cambiar de dispositivo o de tasa de muestreo: los
+        estados zi de los biquads y del compresor corresponden a la señal
+        previa y seguirían mezclando historial de otra tasa (artefactos al
+        arrancar). También pone a cero rampas y medidores."""
+        self._states = {}
+        self._sos_cache = {}
+        self._channels = None
+        self._c_vol = 1.0
+        self._c_bass = 0.0
+        self._c_treble = 0.0
+        self._c_eq = np.zeros(len(self.eq_bands), dtype=np.float32)
+        self._c_blend = 1.0
+
+        self._comp_zi_fast = None
+        self._comp_zi_slow = None
+        self._section_on = {}
+        self.level_rms = 0.0
+        self.level_peak = 0.0
+        self.spectrum = None
+        self._snapshot = None
+        self._spec_meta = None
 
     # ---------- diseño de filtros RBJ (Audio EQ Cookbook) ----------
+
+    @property
+    def eq_gains(self) -> list[float]:
+        """Copia defensiva de las ganancias del EQ.
+
+        La UI (hilo Qt) y process() (callback de audio) comparten este dato:
+        devolver la lista VIVA permitía que un widget mutara `[i]` mientras el
+        callback la leía (carrera y valores a medias). Ahora toda escritura
+        pasa por el setter (reemplazo atómico de la lista) y toda lectura
+        recibe una copia inmutable de facto."""
+        return list(self._eq_gains)
+
+    @eq_gains.setter
+    def eq_gains(self, value) -> None:
+        self._eq_gains = [float(v) for v in value]
 
     @staticmethod
     def _shelf(freq, gain_db, fs, s=1.0, low=True):
@@ -206,20 +269,48 @@ class Enhancer:
         self._c_eq = self._ramp(self._c_eq, np.asarray(self.eq_gains, dtype=np.float32), alpha_eq)
         bass = float(self._c_bass)
         treb = float(self._c_treble)
+        # Histéresis Schmitt por sección: ENTRA con |g| >= SECTION_ENTER_DB y
+        # SALE con |g| < SECTION_EXIT_DB. En la banda muerta intermedia se
+        # conserva el estado previo, así un slider que roza el umbral no
+        # enciende/apaga el filtro bloque a bloque (cada conmutación reinyecta
+        # el transitorio del estado zi: chasquido audible).
+        nyq_ok_bass = self.bass_freq < nyquist
+        bass_on = self._section_on.get("bass", False)
+        if not bass_on and abs(bass) >= SECTION_ENTER_DB and nyq_ok_bass:
+            bass_on = True
+        elif bass_on and (abs(bass) < SECTION_EXIT_DB or not nyq_ok_bass):
+            bass_on = False
+        self._section_on["bass"] = bass_on
+        nyq_ok_treb = self.treble_freq < nyquist
+        treb_on = self._section_on.get("treble", False)
+        if not treb_on and abs(treb) >= SECTION_ENTER_DB and nyq_ok_treb:
+            treb_on = True
+        elif treb_on and (abs(treb) < SECTION_EXIT_DB or not nyq_ok_treb):
+            treb_on = False
+        self._section_on["treble"] = treb_on
         # Apila las secciones activas en una sola matriz SOS: sosfilt aplica la
         # cascada en el orden dado (bass -> treble -> eq0..8), idéntico a llamar
         # por sección, con una única ida y vuelta a scipy.
         sections = []
-        if abs(bass) >= SECTION_GAIN_EPS and self.bass_freq < nyquist:
+        if bass_on:
             b0, b1, b2, a1, a2 = self._shelf(self.bass_freq, bass, self.sample_rate, 1.0, low=True)
             sections.append(self._section("bass", b0, b1, b2, a1, a2))
-        if abs(treb) >= SECTION_GAIN_EPS and self.treble_freq < nyquist:
+        if treb_on:
             b0, b1, b2, a1, a2 = self._shelf(self.treble_freq, treb, self.sample_rate, 1.0, low=False)
             sections.append(self._section("treble", b0, b1, b2, a1, a2))
         for i, (freq, g) in enumerate(zip(self.eq_bands, self._c_eq, strict=False)):
-            if abs(float(g)) >= SECTION_GAIN_EPS and freq < nyquist:
-                b0, b1, b2, a1, a2 = self._peaking(freq, float(g), self.sample_rate, self.eq_q)
-                sections.append(self._section("eq_%d" % i, b0, b1, b2, a1, a2))
+            key = "eq_%d" % i
+            g_db = float(g)
+            nyq_ok = freq < nyquist
+            g_on = self._section_on.get(key, False)
+            if not g_on and abs(g_db) >= SECTION_ENTER_DB and nyq_ok:
+                g_on = True
+            elif g_on and (abs(g_db) < SECTION_EXIT_DB or not nyq_ok):
+                g_on = False
+            self._section_on[key] = g_on
+            if g_on:
+                b0, b1, b2, a1, a2 = self._peaking(freq, g_db, self.sample_rate, self.eq_q)
+                sections.append(self._section(key, b0, b1, b2, a1, a2))
         if sections:
             sos = np.concatenate([s[1] for s in sections], axis=0)
             zi = np.stack([s[2] for s in sections])
@@ -227,11 +318,16 @@ class Enhancer:
             for s, z in zip(sections, zi_out, strict=False):
                 self._states[s[0]] = np.asarray(z, dtype=np.float32)
             y = out
-        y = self._apply_volume(y, block_sec)
+        # Cadena en orden de mastering: filtros -> compresor -> volumen ->
+        # limitador. El limitador va AL FINAL porque es el único que puede
+        # garantizar el techo sobre la señal que realmente sale: antes el
+        # volumen se aplicaba antes del compresor y el limitador "suave"
+        # dejaba pasar ~70% del exceso por encima de su umbral.
         if self.compressor:
             y = self._compress(y, block_sec)
+        y = self._apply_volume(y, block_sec)
         if self.limiter:
-            y = self._soft_limiter(y, self.limiter_threshold, self.limiter_strength)
+            y = self._limit(y)
         return np.clip(y, -1.0, 1.0).astype(np.float32)
 
     def _apply_volume(self, data, block_sec):
@@ -244,53 +340,110 @@ class Enhancer:
         start = self._c_vol
         n = data.shape[0]
         tau = 0.10  # segundos
-        key = (n, self.sample_rate)
-        ramp = self._ramp_cache.get(key)
-        if ramp is None:
-            # Misma recurrencia que lfilter, expresada directamente. La rampa
-            # solo depende de (n, sample_rate): se cachea para no alocar
-            # arange + power en cada callback.
-            pole = float(np.exp(-1.0 / (self.sample_rate * tau)))
-            steps = np.arange(1, n + 1, dtype=np.float32)
-            ramp = np.power(pole, steps).astype(np.float32, copy=False)
-            self._ramp_cache[key] = ramp
+        # Rampa cacheada en un LRU global acotado (solo lectura): misma
+        # recurrencia que lfilter. Antes era un dict sin límite que alocaba
+        # para siempre cada (n, sample_rate) nueva.
+        ramp = _ramp_falling(n, self.sample_rate, tau)
         gain = target + (start - target) * ramp
         self._c_vol = float(gain[-1])
         return data * gain[:, None]
 
     def _compress(self, y, block_sec):
-        """Compresor RMS feed-forward con attack/release y make-up gain."""
-        rms = float(np.sqrt(np.mean(y * y))) if y.size else 0.0
-        db = 20.0 * math.log10(rms) if rms > 1e-9 else -90.0
+        """Compresor RMS POR MUESTRA (dual-envelope) con make-up gain.
+
+        Reemplaza al compresor por BLOQUE: antes se medía un solo RMS para
+        ~1024 muestras (~21 ms) y se aplicaba UNA ganancia constante al bloque
+        entero; al cambiar el nivel dentro del bloque o entre bloques, la
+        ganancia saltaba y se oía zipper noise. Ahora la envolvente de
+        potencia se sigue muestra a muestra con dos polos (ataque ~5 ms y
+        release ~200 ms) y la reducción se calcula por muestra en dB.
+
+        Truco vectorial (sin bucle Python): se filtra la potencia con DOS
+        lfilter de coeficientes constantes (uno rápido y otro lento) y se toma
+        el máximo punto a punto. En un ataque el polo rápido va por encima (se
+        usa: ataque rápido); en la caída el polo lento se queda arriba (se
+        usa: release lento). Equivale al conmutado clásico ataque/release sin
+        lfilter de coeficientes variables.
+
+        La reducción es la curva estándar: over > 0 dB sobre el umbral =>
+        reducción en dB negativos proporcional a (1 - 1/ratio). El monolito
+        original aplicaba el signo contrario y AMPLIFICABA.
+        """
+        if y.shape[0] == 0:
+            return y
+        sig = _scipy_signal()
+        # Potencia instantánea vinculada (stereo-link): media de canales.
+        p = np.mean(np.asarray(y, dtype=np.float64) ** 2, axis=1)
+        a_att = 1.0 - math.exp(-1.0 / (self.sample_rate * max(self.comp_attack, 1e-4)))
+        a_rel = 1.0 - math.exp(-1.0 / (self.sample_rate * max(self.comp_release, 1e-4)))
+        # one-pole: z[k] = z[k-1] + a*(x[k] - z[k-1]) <-> lfilter([a], [1, a-1]).
+        # zi persiste entre bloques: la envolvente no se reinicia cada bloque.
+        # (lfilter solo devuelve la tupla (y, zf) si zi no es None.)
+        zi_f = np.zeros(1) if self._comp_zi_fast is None else self._comp_zi_fast
+        zi_s = np.zeros(1) if self._comp_zi_slow is None else self._comp_zi_slow
+        fast, self._comp_zi_fast = sig.lfilter([a_att], [1.0, a_att - 1.0], p, zi=zi_f)
+        slow, self._comp_zi_slow = sig.lfilter([a_rel], [1.0, a_rel - 1.0], p, zi=zi_s)
+        env_rms = np.sqrt(np.maximum(np.maximum(fast, slow), 0.0))
         if self._thr_src != self.comp_threshold:
             self._thr_src = self.comp_threshold
             self._thr_db = 20.0 * math.log10(max(self.comp_threshold, 1e-9))
+        db = 20.0 * np.log10(np.maximum(env_rms, 1e-9))
         over = db - self._thr_db
-        # over > 0 => la senal supera el umbral: la reduccion va en dB negativos
-        # (atenuar). El monolito original usaba el valor positivo, lo que
-        # amplificaba en vez de comprimir.
-        target_db = -over * (1.0 - 1.0 / self.comp_ratio) if over > 0 else 0.0
-        if target_db < self._gain_db:
-            coeff = 1.0 - math.exp(-block_sec / max(self.comp_attack, 1e-4))
-        else:
-            coeff = 1.0 - math.exp(-block_sec / max(self.comp_release, 1e-4))
-        self._gain_db += (target_db - self._gain_db) * coeff
-        gain = (10.0 ** (self._gain_db / 20.0)) * self.comp_makeup
-        return y * gain
+        if self.comp_makeup == 1.0 and float(over.max()) <= 0.0:
+            return y  # caso común: nada por encima del umbral, sin alocar
+        red_db = np.where(over > 0.0, -over * (1.0 - 1.0 / self.comp_ratio), 0.0)
+        gain = (10.0 ** (red_db / 20.0)) * self.comp_makeup
+        return (y * gain[:, None].astype(np.float32)).astype(np.float32, copy=False)
 
-    @staticmethod
-    def _soft_limiter(x, threshold, strength):
-        """Curva de ganancia suave: deja pasar <=threshold, comprime después."""
-        a = np.abs(x)
-        # Caso común (bloque por debajo del umbral): una sola reducción y
-        # salir, sin alocar los arrays temporales de la curva de ganancia.
-        if a.size == 0 or float(np.max(a)) <= threshold:
-            return x
-        over = a - threshold
-        k = 1.0 / (1.0 + np.exp(-5.0 * over))  # transición suave 0..1
-        g = 1.0 - strength * (over / (threshold + 1e-9)) * k
-        g = np.clip(g, 0.0, 1.0)
-        return x * np.where(over > 0, g, 1.0)
+    def _limit(self, y):
+        """Limitador brickwall con look-ahead de 3 ms (techo garantizado).
+
+        Reemplaza al antiguo "soft limiter" por muestra: esa curva dependía de
+        `strength` y dejaba pasar hasta ~70% del exceso (un pico de 1.4 salía
+        ~1.14) porque atenuaba poco y SIN anticipación: cuando la ganancia
+        reaccionaba, el transitorio ya había cruzado.
+
+        Diseño estándar de mastering:
+        1. Envolvente de pico vinculada (máximo entre canales, mono-link).
+        2. Look-ahead: la ganancia exigida en cada muestra i se calcula sobre
+           el MÁXIMO de la envolvente en [i, i+3 ms]; la atenuación empieza
+           ANTES del transitorio, no después.
+        3. Suavizado de ganancia con ventana corta (~2 ms, simétrico: es
+           válido porque el look-ahead ya desplazó la ganancia al pasado) para
+           eliminar zipper noise.
+        4. Techo exacto: tras suavizar, un ajuste escalar (raro, fracciones de
+           dB) garantiza pico <= techo sin recorte duro.
+        """
+        thr = float(self.limiter_threshold)
+        if y.size == 0:
+            return y
+        linked = np.abs(y).max(axis=1)  # envolvente de pico vinculada
+        if float(linked.max()) <= thr:
+            return y  # caso común: bloque bajo el techo, intocado
+        la = max(1, int(self.sample_rate * 0.003))  # look-ahead 3 ms
+        # Máximo móvil sobre [i, i+la]: padding replicando el final. La ventana
+        # deslizante cuesta O(n*la) memoria transient (~0.15 MB por bloque de
+        # 1024 muestras): despreciable frente a una pasada de scipy.
+        padded = np.concatenate([linked, np.full(la, linked[-1], dtype=linked.dtype)])
+        win = np.lib.stride_tricks.sliding_window_view(padded, la + 1)
+        env = win.max(axis=1)
+        g = np.where(env > thr, thr / np.maximum(env, 1e-9), 1.0)
+        # Suavizado simétrico ~2 ms (Hann normalizado): con look-ahead la
+        # atenuación ya se anticipa 3 ms, así que centrar la ventana no
+        # retrasa la protección.
+        k = max(3, int(self.sample_rate * 0.002) | 1)
+        kernel = np.hanning(k)
+        kernel /= kernel.sum()
+        half = k // 2
+        g_pad = np.concatenate([np.full(half, g[0]), g, np.full(half, g[-1])])
+        g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
+        out = y * g_s[:, None].astype(np.float32)
+        # Garantía de techo: el suavizado puede subestimar la reducción en
+        # transitorios muy cortos; el ajuste escalar la cierra sin recorte.
+        peak = float(np.abs(out).max())
+        if peak > thr:
+            out *= thr / peak
+        return out
 
     # ---------- analizador de espectro ----------
 
