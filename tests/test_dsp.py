@@ -184,7 +184,9 @@ def test_treble_boost_incrementa_energia_en_agudos():
 def test_banda_eq_negativa_atenua():
     x = _stereo(0.2, 60.0)
     e = Enhancer()
-    e.eq_gains[0] = -12.0  # banda de 60 Hz
+    # Asignar la lista COMPLETA: eq_gains es una propiedad con copia defensiva
+    # (la lista viva era una carrera entre la UI y el callback de audio).
+    e.eq_gains = [-12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # banda 60 Hz
     e.limiter = False
     e.compressor = False
     warm(e, x)
@@ -203,6 +205,145 @@ def test_salida_siempre_acotada_a_1():
     warm(e, x)
     y = e.process(x.copy())  # dBFS nunca debe exceder la unidad
     assert float(np.abs(y).max()) <= 1.0 + 1e-6
+
+
+# ---------- limitador brickwall con look-ahead (Fase 1) ----------
+
+
+def test_limitador_techo_exacto_brickwall():
+    """El techo es REAL: con volumen brutal el pico de salida queda en el
+    umbral (0.95), no en ~0.95 + 70% del exceso como el soft limiter viejo."""
+    x = _stereo(0.9, 220.0)
+    e = Enhancer()
+    e.volume = 2.0  # picos de entrada ~1.8: exceso enorme
+    e.compressor = False
+    warm(e, x)
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) <= e.limiter_threshold + 1e-3
+
+
+def test_limitador_anticipa_el_transitorio():
+    """Con look-ahead, la atenuacion empieza ANTES del salto: ninguna muestra
+    supera el techo aunque el bloque empiece de golpe a maxima amplitud."""
+    t = np.arange(N) / FS
+    burst = 1.2 * np.sign(np.sin(2 * np.pi * 220.0 * t))  # cuadrada a full
+    x = np.zeros((N, 2), dtype=np.float32)
+    x[N // 2 :, 0] = burst[: N // 2]
+    x[N // 2 :, 1] = burst[: N // 2]
+    e = Enhancer()
+    e.volume = 1.0
+    e.compressor = False
+    warm(e, x)  # el estado queda "viendo" el burst
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) <= e.limiter_threshold + 1e-3
+
+
+def test_limitador_no_toca_senal_bajo_umbral():
+    """Caso comun (bloque bajo el techo): salida bit-identica, sin trabajo."""
+    x = _stereo(0.2, 440.0)
+    e = Enhancer()
+    e.compressor = False
+    warm(e, x)
+    y = e.process(x.copy())
+    assert np.array_equal(y, e.process(x.copy()) * 0 + y)  # forma estable
+    # la senal no supera el umbral: el limitador es transparencia total
+    e2 = Enhancer()
+    e2.compressor = False
+    warm(e2, x)
+    y2 = e2.process(x.copy())
+    assert float(np.abs(y2).max()) <= e2.limiter_threshold
+    assert np.allclose(y, y2, atol=1e-6)
+
+
+def test_cadena_limitador_al_final_del_recorrido():
+    """Regresion del orden M5: el limitador debe ver la senal DESPUES del
+    volumen; si el volumen fuera aplicado despues, un pico post-volumen
+    cruzaria el techo (antes el volumen iba antes del compresor y el techo
+    se media sobre otra senal)."""
+    rng = np.random.default_rng(11)
+    x = (rng.standard_normal((N, 2)) * 0.5).astype(np.float32)
+    e = Enhancer()
+    e.volume = 2.0  # post-volumen los picos rozan 1.0
+    e.compressor = False
+    e.limiter = True
+    warm(e, x)
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) <= e.limiter_threshold + 1e-3
+
+
+def test_compresor_por_muestra_igual_a_pasada_unica():
+    """Regresion H2 (fuerte): la envolvente por muestra con estados zi
+    persistentes es un filtro causal lineal -> procesar por bloques debe dar
+    EXACTAMENTE lo mismo que procesar el flujo completo de una vez.
+
+    El compresor por BLOQUE del codigo viejo no cumplia esto: aplicaba UNA
+    ganancia por bloque (~21 ms), asi que el resultado dependia del troceado
+    (escalera de ganancia = zipper noise audible)."""
+    x = np.concatenate(
+        [
+            np.full((2560, 2), 0.9, dtype=np.float32),  # sobre el umbral
+            np.full((2560, 2), 0.5, dtype=np.float32),  # caida (release)
+        ]
+    )
+    e_blk = Enhancer()
+    e_blk.limiter = False
+    y_blk = np.concatenate(
+        [e_blk.process(x[i : i + 1024].copy()) for i in range(0, 5120, 1024)]
+    )
+    e_one = Enhancer()
+    e_one.limiter = False
+    y_one = e_one.process(x.copy())
+    assert np.allclose(y_blk, y_one, atol=1e-5)
+
+
+def test_histeresis_seccion_permanece_activa_en_banda_muerta():
+    """Histéresis Schmitt: una banda activada con 1.0 dB debe seguir activa
+    con 0.10 dB (entre EXIT=0.05 y ENTER=0.15) y solo apagarse por debajo de
+    EXIT. Evita el parpadeo on/off del filtro al rozar el umbral."""
+    x = _stereo(0.2, 60.0)
+    e = Enhancer()
+    e.limiter = False
+    e.compressor = False
+    e.eq_gains = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    warm(e, x)
+    assert e._section_on["eq_0"] is True
+    # baja a la banda muerta: la seccion SIGUE activa
+    e.eq_gains = [0.10, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    e.process(x.copy())
+    assert e._section_on["eq_0"] is True
+    # por debajo de EXIT: se apaga
+    e.eq_gains = [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    for _ in range(5):
+        e.process(x.copy())
+    assert e._section_on["eq_0"] is False
+
+
+def test_eq_gains_es_copia_defensiva():
+    """Regresion H6: mutar la lista devuelta NO debe cambiar el estado
+    interno (la lista viva compartida entre hilos era una carrera)."""
+    e = Enhancer()
+    g = e.eq_gains
+    g[0] = 99.0
+    assert e.eq_gains[0] == 0.0
+
+
+def test_reset_state_limpia_estados_y_medidores():
+    """Fase 0: al cambiar de dispositivo/tasa el DSP debe arrancar limpio."""
+    x = _stereo(0.5, 220.0)
+    e = Enhancer()
+    e.bass = 6.0
+    warm(e, x)
+    assert e._states  # hay estados de biquad vivos
+    e.reset_state()
+    assert not e._states
+    assert not e._sos_cache
+    assert e._channels is None
+    assert e.level_peak == 0.0 and e.level_rms == 0.0
+    assert e._comp_zi_fast is None and e._comp_zi_slow is None
+    assert not e._section_on
+    # y sigue procesando igual tras el reset
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) > 0.0
 
 
 def test_espectro_64_barras_validas():
