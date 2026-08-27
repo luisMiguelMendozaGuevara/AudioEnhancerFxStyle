@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import audio_enhancer.engine as engine_mod
+from audio_enhancer.constants import CHUNK
 from audio_enhancer.engine import AudioEngine
 
 
@@ -206,3 +207,113 @@ def test_deriva_corrige_limitando_a_frames_maximos(engine):
         n_adj = int(np.trunc((engine._rhead - engine._whead - engine._drift_target) * engine._drift_gain))
         n_adj = max(-engine._max_drift_frames, min(engine._max_drift_frames, n_adj))
     assert -engine._max_drift_frames <= n_adj <= engine._max_drift_frames
+
+
+# ---------- latencia objetivo desacoplada (Fase 2) ----------
+
+
+def test_drift_target_desacoplado_del_tamano_del_ring(engine):
+    """El ring conserva su capacidad (RING_SECONDS) pero la consigna de
+    llenado es la latencia objetivo: 60 ms por defecto, ya no nframes//2."""
+    engine.configure_ring(48000)
+    assert engine.nframes == int(48000 * 0.2)  # capacidad intacta
+    assert engine.drift_target == int(48000 * 0.060)  # 60 ms
+    engine.configure_ring(48000, drift_target_ms=40)
+    assert engine.drift_target == int(48000 * 0.040)
+    engine.configure_ring(48000, drift_target_ms=100)
+    assert engine.drift_target == int(48000 * 0.100)
+
+
+def test_drift_target_se_acota_a_rango_valido(engine):
+    """Consignas absurdas no deben vaciar el ring ni pegarlo al borde."""
+    engine.configure_ring(8000, drift_target_ms=5000)  # 4000 fr > ring 1600
+    assert CHUNK <= engine.drift_target < engine.nframes
+    engine.configure_ring(48000, drift_target_ms=1)  # 48 fr < CHUNK
+    assert engine.drift_target >= CHUNK
+
+
+# ---------- métricas en vivo (Fase 2) ----------
+
+
+def test_stats_snapshot_es_copia_viva_vacia_al_inicio(engine):
+    engine.configure_ring(48000)
+    s = engine.stats_snapshot()
+    assert s["dropped_frames"] == 0 and s["gap_blocks"] == 0
+    s["gap_blocks"] = 99  # mutar la copia no toca el motor
+    assert engine.stats_snapshot()["gap_blocks"] == 0
+
+
+def test_stats_cuenta_underruns_huecos_y_deriva(engine):
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)  # sin flags: defaults 0x2/0x4
+    # hueco de salida: ring vacío -> gap_blocks +1
+    engine._out_callback(None, 512, None, 4)  # status 4 = paOutputUnderflow
+    s = engine.stats_snapshot()
+    assert s["gap_blocks"] == 1
+    assert s["output_underruns"] == 1  # flag detectado via getattr default
+    # captura: captured_frames crece con cada callback
+    engine._cap_callback(np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024, None, 0)
+    assert engine.stats_snapshot()["captured_frames"] == 1024
+
+
+def test_stats_cuenta_frames_descartados_al_saturar(engine):
+    engine.configure_ring(48000)
+    grande = np.ones((engine.nframes + 500, 2), dtype=np.float32)
+    engine._put(grande)
+    assert engine.stats_snapshot()["dropped_frames"] == 500
+
+
+# ---------- negociación de canales y downmix (Fase 2) ----------
+
+
+def test_downmix_5_1_a_stereo_en_callback(engine):
+    """Loopback 5.1: el callback mezcla a estéreo ANTES del DSP."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    engine._capture_channels = 6
+    n = 512
+    x = np.zeros((n, 6), dtype=np.float32)
+    x[:, 0] = 0.5  # FL
+    x[:, 1] = 0.25  # FR
+    x[:, 2] = 0.5  # C
+    x[:, 4] = 0.5  # SL
+    x[:, 5] = 0.5  # SR
+    engine._cap_callback(x.tobytes(), n, None, 0)
+    data = engine._read(n)
+    esperado_l = 0.5 + 0.707 * 0.5 + 0.707 * 0.5  # FL + C + SL
+    esperado_r = 0.25 + 0.707 * 0.5 + 0.707 * 0.5  # FR + C + SR
+    assert np.allclose(data[:, 0], esperado_l, atol=1e-5)
+    assert np.allclose(data[:, 1], esperado_r, atol=1e-5)
+
+
+def test_start_capture_negocia_canales_si_estereo_falla(fake_pa, engine):
+    """paInvalidChannelCount simulado: con maxInputChannels=6 se reabre con
+    6 canales y el motor queda marcado para hacer downmix."""
+    pa_mod, pa = fake_pa
+    original_open = pa.open
+
+    def open_rechaza_estereo(**kw):
+        if kw.get("channels") == 2:
+            raise OSError("paInvalidChannelCount simulado")
+        return original_open(**kw)
+
+    pa.open = open_rechaza_estereo
+    device = {"maxInputChannels": 6}
+    engine.start_capture(pa, 3, 48000, device_info=device)
+    kw = pa.opened[-1]
+    assert kw["channels"] == 6
+    assert engine._capture_channels == 6
+    assert pa.streams[-1].started is True
+
+
+def test_start_capture_relanza_si_no_hay_canales_alternativos(fake_pa, engine):
+    """Si el fallo persiste sin canales extra que negociar, la excepción se
+    propaga (la UI la muestra; no queda un stream a medias)."""
+    pa_mod, pa = fake_pa
+
+    def open_rechaza_todo(**kw):
+        raise OSError("paInvalidChannelCount simulado")
+
+    pa.open = open_rechaza_todo
+    with pytest.raises(OSError):
+        engine.start_capture(pa, 3, 48000, device_info={"maxInputChannels": 2})

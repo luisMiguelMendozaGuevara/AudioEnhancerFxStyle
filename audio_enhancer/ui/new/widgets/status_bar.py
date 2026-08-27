@@ -61,6 +61,17 @@ class AppStatusBar(QWidget):
         )
         layout.addWidget(self._latency_label)
 
+        self._sep3 = QLabel("|")
+        self._sep3.setStyleSheet(f"color: {Theme.BORDER}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;")
+        layout.addWidget(self._sep3)
+
+        # Métricas en vivo del motor (underruns / huecos / ajustes de deriva).
+        self._metrics_label = QLabel("")
+        self._metrics_label.setStyleSheet(
+            f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
+        )
+        layout.addWidget(self._metrics_label)
+
     def set_processing(self, active: bool) -> None:
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 4px;")
@@ -89,6 +100,12 @@ class AppStatusBar(QWidget):
 
     def set_latency(self, ms: float) -> None:
         self._latency_label.setText(f"{ms:.0f} ms")
+
+    def set_metrics(self, text: str) -> None:
+        """Métricas en vivo del motor: vacío oculta el separador."""
+        self._sep3.setVisible(bool(text))
+        self._metrics_label.setText(text)
+        self._metrics_label.setVisible(bool(text))
 
     def set_status_text(self, text: str, color: str = "") -> None:
         self._status_label.setText(text)

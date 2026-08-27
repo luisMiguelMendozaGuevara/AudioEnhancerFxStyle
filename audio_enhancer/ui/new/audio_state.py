@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
+from ...constants import LATENCY_CHOICES_MS
+
 
 class AudioState(QObject):
     """Estado centralizado de la aplicacion.
@@ -29,6 +31,7 @@ class AudioState(QObject):
     eq_changed = Signal(object)
     limiter_changed = Signal(bool)
     compressor_changed = Signal(bool)
+    latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
     def __init__(self, parent=None):
@@ -57,6 +60,8 @@ class AudioState(QObject):
         self._eq_gains: list[float] = [0.0] * 9
         self._limiter: bool = True
         self._compressor: bool = True
+        # Preferencia de latencia (ms) elegida en la página Audio.
+        self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
         # Estado de ruta
         self._route_ok: bool = False
         self._route_warning: str = ""
@@ -222,6 +227,19 @@ class AudioState(QObject):
         if self._compressor != value:
             self._compressor = value
             self.compressor_changed.emit(value)
+
+    @property
+    def latency_pref(self) -> int:
+        return self._latency_pref
+
+    @latency_pref.setter
+    def latency_pref(self, value: int) -> None:
+        value = int(value)
+        if value not in LATENCY_CHOICES_MS:
+            value = LATENCY_CHOICES_MS[1]
+        if self._latency_pref != value:
+            self._latency_pref = value
+            self.latency_pref_changed.emit(value)
 
     @property
     def route_ok(self) -> bool:

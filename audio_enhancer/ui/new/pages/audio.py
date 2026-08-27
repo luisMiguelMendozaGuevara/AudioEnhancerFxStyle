@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ....constants import LATENCY_CHOICES_MS
 from ..audio_state import AudioState
 from ..theme.colors import Theme
 
@@ -111,6 +112,22 @@ class AudioPage(QWidget):
         self._refresh_btn.setMinimumHeight(38)
         rl.addWidget(self._refresh_btn)
 
+        # Latency preference
+        row_lat = QHBoxLayout()
+        lbl_lat = QLabel("LATENCY")
+        lbl_lat.setFixedWidth(84)
+        lbl_lat.setStyleSheet(
+            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_LG}px; "
+            f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
+        )
+        row_lat.addWidget(lbl_lat)
+        self._latency_combo = QComboBox()
+        for ms in LATENCY_CHOICES_MS:
+            self._latency_combo.addItem(f"{ms} ms", ms)
+        self._latency_combo.setCurrentIndex(1)  # 60 ms por defecto
+        row_lat.addWidget(self._latency_combo, 1)
+        rl.addLayout(row_lat)
+
         layout.addWidget(route_card)
 
         # Info card
@@ -170,6 +187,12 @@ class AudioPage(QWidget):
 
     def set_output(self, name: str) -> None:
         self._output_combo.setCurrentText(name)
+
+    def set_latency_pref(self, ms: int) -> None:
+        idx = list(LATENCY_CHOICES_MS).index(ms) if ms in LATENCY_CHOICES_MS else 1
+        self._latency_combo.blockSignals(True)
+        self._latency_combo.setCurrentIndex(idx)
+        self._latency_combo.blockSignals(False)
 
     def set_route_warning(self, text: str, color: str) -> None:
         self._route_label.setText(text)

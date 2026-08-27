@@ -9,10 +9,11 @@ orquestado desde el hilo de la UI.
 
 import logging
 import threading
+from functools import lru_cache
 
 import numpy as np
 
-from .constants import CHUNK, RING_SECONDS
+from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -27,6 +28,37 @@ def _pa():
 
         _pa_mod = pyaudiowpatch
     return _pa_mod
+
+
+@lru_cache(maxsize=8)
+def _downmix_matrix(ch: int) -> np.ndarray:
+    """Matriz de mezcla n->estéreo (filas: canal de entrada; columnas L/R).
+
+    Orden WASAPI/WAVEFORMATEXTENSIBLE por convención: FL FR C LFE SL SR...
+    Pesadas estándar de downmix (ITU-ish): central y surround a -3 dB, LFE
+    atenuado (suele venir ya mezclado en FL/FR del loopback)."""
+    w = np.zeros((ch, 2), dtype=np.float32)
+    if ch == 1:
+        w[0, :] = 1.0  # mono a ambos
+        return w
+    w[0, 0] = 1.0  # FL -> L
+    w[1, 1] = 1.0  # FR -> R
+    if ch > 2:
+        w[2, :] = 0.707  # C
+    if ch > 3:
+        w[3, :] = 0.3  # LFE
+    if ch > 4:
+        w[4, 0] = 0.707  # SL
+    if ch > 5:
+        w[5, 1] = 0.707  # SR
+    if ch > 6:
+        w[6:, :] = 0.5  # canales extra (7.1, ambientes)
+    return w
+
+
+def _downmix_to_stereo(x: np.ndarray) -> np.ndarray:
+    """Mezcla (n, ch) con ch>2 a (n, 2) con la matriz cacheada."""
+    return (x @ _downmix_matrix(x.shape[1])).astype(np.float32, copy=False)
 
 
 class AudioEngine:
@@ -55,9 +87,38 @@ class AudioEngine:
         self._drift_gain: float = 0.02
         self._drift_accum: float = 0.0
         self._max_drift_frames: int = 8
+        # Canales negociados en la captura (el callback mezcla a estério si
+        # el loopback entrega más de 2).
+        self._capture_channels: int = 2
+        # Métricas en vivo (contadores desde los callbacks; leer vía
+        # stats_snapshot() desde la UI).
+        self._stats: dict[str, int] = {
+            "captured_frames": 0,
+            "dropped_frames": 0,
+            "gap_blocks": 0,
+            "drift_adjust_frames": 0,
+            "output_underruns": 0,
+            "input_overflows": 0,
+        }
 
-    def configure_ring(self, rate: int) -> None:
-        """Configura el ring para la tasa dada (tamaño, fundidos, deriva)."""
+    @property
+    def drift_target(self) -> int:
+        """Consigna de llenado del ring en frames (latencia objetivo)."""
+        return self._drift_target
+
+    def stats_snapshot(self) -> dict[str, int]:
+        """Copia de las métricas en vivo (segura para el hilo de UI)."""
+        with self.lock:
+            return dict(self._stats)
+
+    def configure_ring(self, rate: int, drift_target_ms: float | None = None) -> None:
+        """Configura el ring para la tasa dada (tamaño, fundidos, deriva).
+
+        ``drift_target_ms`` fija la LATENCIA objetivo (consigna del control de
+        deriva) desacoplada del tamaño del ring: antes era nframes//2 = la
+        mitad de RING_SECONDS (100 ms) siempre. Con 60 ms el ring sigue
+        absorbiendo paquetes irregulares pero la latencia percibida cae a la
+        mitad. ``None`` usa DRIFT_TARGET_MS."""
         nframes = int(rate * RING_SECONDS)
         self.nframes = nframes
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
@@ -66,20 +127,23 @@ class AudioEngine:
         self.fadein_frames = 0
         self.in_gap = False
         self._fade = max(1, int(rate * 0.005))  # fundido ~5 ms
-        self._drift_target = nframes // 2
+        if drift_target_ms is None:
+            drift_target_ms = DRIFT_TARGET_MS
         # Banda muerta estrecha (~0.3 ms): deja que el control ignore el ruido
         # del ring y NO deje acumular latencia. Antes era CHUNK/8 (~2.7 ms) y
         # eso dejaba que el ring derivara decenas de ms.
         self._drift_deadband = max(CHUNK // 64, int(rate * 0.00015))
+        # Consigna acotada: ni tan baja que un chunk de hueco la vacíe, ni tan
+        # alta que se acerque al borde del ring.
+        upper = max(CHUNK, nframes - 4 * CHUNK)
+        target = int(rate * drift_target_ms / 1000.0)
+        self._drift_target = max(CHUNK, min(target, upper))
         self._drift_accum = 0.0
 
-    def start_capture(self, pa, in_idx: int, rate: int) -> None:
-        """Abre y arranca la captura (loopback WASAPI)."""
-        self.pa = pa
-        self._pa_mod = _pa()
-        self.stream = pa.open(
+    def _open_capture_stream(self, pa, in_idx: int, rate: int, channels: int):
+        return pa.open(
             format=self._pa_mod.paFloat32,
-            channels=2,
+            channels=channels,
             rate=rate,
             frames_per_buffer=CHUNK,
             input=True,
@@ -87,6 +151,31 @@ class AudioEngine:
             input_device_index=in_idx,
             stream_callback=self._cap_callback,
         )
+
+    def start_capture(self, pa, in_idx: int, rate: int, device_info=None) -> None:
+        """Abre y arranca la captura (loopback WASAPI).
+
+        Negociación de canales: se pide estéreo; si el driver lo rechaza y el
+        dispositivo declara más canales de entrada (loopbacks de salidas
+        5.1/7.1, típico paInvalidChannelCount), se abre con los canales que
+        tiene y el callback mezcla a estéreo (downmix)."""
+        self.pa = pa
+        self._pa_mod = _pa()
+        self._capture_channels = 2
+        try:
+            self.stream = self._open_capture_stream(pa, in_idx, rate, 2)
+        except Exception:
+            max_in = 0
+            if device_info:
+                max_in = int(device_info.get("maxInputChannels", 0) or 0)
+            if max_in <= 2:
+                raise
+            self._capture_channels = max_in
+            logger.warning(
+                "Captura estéreo rechazada; abriendo con %d canales y downmix a estéreo",
+                max_in,
+            )
+            self.stream = self._open_capture_stream(pa, in_idx, rate, max_in)
         self.stream.start_stream()
 
     def fill(self) -> int:
@@ -135,6 +224,7 @@ class AudioEngine:
                 # descartar lo más viejo si la salida va más lenta
                 drop = avail + n - nframes
                 self.whead += drop
+                self._stats["dropped_frames"] += drop  # métrica en vivo
                 idx = self.whead % nframes
                 if idx + drop <= nframes:
                     self.ring[idx : idx + drop] = 0.0
@@ -196,19 +286,28 @@ class AudioEngine:
                 out[m - f : m] *= fade_out[:, None]
         self.in_gap = True
         self.fadein_frames = max(self.fadein_frames, self._fade)
+        self._stats["gap_blocks"] += 1  # métrica en vivo (lock tomado)
         return out
 
     # ---------- callbacks ----------
 
     def _cap_callback(self, in_data, frame_count, time_info, status):
+        ch = self._capture_channels
         x = np.frombuffer(in_data, dtype=np.float32)
-        x = np.asarray(x[: frame_count * 2], dtype=np.float32)
+        x = np.asarray(x[: frame_count * ch], dtype=np.float32)
         try:
-            x = x.reshape(frame_count, 2)
+            x = x.reshape(frame_count, ch)
         except ValueError:
             return (None, self._pa_mod.paContinue)
+        if ch > 2:
+            # Loopback multicanal (5.1/7.1): downmix a estéreo ANTES del DSP.
+            x = _downmix_to_stereo(x)
         y = self.enhancer.process(x)
         self._put(y)
+        with self.lock:
+            self._stats["captured_frames"] += frame_count
+            if status & getattr(self._pa_mod, "paInputOverflow", 0x2):
+                self._stats["input_overflows"] += 1
         return (None, self._pa_mod.paContinue)
 
     def _out_callback(self, in_data, frame_count, time_info, status):
@@ -226,6 +325,10 @@ class AudioEngine:
                 n_adj = int(np.trunc(self._drift_accum))
                 n_adj = max(-self._max_drift_frames, min(self._max_drift_frames, n_adj))
                 self._drift_accum -= n_adj
+            if n_adj:
+                self._stats["drift_adjust_frames"] += abs(n_adj)
+            if status & getattr(self._pa_mod, "paOutputUnderflow", 0x4):
+                self._stats["output_underruns"] += 1
             data = self._read(max(1, frame_count + n_adj))
         data = self._match_frame_count(data, frame_count)
         return (data.tobytes(), self._pa_mod.paContinue)

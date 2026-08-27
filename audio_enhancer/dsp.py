@@ -9,6 +9,7 @@ bloque con el valor suavizado. Nunca se escribe el estado del DSP desde el
 callback.
 """
 
+import dataclasses
 import math
 import threading
 from functools import lru_cache
@@ -57,6 +58,25 @@ def _ramp_falling(n: int, sample_rate: int, tau: float) -> np.ndarray:
     pole = float(np.exp(-1.0 / (sample_rate * tau)))
     steps = np.arange(1, n + 1, dtype=np.float32)
     return np.power(pole, steps).astype(np.float32, copy=False)
+
+
+@dataclasses.dataclass(frozen=True)
+class EnhancerParams:
+    """Instantánea INMUTABLE de los parámetros controlados por la UI.
+
+    La UI construye la instantánea (una sola asignación de tuplas/listas
+    nuevas) y la entrega con ``Enhancer.apply_params``: el hilo de audio ve
+    un conjunto coherente de valores, nunca una mezcla a medias de dos
+    escrituras (el problema de fondo de la carrera H5/H6). Los valores son
+    tipos inmutables o copias: la instantánea no puede mutarse después."""
+
+    volume: float = 1.0
+    bass: float = 0.0
+    treble: float = 0.0
+    eq_gains: tuple[float, ...] = ()
+    limiter: bool = True
+    compressor: bool = True
+    blend: float = 1.0
 
 
 class Enhancer:
@@ -159,6 +179,33 @@ class Enhancer:
     @eq_gains.setter
     def eq_gains(self, value) -> None:
         self._eq_gains = [float(v) for v in value]
+
+    def apply_params(self, params: "EnhancerParams") -> None:
+        """Aplica una instantánea de parámetros de forma atómica.
+
+        Escrituras individuales de la UI siguen siendo válidas (los sliders
+        escriben atributo a atributo); este método es para cambios EN BLOQUE
+        (presets, carga de configuración) donde cada atributo por separado
+        dejaba una ventana con estados mezclados."""
+        self.volume = float(params.volume)
+        self.bass = float(params.bass)
+        self.treble = float(params.treble)
+        self.eq_gains = [float(g) for g in params.eq_gains]
+        self.limiter = bool(params.limiter)
+        self.compressor = bool(params.compressor)
+        self.blend = float(params.blend)
+
+    def snapshot_params(self) -> "EnhancerParams":
+        """Lee el estado actual como instantánea inmutable."""
+        return EnhancerParams(
+            volume=float(self.volume),
+            bass=float(self.bass),
+            treble=float(self.treble),
+            eq_gains=tuple(self._eq_gains),
+            limiter=bool(self.limiter),
+            compressor=bool(self.compressor),
+            blend=float(self.blend),
+        )
 
     @staticmethod
     def _shelf(freq, gain_db, fs, s=1.0, low=True):
