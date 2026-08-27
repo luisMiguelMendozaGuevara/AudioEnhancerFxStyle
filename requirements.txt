@@ -1,6 +1,0 @@
-numpy>=1.26
-scipy>=1.11
-customtkinter>=5.2
-PyAudioWPatch>=0.2.12.8
-pystray>=0.19
-Pillow>=10.0

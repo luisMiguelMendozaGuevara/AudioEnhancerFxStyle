@@ -15,8 +15,9 @@ def test_importan_todos_los_modulos():
         "audio_enhancer.main",
         "audio_enhancer.single_instance",
         "audio_enhancer.startup_metrics",
-        "audio_enhancer.ui.qt_main_window",
-        "audio_enhancer.ui.qt_widgets",
+        "audio_enhancer.ui",
+        "audio_enhancer.ui.new",
+        "audio_enhancer.ui.new.main_window",
     ):
         importlib.import_module(nombre)
 
