@@ -90,6 +90,9 @@ class AudioEngine:
         # Canales negociados en la captura (el callback mezcla a estério si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2
+        # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
+        # de entrada anterior (interpolación continua entre callbacks).
+        self._interp_tail: np.ndarray | None = None
         # Métricas en vivo (contadores desde los callbacks; leer vía
         # stats_snapshot() desde la UI).
         self._stats: dict[str, int] = {
@@ -126,6 +129,7 @@ class AudioEngine:
         self.whead = 0
         self.fadein_frames = 0
         self.in_gap = False
+        self._interp_tail = None
         self._fade = max(1, int(rate * 0.005))  # fundido ~5 ms
         if drift_target_ms is None:
             drift_target_ms = DRIFT_TARGET_MS
@@ -329,28 +333,70 @@ class AudioEngine:
                 self._stats["drift_adjust_frames"] += abs(n_adj)
             if status & getattr(self._pa_mod, "paOutputUnderflow", 0x4):
                 self._stats["output_underruns"] += 1
-            data = self._read(max(1, frame_count + n_adj))
-        data = self._match_frame_count(data, frame_count)
+            raw = self._read(max(1, frame_count + n_adj))
+            tail = self._interp_tail
+        # Remuestreo fraccional con memoria de frontera (fuera del lock: solo
+        # toca arrays locales). La memoria es de la ENTRADA del remuestreador
+        # (el flujo del ring), que es el stream continuo a interpolar.
+        data = self._match_frame_count(raw, frame_count, tail=tail)
+        if raw.shape[0] >= 2:
+            self._interp_tail = raw[-2:].copy()
         return (data.tobytes(), self._pa_mod.paContinue)
 
     @staticmethod
-    def _match_frame_count(data, frame_count):
+    def _cubic_hermite(x: np.ndarray, t: np.ndarray) -> np.ndarray:
+        """Interpolación cúbica de Hermite (Catmull-Rom) sobre posiciones
+        fraccionarias ``t`` (índices en unidades de muestra de ``x``).
+
+        C1-continua: a diferencia del lineal no presenta quiebres de pendiente
+        entre muestras, que se oyen como armónicos de distorsión en el ajuste
+        de deriva (el resampler fraccional "continuo" de la Fase 3). Los
+        bordes se tratan replicando la muestra extrema (pendiente nula).
+
+        x: (n, ch); devuelve (len(t), ch) en float32.
+        """
+        n = x.shape[0]
+        i0 = np.clip(np.floor(t).astype(np.int64), 0, n - 1)
+        frac = (t - i0).astype(np.float64)
+        i_m1 = np.clip(i0 - 1, 0, n - 1)
+        i1 = np.clip(i0 + 1, 0, n - 1)
+        i2 = np.clip(i0 + 2, 0, n - 1)
+        a = frac
+        b = frac * frac
+        c = b * frac
+        out = np.empty((len(t), x.shape[1]), dtype=np.float32)
+        for ch in range(x.shape[1]):
+            p0, p1, p2, p3 = x[i_m1, ch], x[i0, ch], x[i1, ch], x[i2, ch]
+            out[:, ch] = 0.5 * (
+                2.0 * p1
+                + (-p0 + p2) * a
+                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * b
+                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * c
+            )
+        return out
+
+    @staticmethod
+    def _match_frame_count(data, frame_count, tail=None):
         """Ajusta suavemente la cantidad leída al bloque solicitado.
 
         Leer unos frames de más o de menos corrige los relojes de captura y
         salida, pero interpolar el bloque evita el salto que producía quitar el
-        primer frame o duplicar el último.
+        primer frame o duplicar el último. La interpolación es cúbica de
+        Hermite (C1-continua); ``tail`` (2 últimas muestras del bloque
+        anterior) extiende el contexto hacia atrás para que la interpolación
+        sea continua TAMBIÉN a través de la frontera entre callbacks: sin esa
+        memoria, el remuestreador introduce una discontinuidad periódica
+        (cada bloque de salida) aunque la interpolación interna sea suave.
         """
         count = data.shape[0]
         if count == frame_count:
             return data
         if count <= 1 or frame_count <= 1:
             return np.resize(data, (frame_count, 2)).astype(np.float32, copy=False)
-        positions = np.linspace(0.0, count - 1.0, frame_count, dtype=np.float32)
-        base = np.arange(count, dtype=np.float32)
-        return np.column_stack(
-            (
-                np.interp(positions, base, data[:, 0]),
-                np.interp(positions, base, data[:, 1]),
-            )
-        ).astype(np.float32, copy=False)
+        positions = np.linspace(0.0, count - 1.0, frame_count, dtype=np.float64)
+        if tail is not None and len(tail):
+            ext = np.concatenate([np.asarray(tail, dtype=data.dtype), data], axis=0)
+            out = AudioEngine._cubic_hermite(ext, positions + len(tail))
+        else:
+            out = AudioEngine._cubic_hermite(data, positions)
+        return out.astype(np.float32, copy=False)

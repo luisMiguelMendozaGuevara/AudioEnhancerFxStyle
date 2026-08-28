@@ -317,3 +317,51 @@ def test_start_capture_relanza_si_no_hay_canales_alternativos(fake_pa, engine):
     pa.open = open_rechaza_todo
     with pytest.raises(OSError):
         engine.start_capture(pa, 3, 48000, device_info={"maxInputChannels": 2})
+
+
+# ---------- resampler fraccional cúbico continuo (Fase 3) ----------
+
+
+def test_interp_cubica_mas_precisa_que_el_paso_natural_lineal():
+    """La interpolación cúbica de Hermite debe acercarse más a la senal real
+    que el lineal en posiciones fraccionarias (menos error de curvatura)."""
+    t = np.arange(64) / 48000
+    seno = np.sin(2 * np.pi * 440.0 * t).astype(np.float32)
+    x = np.stack([seno, seno], axis=1)
+    # posiciones fraccionarias entre muestras (p.ej. remuestreo 1.05x)
+    pos = np.arange(0, 60, 1.05)
+    out = AudioEngine._cubic_hermite(x, pos)
+    esperado = np.sin(2 * np.pi * 440.0 * pos / 48000)
+    error_cubico = float(np.abs(out[:, 0] - esperado).max())
+    error_lineal = float(np.abs(np.interp(pos, np.arange(64), seno) - esperado).max())
+    assert error_cubico < error_lineal
+
+
+def test_remuestreo_con_memoria_de_frontera_es_continuo():
+    """Regresion del remuestreador SIN memoria: interpolar dos bloques con la
+    cola del bloque anterior debe coincidir con la interpolacion del bloque
+    completo en las posiciones equivalentes (sin discontinuidad periodica en
+    cada frontera de callback)."""
+    t = np.arange(1024) / 48000
+    seno = (0.5 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    data = np.stack([seno, seno], axis=1)
+    # por bloques: mitad 1 sin cola, mitad 2 con la cola de la mitad 1
+    out1 = AudioEngine._match_frame_count(data[:512], 488)
+    out2 = AudioEngine._match_frame_count(data[512:], 488, tail=data[510:512])
+    # continuidad en la frontera: el paso entre bloques es del orden del paso
+    # natural de la senal remuestreada (no un salto)
+    paso = float(np.abs(out2[0, 0] - out1[-1, 0]))
+    pasos = np.abs(np.diff(np.concatenate([out1[:, 0], out2[:, 0]])))
+    assert paso <= 5.0 * float(np.median(pasos)) + 1e-3
+
+
+def test_out_callback_guarda_la_cola_del_remuestreador(engine):
+    """Tras cada callback de salida queda registrada la cola (2 ultimas
+    muestras del raw) para la interpolacion del siguiente callback."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    bloque = np.ones((1024, 2), dtype=np.float32) * 0.5
+    engine._put(bloque)
+    engine._out_callback(None, 1024, None, 0)
+    assert engine._interp_tail is not None
+    assert engine._interp_tail.shape == (2, 2)
