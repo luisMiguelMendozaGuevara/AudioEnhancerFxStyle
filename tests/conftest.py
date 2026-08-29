@@ -1,5 +1,6 @@
 """Configuracion compartida de pytest: asegura que el paquete sea importable
-desde la raiz del proyecto (sin necesidad de instalarlo)."""
+desde la raiz del proyecto (sin necesidad de instalarlo) y fija el backend
+grafico de Qt a offscreen (sin ventana/GPU real: evita access violations)."""
 
 import os
 import sys
