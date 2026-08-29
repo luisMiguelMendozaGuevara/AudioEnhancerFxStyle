@@ -112,6 +112,7 @@ TRANSLATIONS = {
     "Sample Rate": "Frecuencia de muestreo",
     "Buffer": "Buffer",
     "Latency": "Latencia",
+    "LATENCY": "LATENCIA",
     "Status": "Estado",
     "Restablecer todo": "Reset all",
     "Selecciona una fuente y una salida.": "Select a source and an output.",

@@ -9,6 +9,7 @@ bloque con el valor suavizado. Nunca se escribe el estado del DSP desde el
 callback.
 """
 
+import dataclasses
 import math
 import threading
 from functools import lru_cache
@@ -59,6 +60,25 @@ def _ramp_falling(n: int, sample_rate: int, tau: float) -> np.ndarray:
     return np.power(pole, steps).astype(np.float32, copy=False)
 
 
+@dataclasses.dataclass(frozen=True)
+class EnhancerParams:
+    """Instantánea INMUTABLE de los parámetros controlados por la UI.
+
+    La UI construye la instantánea (una sola asignación de tuplas/listas
+    nuevas) y la entrega con ``Enhancer.apply_params``: el hilo de audio ve
+    un conjunto coherente de valores, nunca una mezcla a medias de dos
+    escrituras (el problema de fondo de la carrera H5/H6). Los valores son
+    tipos inmutables o copias: la instantánea no puede mutarse después."""
+
+    volume: float = 1.0
+    bass: float = 0.0
+    treble: float = 0.0
+    eq_gains: tuple[float, ...] = ()
+    limiter: bool = True
+    compressor: bool = True
+    blend: float = 1.0
+
+
 class Enhancer:
     """Cadena DSP: biquads RBJ (Low/High Shelf + Peaking) con sosfilt+zi,
     compresor RMS por muestra, limitador brickwall con look-ahead y suavizado
@@ -73,10 +93,18 @@ class Enhancer:
         self.volume: float = 1.0
         self.bass_freq: float = 150.0  # corte del Low Shelf
         self.treble_freq: float = 6000.0  # corte del High Shelf
-        self.eq_q: float = 1.4  # Q de las bandas peaking
+        # Q de las bandas peaking (Fase 3: EQ paramétrico extendido).
+        # eq_q es la propiedad escalar de compatibilidad (leer/se-ear propaga
+        # a todas las bandas); eq_q_values permite Q individual por banda.
+        self._eq_q_default: float = 1.4
+        self.eq_q_values: list[float] = [1.4] * len(self.eq_bands)
         # Limitador brickwall con look-ahead (seguridad a nivel final)
         self.limiter: bool = True
         self.limiter_threshold: float = 0.95  # techo (pico de salida)
+        # True-peak: envolvente medida sobre la señal 4x sobremuestreada
+        # (detecta picos inter-muestra invisibles al pico por muestra; típico
+        # con contenido cerca de Nyquist).
+        self.true_peak: bool = True
         # Compresor RMS dinámico (loudness)
         self.compressor: bool = True
         self.comp_threshold: float = 0.85  # ~-1.4 dBFS
@@ -159,6 +187,45 @@ class Enhancer:
     @eq_gains.setter
     def eq_gains(self, value) -> None:
         self._eq_gains = [float(v) for v in value]
+
+    @property
+    def eq_q(self) -> float:
+        """Q escalar de compatibilidad: lee el Q por defecto; escribirlo
+        propaga el valor a TODAS las bandas (la UI simple usa esto)."""
+        return self._eq_q_default
+
+    @eq_q.setter
+    def eq_q(self, value: float) -> None:
+        v = float(value)
+        self._eq_q_default = v
+        self.eq_q_values = [v] * len(self.eq_bands)
+
+    def apply_params(self, params: "EnhancerParams") -> None:
+        """Aplica una instantánea de parámetros de forma atómica.
+
+        Escrituras individuales de la UI siguen siendo válidas (los sliders
+        escriben atributo a atributo); este método es para cambios EN BLOQUE
+        (presets, carga de configuración) donde cada atributo por separado
+        dejaba una ventana con estados mezclados."""
+        self.volume = float(params.volume)
+        self.bass = float(params.bass)
+        self.treble = float(params.treble)
+        self.eq_gains = [float(g) for g in params.eq_gains]
+        self.limiter = bool(params.limiter)
+        self.compressor = bool(params.compressor)
+        self.blend = float(params.blend)
+
+    def snapshot_params(self) -> "EnhancerParams":
+        """Lee el estado actual como instantánea inmutable."""
+        return EnhancerParams(
+            volume=float(self.volume),
+            bass=float(self.bass),
+            treble=float(self.treble),
+            eq_gains=tuple(self._eq_gains),
+            limiter=bool(self.limiter),
+            compressor=bool(self.compressor),
+            blend=float(self.blend),
+        )
 
     @staticmethod
     def _shelf(freq, gain_db, fs, s=1.0, low=True):
@@ -309,7 +376,7 @@ class Enhancer:
                 g_on = False
             self._section_on[key] = g_on
             if g_on:
-                b0, b1, b2, a1, a2 = self._peaking(freq, g_db, self.sample_rate, self.eq_q)
+                b0, b1, b2, a1, a2 = self._peaking(freq, g_db, self.sample_rate, self.eq_q_values[i])
                 sections.append(self._section(key, b0, b1, b2, a1, a2))
         if sections:
             sos = np.concatenate([s[1] for s in sections], axis=0)
@@ -413,21 +480,58 @@ class Enhancer:
            eliminar zipper noise.
         4. Techo exacto: tras suavizar, un ajuste escalar (raro, fracciones de
            dB) garantiza pico <= techo sin recorte duro.
-        """
+
+        Con ``true_peak`` activo (Fase 3), la envolvente se mide sobre la
+        señal 4x sobremuestreada (resample_poly): los picos INTER-MUESTRA
+        (contenido cerca de Nyquist, p.ej. un seno a fs/4 desfasado muestrea a
+        0.707×A con pico real A) quedan cubiertos. La ganancia sobremuestreada
+        se colapsa por min-pooling de 4 en 4 (peor caso por muestra base)."""
         thr = float(self.limiter_threshold)
         if y.size == 0:
             return y
         linked = np.abs(y).max(axis=1)  # envolvente de pico vinculada
-        if float(linked.max()) <= thr:
+        sample_peak = float(linked.max())
+        if self.true_peak:
+            # Atajo barato: el sobrepico inter-muestra teórico máximo es ~3 dB
+            # (factor ~1.414) respecto al pico por muestra. Si incluso
+            # asumiendo ese sobrepico no se alcanza el techo, no hay trabajo.
+            if sample_peak <= thr / 1.414:
+                return y
+        elif sample_peak <= thr:
             return y  # caso común: bloque bajo el techo, intocado
         la = max(1, int(self.sample_rate * 0.003))  # look-ahead 3 ms
-        # Máximo móvil sobre [i, i+la]: padding replicando el final. La ventana
-        # deslizante cuesta O(n*la) memoria transient (~0.15 MB por bloque de
-        # 1024 muestras): despreciable frente a una pasada de scipy.
-        padded = np.concatenate([linked, np.full(la, linked[-1], dtype=linked.dtype)])
-        win = np.lib.stride_tricks.sliding_window_view(padded, la + 1)
-        env = win.max(axis=1)
-        g = np.where(env > thr, thr / np.maximum(env, 1e-9), 1.0)
+        if self.true_peak:
+            sig = _scipy_signal()
+            # Sobremuestrear la senal CON SIGNO por canal y tomar abs despues:
+            # aplicar abs antes equivaldría a rectificar (para un seno a fs/4
+            # con fase π/4 el absoluto es DC y el pico real desaparecería).
+            up = np.abs(sig.resample_poly(y, 4, 1, axis=0)).max(axis=1)
+            la_up = la * 4
+            # Envolvente CENTRADA (±3 ms) sobre la senal sobremuestreada.
+            pad0 = np.concatenate([np.full(la_up, up[0], dtype=up.dtype), up, np.full(la_up, up[-1], dtype=up.dtype)])
+            win_up = np.lib.stride_tricks.sliding_window_view(pad0, 2 * la_up + 1)
+            env_up = win_up.max(axis=1)  # (4n,)
+            g_up = np.where(env_up > thr, thr / np.maximum(env_up, 1e-9), 1.0)
+            # Colapso 4->1 por MINIMO sobre la MISMA ventana: la ganancia por
+            # muestra base queda LENTA (constante por regiones). Min-pool de
+            # solo 4 submuestras NO vale para contenido cerca de Nyquist: el
+            # requisito oscila a la tasa del propio audio, modula la senal y
+            # genera splatter con picos nuevos. Minimo sobre ±3 ms = ganancia
+            # sostenida que cubre el intervalo completo de los picos.
+            pad_g = np.full(la_up, g_up[0], dtype=g_up.dtype)
+            gp = np.concatenate([pad_g, g_up, np.full(la_up, g_up[-1], dtype=g_up.dtype)])
+            win_g = np.lib.stride_tricks.sliding_window_view(gp, 2 * la_up + 1)
+            g = win_g.min(axis=1)[::4][: y.shape[0]]
+            if g.shape[0] < y.shape[0]:
+                g = np.concatenate([g, np.full(y.shape[0] - g.shape[0], g[-1])])
+        else:
+            # Máximo móvil sobre [i, i+la]: padding replicando el final. La
+            # ventana deslizante cuesta O(n*la) memoria transient (~0.15 MB
+            # por bloque de 1024 muestras): despreciable.
+            padded = np.concatenate([linked, np.full(la, linked[-1], dtype=linked.dtype)])
+            win = np.lib.stride_tricks.sliding_window_view(padded, la + 1)
+            env = win.max(axis=1)
+            g = np.where(env > thr, thr / np.maximum(env, 1e-9), 1.0)
         # Suavizado simétrico ~2 ms (Hann normalizado): con look-ahead la
         # atenuación ya se anticipa 3 ms, así que centrar la ventana no
         # retrasa la protección.
@@ -439,8 +543,11 @@ class Enhancer:
         g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
         out = y * g_s[:, None].astype(np.float32)
         # Garantía de techo: el suavizado puede subestimar la reducción en
-        # transitorios muy cortos; el ajuste escalar la cierra sin recorte.
-        peak = float(np.abs(out).max())
+        # transitorios muy cortos. En modo sample-peak basta medir el pico de
+        # la salida; en modo true-peak se re-mide el TRUE-PEAK (una segunda
+        # pasada de resample_poly por bloque: barata y determinista) y un
+        # ajuste escalar cierra el techo sin recorte duro.
+        peak = float(np.abs(sig.resample_poly(out, 4, 1, axis=0)).max()) if self.true_peak else float(np.abs(out).max())
         if peak > thr:
             out *= thr / peak
         return out

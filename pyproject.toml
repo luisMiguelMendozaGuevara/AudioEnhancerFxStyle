@@ -1,6 +1,6 @@
 [project]
 name = "audio-enhancer-fxstyle"
-version = "1.4.4"
+version = "1.5.0"
 description = "Real-time system audio enhancer for Windows (WASAPI loopback DSP)"
 readme = "README.md"
 license = { file = "LICENSE" }

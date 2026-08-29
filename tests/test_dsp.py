@@ -287,9 +287,7 @@ def test_compresor_por_muestra_igual_a_pasada_unica():
     )
     e_blk = Enhancer()
     e_blk.limiter = False
-    y_blk = np.concatenate(
-        [e_blk.process(x[i : i + 1024].copy()) for i in range(0, 5120, 1024)]
-    )
+    y_blk = np.concatenate([e_blk.process(x[i : i + 1024].copy()) for i in range(0, 5120, 1024)])
     e_one = Enhancer()
     e_one.limiter = False
     y_one = e_one.process(x.copy())
@@ -344,6 +342,80 @@ def test_reset_state_limpia_estados_y_medidores():
     # y sigue procesando igual tras el reset
     y = e.process(x.copy())
     assert float(np.abs(y).max()) > 0.0
+
+
+# ---------- true-peak x4 y Q por banda (Fase 3) ----------
+
+
+def _pico_true_peak(x, fs):
+    """Pico true-peak: reconstrucción 4x de la senal CON SIGNO por canal y
+    abs después (rectificar antes oculta los picos inter-muestra)."""
+    from scipy import signal
+
+    up = np.abs(signal.resample_poly(x, 4, 1, axis=0))
+    return float(up.max())
+
+
+def test_true_peak_captura_picos_intermuestra():
+    """Fase 3: un seno a fs/4 desfasado 45 grados muestrea a 0.707*A (por
+    debajo del techo 0.95) pero su pico REAL reconstruido es A. El limitador
+    sample-peak no reacciona; el true-peak SI y garantiza el techo."""
+    t = np.arange(N) / FS
+    seno = (1.3 * np.sin(2 * np.pi * (FS / 4.0) * t + np.pi / 4)).astype(np.float32)
+    x = np.stack([seno, seno], axis=1)
+    # sanity del caso: pico por muestra por debajo del techo, true-peak fuera
+    assert float(np.abs(x).max()) < 0.95
+    assert _pico_true_peak(x, FS) > 1.2
+
+    e = Enhancer()
+    e.compressor = False
+    assert e.true_peak is True
+    warm(e, x)
+    y = e.process(x.copy())
+    assert _pico_true_peak(y, FS) <= e.limiter_threshold + 0.02
+
+
+def test_true_peak_desactivado_deja_pasar_el_pico_intermuestra():
+    """Con true_peak=False el limitador solo ve el pico por muestra: el mismo
+    material pasa intocado (regresion que documenta la diferencia de modos)."""
+    t = np.arange(N) / FS
+    seno = (1.3 * np.sin(2 * np.pi * (FS / 4.0) * t + np.pi / 4)).astype(np.float32)
+    x = np.stack([seno, seno], axis=1)
+    e = Enhancer()
+    e.compressor = False
+    e.true_peak = False
+    warm(e, x)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-5)
+
+
+def test_eq_q_por_banda_ajusta_el_ancho_de_campana():
+    """Fase 3: eq_q_values permite Q individual; a igual ganancia (-12 dB en
+    60 Hz), un Q estrecho (6) debe afectar MUCHO MENOS a 150 Hz que uno
+    ancho (0.4)."""
+    x = _stereo(0.2, 150.0)  # sonda a 150 Hz
+
+    def _ratio(q_values):
+        e = Enhancer()
+        e.eq_q_values = list(q_values)
+        e.eq_gains = [-12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        e.limiter = False
+        e.compressor = False
+        warm(e, x)
+        y = e.process(x.copy())
+        return _rms(y) / _rms(x)
+
+    r_estrecho = _ratio([6.0] * 9)
+    r_ancho = _ratio([0.4] * 9)
+    assert r_estrecho > r_ancho + 0.15  # el Q estrecho respeta a la sonda
+
+
+def test_eq_q_escalar_sigue_funcionando():
+    """Compatibilidad: asignar eq_q escalar propaga a todas las bandas."""
+    e = Enhancer()
+    e.eq_q = 3.0
+    assert e.eq_q_values == [3.0] * 9
+    assert e.eq_q == 3.0
 
 
 def test_espectro_64_barras_validas():

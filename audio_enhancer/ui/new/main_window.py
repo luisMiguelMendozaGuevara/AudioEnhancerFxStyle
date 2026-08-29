@@ -33,15 +33,17 @@ from PySide6.QtWidgets import (
 from ...config import load_config, save_config
 from ...constants import (
     CABLE_KEYWORDS,
+    CHUNK,
     DANGER,
     DEFAULT_PRESET,
+    LATENCY_CHOICES_MS,
     OK,
     VIRTUAL_CABLE_KEYWORDS,
     WARN,
     WINDOW_TITLE,
     resource_path,
 )
-from ...dsp import Enhancer
+from ...dsp import Enhancer, EnhancerParams
 from ...engine import AudioEngine, _pa
 from ...i18n import PRESETS, detect_system_language, translate
 from ...startup_metrics import StartupMetrics
@@ -173,6 +175,7 @@ class NewMainWindow(QMainWindow):
         self._open_output_args = None
         self._prefill_deadline = 0.0
         self._active_names = ("", "")
+        self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
         self._keep_src = ""
         self._keep_out = ""
         self._latest_spectrum = None
@@ -312,6 +315,7 @@ class NewMainWindow(QMainWindow):
         audio_page._input_combo.currentTextChanged.connect(self._route_guard)
         audio_page._output_combo.currentTextChanged.connect(self._route_guard)
         audio_page._refresh_btn.clicked.connect(self._start_discovery)
+        audio_page._latency_combo.currentIndexChanged.connect(self._on_latency_pref_changed)
         self._pages["presets"]._save_btn.clicked.connect(self._save_custom_preset)
         self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
         self._pages["settings"]._autostart_check.toggled.connect(self._toggle_autostart)
@@ -339,6 +343,18 @@ class NewMainWindow(QMainWindow):
         self._rebuild_tray_menu()
         self._status_bar.retranslate(self._t)
 
+    def _on_latency_pref_changed(self, index: int) -> None:
+        """Guarda la preferencia de latencia (40/60/100 ms). Se aplica en el
+        próximo arranque del audio: cambiarla en caliente requeriría vaciar el
+        ring (glitch seguro)."""
+        ms = int(self._pages["audio"]._latency_combo.itemData(index) or 60)
+        self.state.latency_pref = ms
+        self._save_config()
+        if self.running:
+            self._status_bar.set_status_text(self._t("Latencia %d ms: se aplicara al reiniciar el audio.") % ms, WARN)
+        else:
+            self._status_bar.set_status_text(self._t("Latencia objetivo: %d ms") % ms, OK)
+
     def _on_theme_changed(self, index: int) -> None:
         """Cambia dark/white por indice reconstruyendo SOLO las paginas.
 
@@ -346,6 +362,12 @@ class NewMainWindow(QMainWindow):
         deben recrearse; pero el motor, PyAudio y los workers no se tocan:
         recargarlos provoco access violations con audio activo."""
         mode = "light" if index == 1 else "dark"
+        if mode == Theme.mode:
+            return
+        Theme.set_mode(mode)
+        self._save_config()
+        self.setStyleSheet(Theme.stylesheet())
+        self._rebuild_pages()
         if mode == Theme.mode:
             return
         Theme.set_mode(mode)
@@ -564,10 +586,19 @@ class NewMainWindow(QMainWindow):
         if not name or name not in self._all_presets():
             return
         vol, bass, treble, gains = self._all_presets()[name]
-        self.enhancer.volume = float(vol)
-        self.enhancer.bass = float(bass)
-        self.enhancer.treble = float(treble)
-        self.enhancer.eq_gains = [float(g) for g in gains]
+        # Cambio EN BLOQUE via instantánea inmutable: el DSP ve un conjunto
+        # coherente de parámetros, nunca una mezcla a medias (H5/H6).
+        self.enhancer.apply_params(
+            EnhancerParams(
+                volume=float(vol),
+                bass=float(bass),
+                treble=float(treble),
+                eq_gains=tuple(float(g) for g in gains),
+                limiter=bool(self.enhancer.limiter),
+                compressor=bool(self.enhancer.compressor),
+                blend=float(self.enhancer.blend),
+            )
+        )
         self._sync_ui_from_state()
         self.state.preset_name = name
 
@@ -634,14 +665,23 @@ class NewMainWindow(QMainWindow):
     def _start_audio(self, source, output) -> None:
         logger.warning("Auto/manual start: %s -> %s", source["name"], output["name"])
         self._ensure_pa()
-        rate = int(output.get("defaultSampleRate", 48000))
+        # La tasa la fija la FUENTE (loopback): la captura corre al ritmo del
+        # dispositivo que reproduce; abrir la captura a la tasa del output
+        # (codigo viejo, H5) desincronizaba relojes cuando ambas tasas
+        # difieren. La salida física abre a la misma tasa (WASAPI compartido
+        # remuestrea al rate nativo del dispositivo).
+        rate = int(source.get("defaultSampleRate", 48000) or 48000)
         if rate < 8000 or rate > 384000:
             rate = 48000
         if rate != self.enhancer.sample_rate:
+            # Cambio de tasa: los estados zi de biquads y compresor (y las
+            # rampas) son historial de OTRA tasa; continuar con ellos inyecta
+            # artefactos al arrancar (M3). reset_state también limpia caches
+            # del analizador.
             self.enhancer.sample_rate = rate
-            self.enhancer._spec_meta = None
-        self.engine.configure_ring(rate)
-        self.engine.start_capture(self.pa, source["index"], rate)
+            self.enhancer.reset_state()
+        self.engine.configure_ring(rate, drift_target_ms=self.state.latency_pref)
+        self.engine.start_capture(self.pa, source["index"], rate, device_info=source)
         self.running = True
         self._spectrum_worker.set_active(True)
         self._active_names = (source["name"], output["name"])
@@ -664,7 +704,9 @@ class NewMainWindow(QMainWindow):
     def _poll_prefill(self) -> None:
         if not self.running:
             return
-        if self.engine.fill() >= self.engine.nframes // 2 or time.time() > self._prefill_deadline:
+        # Pre-cargar hasta la CONSIGNA de deriva (latencia objetivo), no a la
+        # mitad del ring: la salida arranca ya en el punto de equilibrio.
+        if self.engine.fill() >= self.engine.drift_target or time.time() > self._prefill_deadline:
             self._open_output()
         else:
             QTimer.singleShot(10, self._poll_prefill)
@@ -676,8 +718,16 @@ class NewMainWindow(QMainWindow):
         self._open_output_args = None
         try:
             self.engine.open_output(out_index, rate)
-            latency = (self.engine.nframes / rate) * 1000
-            logger.warning("Audio activo: ring buffer a %d Hz, latencia %.1f ms", rate, latency)
+            # Latencia REAL percibida: consigna del ring + un bloque de salida.
+            # Reportar nframes/rate (codigo viejo) mostraba 200 ms cuando el
+            # punto de operación real está en drift_target (~60 ms).
+            latency = ((self.engine.drift_target + CHUNK) / rate) * 1000.0
+            logger.warning(
+                "Audio activo: ring a %d Hz, consigna %d frames, latencia %.1f ms",
+                rate,
+                self.engine.drift_target,
+                latency,
+            )
             self._status_bar.set_latency(latency)
             self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
             self._pages["audio"].set_info(rate=rate, buffer=1024, latency=latency, status="Processing")
@@ -714,6 +764,20 @@ class NewMainWindow(QMainWindow):
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None
+        # Métricas del motor ~1 Hz (el timer corre a 33 ms): contadores vivos
+        # de underruns/huecos/deriva en la barra de estado.
+        self._metrics_tick = (self._metrics_tick + 1) % 30
+        if self._metrics_tick == 0:
+            if self.running:
+                s = self.engine.stats_snapshot()
+                text = "unders %d | huecos %d | deriva %d fr" % (
+                    s["output_underruns"],
+                    s["gap_blocks"],
+                    s["drift_adjust_frames"],
+                )
+            else:
+                text = ""
+            self._status_bar.set_metrics(text)
 
     def _apply_config(self) -> None:
         config = load_config()
@@ -728,14 +792,23 @@ class NewMainWindow(QMainWindow):
             for name, value in custom.items():
                 if isinstance(value, (list, tuple)) and len(value) == 4:
                     self.custom_presets[str(name)] = tuple(value)
-        self.enhancer.volume = float(config.get("volume", 1.0))
-        self.enhancer.bass = float(config.get("bass", 0.0))
-        self.enhancer.treble = float(config.get("treble", 0.0))
         gains = config.get("eq_gains")
-        if isinstance(gains, list) and len(gains) == len(self.enhancer.eq_gains):
-            self.enhancer.eq_gains = [float(g) for g in gains]
-        self.enhancer.limiter = bool(config.get("limiter", True))
-        self.enhancer.compressor = bool(config.get("compressor", True))
+        gains_ok = isinstance(gains, list) and len(gains) == len(self.enhancer.eq_gains)
+        self.enhancer.apply_params(
+            EnhancerParams(
+                volume=float(config.get("volume", 1.0)),
+                bass=float(config.get("bass", 0.0)),
+                treble=float(config.get("treble", 0.0)),
+                eq_gains=tuple(float(g) for g in gains) if gains_ok else tuple(self.enhancer.eq_gains),
+                limiter=bool(config.get("limiter", True)),
+                compressor=bool(config.get("compressor", True)),
+                blend=float(self.enhancer.blend),
+            )
+        )
+        # Preferencia de latencia persistida (40/60/100 ms).
+        lat = int(config.get("latency_pref", 60) or 60)
+        self.state.latency_pref = lat if lat in LATENCY_CHOICES_MS else 60
+        self._pages["audio"].set_latency_pref(self.state.latency_pref)
         self._refresh_preset_list(config.get("preset", DEFAULT_PRESET))
         self._sync_ui_from_state()
         settings = self._pages["settings"]
@@ -764,6 +837,7 @@ class NewMainWindow(QMainWindow):
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
             "theme": Theme.mode,
+            "latency_pref": int(self.state.latency_pref),
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
         if not save_config(config):

@@ -8,7 +8,7 @@ import os
 import sys
 
 APP_NAME = "Audio Enhancer FxStyle"
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.5.0"
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 # Título de ventana/bandeja. Se usa también en "traer al frente" de instancia
@@ -19,6 +19,11 @@ WINDOW_TITLE = "Audio Enhancer - FxStyle"
 SAMPLE_RATE = 48000
 CHUNK = 1024
 RING_SECONDS = 0.2
+# Latencia objetivo del ring (ms): el punto de consigna del control de deriva.
+# Antes era RING_SECONDS/2 = 100 ms fijos. 60 ms es el compromiso
+# estabilidad/latencia; la UI ofrece 40/60/100 ms.
+DRIFT_TARGET_MS = 60
+LATENCY_CHOICES_MS = (40, 60, 100)
 
 # Rutas
 EXE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
