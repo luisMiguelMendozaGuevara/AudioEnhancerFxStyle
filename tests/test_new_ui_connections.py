@@ -31,12 +31,18 @@ def window(qapp):
     # Aislar de la config real: los tests de idioma no deben contaminar
     # el config.json del usuario ni el arranque de otras ventanas.
     orig_load, orig_save = mw.load_config, mw.save_config
+    # Idioma FIJADO en español (B3): detect_system_language depende del
+    # locale del host, así que en una máquina inglesa los tests que asumen
+    # etiquetas españolas fallaban sin ningún defecto real del producto.
+    orig_detect = mw.detect_system_language
     mw.load_config = lambda: {}
     mw.save_config = lambda cfg: True
+    mw.detect_system_language = lambda: "es"
     w = mw.NewMainWindow()
     w.build_content()
     yield w
     mw.load_config, mw.save_config = orig_load, orig_save
+    mw.detect_system_language = orig_detect
     w._closing = True
     w.engine.stop()
     w._spectrum_worker.stop()
@@ -156,3 +162,76 @@ def test_language_persisted_in_config(window):
     assert window.language == "en"
     window._on_language_changed("Espanol")
     assert window.language == "es"
+
+
+# ---------- R2: checkboxes de comportamiento (C1) y config robusta (C2) ----------
+
+
+def test_checkboxs_de_comportamiento_gobiernan_la_app(window):
+    """Los tres checkboxes de Config dejaron de ser decorativos."""
+    window._pages["settings"]._tray_check.setChecked(False)
+    assert window.minimize_to_tray is False
+    window._pages["settings"]._autostart_audio_check.setChecked(False)
+    assert window.autostart_audio is False
+    window._pages["settings"]._notifications_check.setChecked(False)
+    assert window.notifications_enabled is False
+    # Restaurar: el default del producto es todo activado
+    window._pages["settings"]._tray_check.setChecked(True)
+    window._pages["settings"]._autostart_audio_check.setChecked(True)
+    window._pages["settings"]._notifications_check.setChecked(True)
+
+
+def test_config_con_tipos_raros_no_tumba_el_arranque(window, monkeypatch):
+    """(C2) config.json editado a mano con tipos incorrectos -> defaults."""
+    from audio_enhancer.ui.new import main_window as mw
+
+    basura = {
+        "volume": "alto",
+        "bass": None,
+        "treble": [1, 2],
+        "eq_gains": ["a", 2, 3],
+        "latency_pref": "rapida",
+        "limiter": "sí",
+        "custom_presets": {
+            "malo": (1.0, 2.0, 3.0, [0.0] * 10),  # 10 ganancias: longitud incorrecta
+            "malo2": "no soy un preset",
+            "bueno": (1.5, 4.0, -2.0, [1.0] * 9),
+        },
+    }
+    original = mw.load_config
+    mw.load_config = lambda: basura
+    try:
+        window._apply_config()  # no debe lanzar
+    finally:
+        mw.load_config = original
+    # Valores no coercibles -> defaults intactos
+    assert window.enhancer.volume == pytest.approx(1.0)
+    assert window.enhancer.bass == pytest.approx(0.0)
+    assert window.enhancer.limiter is True  # bool estricto: "sí" no es bool
+    assert window.state.latency_pref == 60
+    # Presets: el malformado se descarta, el correcto sobrevive saneado
+    assert "malo" not in window.custom_presets
+    assert "malo2" not in window.custom_presets
+    vol, bass, treble, gains = window.custom_presets["bueno"]
+    assert vol == pytest.approx(1.5) and gains == [pytest.approx(1.0)] * 9
+
+
+def test_preset_de_longitud_incorrecta_es_rechazado(window):
+    """(C2) seleccionar un preset con 10 ganancias no desalinea el DSP."""
+    window.custom_presets["roto"] = (1.0, 0.0, 0.0, [2.0] * 10)
+    window._on_preset_selected("roto")
+    assert len(window.enhancer.eq_gains) == 9  # el DSP queda intacto
+    del window.custom_presets["roto"]
+
+
+def test_preferences_de_comportamiento_sobreviven_al_rebuild(window):
+    """(C1) tras reconstruir páginas los checkboxes reflejan la preferencia."""
+    window.minimize_to_tray = False
+    window.notifications_enabled = False
+    window._rebuild_pages()
+    settings = window._pages["settings"]
+    assert settings._tray_check.isChecked() is False
+    assert settings._notifications_check.isChecked() is False
+    assert settings._autostart_audio_check.isChecked() is True  # default
+    window.minimize_to_tray = True
+    window.notifications_enabled = True

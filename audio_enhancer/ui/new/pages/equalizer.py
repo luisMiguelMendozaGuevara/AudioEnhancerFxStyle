@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ....dsp import EQ_BANDS as _DSP_EQ_BANDS
 from ..audio_state import AudioState
 from ..theme.colors import Theme, accent_subtle_color
 
@@ -29,7 +32,9 @@ class EQCurveWidget(QWidget):
     ver la energia real de la musica bajo cada control."""
 
     band_changed = Signal(int, float)
-    EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
+    # Única fuente de verdad: las bandas viven en dsp.py (C3). Antes había
+    # una copia literal aquí que podía desincronizarse del motor.
+    EQ_BANDS = list(_DSP_EQ_BANDS)
     DB_MIN = -12.0
     DB_MAX = 12.0
     SPECTRUM_BINS = 64
@@ -66,8 +71,6 @@ class EQCurveWidget(QWidget):
 
     def _freq_to_band(self, freq: float) -> int:
         """Banda EQ cuya frecuencia central es mas cercana en escala log."""
-        import math
-
         best, best_d = 0, float("inf")
         log_f = math.log10(max(freq, 1.0))
         for i, center in enumerate(self.EQ_BANDS):

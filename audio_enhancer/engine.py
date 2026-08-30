@@ -87,7 +87,7 @@ class AudioEngine:
         self._drift_gain: float = 0.02
         self._drift_accum: float = 0.0
         self._max_drift_frames: int = 8
-        # Canales negociados en la captura (el callback mezcla a estério si
+        # Canales negociados en la captura (el callback mezcla a estéreo si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2
         # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
@@ -299,8 +299,9 @@ class AudioEngine:
         if self.ring is None or self._pa_mod is None:
             return (None, self._pa_mod.paContinue if self._pa_mod else 0)
         ch = self._capture_channels
-        x = np.frombuffer(in_data, dtype=np.float32)
-        x = np.asarray(x[: frame_count * ch], dtype=np.float32)
+        # frombuffer es de solo lectura y el slicing no copia: process() ya
+        # copia internamente antes de escribir (D3: asarray era redundante).
+        x = np.frombuffer(in_data, dtype=np.float32)[: frame_count * ch]
         try:
             x = x.reshape(frame_count, ch)
         except ValueError:

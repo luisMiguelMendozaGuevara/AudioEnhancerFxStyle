@@ -158,3 +158,36 @@ def test_traducciones_tienen_valores_no_vacios():
     for clave, valor in TRANSLATIONS.items():
         assert isinstance(clave, str) and clave
         assert isinstance(valor, str) and valor
+
+
+# ---------- Regresión R2 (B1): etiquetas técnicas invertidas ----------
+
+
+def test_etiquetas_tecnicas_fuente_espanol():
+    """Las etiquetas de la página Audio usan fuente española y traducen a inglés.
+
+    Antes el diccionario estaba INVERTIDO ('Sample Rate': 'Frecuencia de
+    muestreo'): la UI española mostraba inglés y la inglesa, español."""
+    # Dirección correcta es->en
+    assert translate("Tasa de muestreo", "en") == "Sample rate"
+    assert translate("Latencia", "en") == "Latency"
+    assert translate("Estado", "en") == "Status"
+    assert translate("LATENCIA", "en") == "LATENCY"
+    # En español pasan tal cual (jamás texto inglés)
+    for fuente in ("Tasa de muestreo", "Latencia", "Estado", "LATENCIA", "Buffer"):
+        assert translate(fuente, "es") == fuente
+    # Las claves inglesas viejas ya no existen en el diccionario
+    for clave_muerta in ("Sample Rate", "Latency", "Status", "LATENCY"):
+        assert translate(clave_muerta, "en") == clave_muerta
+
+
+def test_ruta_correcta_traducida_a_ingles():
+    """Regresión B2: las cadenas existían en el diccionario pero la UI no
+    pasaba el texto por _t(), así que en inglés se veía español."""
+    from audio_enhancer.i18n import translate
+
+    assert (
+        translate("Ruteo correcto: cable virtual -> salida fisica.", "en")
+        == "Correct routing: virtual cable -> physical output."
+    )
+    assert translate("Info: capturas un parlante fisico.", "en") == "Info: capturing a physical speaker."

@@ -106,6 +106,9 @@ class SettingsPage(QWidget):
         bl.addWidget(self._tray_check)
 
         self._autostart_audio_check = QCheckBox(self._t("Auto-iniciar audio al abrir"))
+        # Default True = comportamiento histórico del producto (auto-arranque
+        # al abrir): el checkbox dejó de ser decorativo y ahora manda él.
+        self._autostart_audio_check.setChecked(True)
         self._autostart_audio_check.setStyleSheet(
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )

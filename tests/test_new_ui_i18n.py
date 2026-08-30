@@ -31,12 +31,17 @@ def window(qapp):
     # Aislar de la config real: los tests de idioma no deben contaminar
     # el config.json del usuario ni el arranque de otras ventanas.
     orig_load, orig_save = mw.load_config, mw.save_config
+    # Idioma FIJADO en español (B3): los tests no pueden depender del
+    # locale del host (en CI ubuntu el locale no es español y fallaban).
+    orig_detect = mw.detect_system_language
     mw.load_config = lambda: {}
     mw.save_config = lambda cfg: True
+    mw.detect_system_language = lambda: "es"
     w = mw.NewMainWindow()
     w.build_content()
     yield w
     mw.load_config, mw.save_config = orig_load, orig_save
+    mw.detect_system_language = orig_detect
     w._closing = True
     w.engine.stop()
     w._spectrum_worker.stop()
@@ -95,3 +100,35 @@ def test_language_combo_reflects_current(window, qapp):
     window._apply_language("es")
     qapp.processEvents()
     assert window._pages["settings"]._lang_combo.currentText() == "Espanol"
+
+
+def test_ruta_con_cable_virtual_traducida(window):
+    """Regresión B2: _route_guard mostraba texto español en la UI inglesa."""
+    window._apply_language("en")
+    audio_page = window._pages["audio"]
+    audio_page._input_combo.blockSignals(True)
+    audio_page._input_combo.clear()
+    audio_page._input_combo.addItem("CABLE Input (VB-Audio)")
+    audio_page._input_combo.setCurrentText("CABLE Input (VB-Audio)")
+    audio_page._output_combo.blockSignals(True)
+    audio_page._output_combo.clear()
+    audio_page._output_combo.addItem("Speakers (Realtek)")
+    audio_page._output_combo.setCurrentText("Speakers (Realtek)")
+    audio_page._input_combo.blockSignals(False)
+    audio_page._output_combo.blockSignals(False)
+    window._route_guard()
+    assert audio_page._route_label.text() == "Correct routing: virtual cable -> physical output."
+    window._apply_language("es")
+    # La recarga en caliente recrea las páginas (y sin discovery los combos
+    # quedan vacíos): repoblar como haría _on_devices_ready y re-evaluar.
+    audio_page = window._pages["audio"]
+    audio_page._input_combo.blockSignals(True)
+    audio_page._input_combo.addItem("CABLE Input (VB-Audio)")
+    audio_page._input_combo.setCurrentText("CABLE Input (VB-Audio)")
+    audio_page._output_combo.blockSignals(True)
+    audio_page._output_combo.addItem("Speakers (Realtek)")
+    audio_page._output_combo.setCurrentText("Speakers (Realtek)")
+    audio_page._input_combo.blockSignals(False)
+    audio_page._output_combo.blockSignals(False)
+    window._route_guard()
+    assert audio_page._route_label.text() == "Ruteo correcto: cable virtual -> salida fisica."

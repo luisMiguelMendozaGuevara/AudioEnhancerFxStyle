@@ -47,6 +47,18 @@ SECTION_EXIT_DB = 0.05
 EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
 
 
+@lru_cache(maxsize=8)
+def _smooth_kernel(k: int) -> np.ndarray:
+    """Kernel Hann normalizado para el suavizado de ganancia del limitador.
+
+    Cacheado (D1): k solo depende de la tasa, pero antes se alocaba y
+    normalizaba en CADA bloque. El array devuelto no se muta (np.convolve no
+    modifica sus entradas)."""
+    kernel = np.hanning(k)
+    kernel /= kernel.sum()
+    return kernel
+
+
 @lru_cache(maxsize=16)
 def _ramp_falling(n: int, sample_rate: int, tau: float) -> np.ndarray:
     """Rampa exponencial descendente cacheada (solo lectura, nunca mutar).
@@ -536,8 +548,7 @@ class Enhancer:
         # atenuación ya se anticipa 3 ms, así que centrar la ventana no
         # retrasa la protección.
         k = max(3, int(self.sample_rate * 0.002) | 1)
-        kernel = np.hanning(k)
-        kernel /= kernel.sum()
+        kernel = _smooth_kernel(k)  # cacheado: k solo cambia con la tasa (D1)
         half = k // 2
         g_pad = np.concatenate([np.full(half, g[0]), g, np.full(half, g[-1])])
         g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
@@ -547,6 +558,8 @@ class Enhancer:
         # la salida; en modo true-peak se re-mide el TRUE-PEAK (una segunda
         # pasada de resample_poly por bloque: barata y determinista) y un
         # ajuste escalar cierra el techo sin recorte duro.
+        # (sig está ligado siempre que true_peak sea True: se asignó en la
+        # rama de sobremuestreo de arriba; el ternario no evalúa la otra cara.)
         peak = float(np.abs(sig.resample_poly(out, 4, 1, axis=0)).max()) if self.true_peak else float(np.abs(out).max())
         if peak > thr:
             out *= thr / peak

@@ -108,7 +108,9 @@ class AudioPage(QWidget):
         rl.addWidget(self._refresh_btn)
 
         # Latency preference
-        lbl_lat = QLabel(self._t("LATENCY"))
+        # LATENCIA (fuente en español): antes la clave era "LATENCY" y el
+        # diccionario estaba invertido — la UI española mostraba inglés.
+        lbl_lat = QLabel(self._t("LATENCIA"))
         lbl_lat.setStyleSheet(
             f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_SM}px; "
             f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
@@ -136,7 +138,14 @@ class AudioPage(QWidget):
         il.addWidget(lbl2)
 
         self._info_labels = {}
-        for key, text in [("rate", "Sample Rate"), ("buffer", "Buffer"), ("latency", "Latency"), ("status", "Status")]:
+        # Etiquetas técnicas con FUENTE en español (el diccionario traduce
+        # es->en): antes usaban claves inglesas y quedaban invertidas.
+        for key, text in [
+            ("rate", "Tasa de muestreo"),
+            ("buffer", "Buffer"),
+            ("latency", "Latencia"),
+            ("status", "Estado"),
+        ]:
             row = QHBoxLayout()
             k = QLabel(self._t(text))
             k.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent;")

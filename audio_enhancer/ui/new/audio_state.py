@@ -62,9 +62,6 @@ class AudioState(QObject):
         self._compressor: bool = True
         # Preferencia de latencia (ms) elegida en la página Audio.
         self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
-        # Estado de ruta
-        self._route_ok: bool = False
-        self._route_warning: str = ""
 
     # --- Properties ---
 
@@ -241,21 +238,8 @@ class AudioState(QObject):
             self._latency_pref = value
             self.latency_pref_changed.emit(value)
 
-    @property
-    def route_ok(self) -> bool:
-        return self._route_ok
-
-    @route_ok.setter
-    def route_ok(self, value: bool) -> None:
-        self._route_ok = value
-
-    @property
-    def route_warning(self) -> str:
-        return self._route_warning
-
-    @route_warning.setter
-    def route_warning(self, value: str) -> None:
-        self._route_warning = value
+    # (C5) route_ok/route_warning eliminados: nadie los leía ni escribía —
+    # el aviso de ruteo lo pinta AudioPage.set_route_warning directamente.
 
     def sync_from_enhancer(self, enhancer) -> None:
         """Lee todo el estado del Enhancer y emite senales."""
