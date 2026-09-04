@@ -441,3 +441,31 @@ def test_espectro_silencio_queda_en_piso():
     e.compute_spectrum()
     assert e.spectrum is not None
     assert int(np.sum(e.spectrum > -79.0)) == 0
+
+
+def test_compresor_salida_temprana_identica_y_estado_que_decae():
+    """R3-B4: bloque bajo umbral sale intacto SIN recorrer scipy, y los
+    estados de la envolvente DECAYEN (no se congelan) como lo harían con
+    la señal real: el siguiente bloque activo comprime igual."""
+    enh = Enhancer()
+    fs = enh.sample_rate
+    t = np.arange(2048) / fs
+    # Bloque fuerte sobre el umbral (0.85): activa el compresor.
+    fuerte = (0.5 * np.sin(2 * np.pi * 220.0 * t))[:, None].astype(np.float32) * 2.0
+    enh.process(fuerte.copy())
+    zi_antes = float(enh._comp_zi_slow[0])
+    assert zi_antes > 0.0
+
+    # Bloque silencioso (ruido a -40 dBFS): cae en la salida temprana.
+    rng = np.random.default_rng(7)
+    suave = (0.01 * rng.standard_normal((1024, 2))).astype(np.float32)
+    salida = enh.process(suave.copy())
+    np.testing.assert_array_equal(salida, suave)  # sin reducción: bit a bit
+
+    # El estado NO quedó congelado: decayó respecto al bloque fuerte.
+    zi_despues = float(enh._comp_zi_slow[0])
+    assert 0.0 < zi_despues < zi_antes
+
+    # Y el compresor sigue reaccionando en el siguiente bloque fuerte.
+    enh.process(fuerte.copy())
+    assert float(enh._comp_zi_slow[0]) > zi_despues

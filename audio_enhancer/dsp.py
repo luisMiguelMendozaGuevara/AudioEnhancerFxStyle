@@ -451,15 +451,37 @@ class Enhancer:
         if y.shape[0] == 0:
             return y
         sig = _scipy_signal()
-        # Potencia instantánea vinculada (stereo-link): media de canales.
-        p = np.mean(np.asarray(y, dtype=np.float64) ** 2, axis=1)
         a_att = 1.0 - math.exp(-1.0 / (self.sample_rate * max(self.comp_attack, 1e-4)))
         a_rel = 1.0 - math.exp(-1.0 / (self.sample_rate * max(self.comp_release, 1e-4)))
+        # (R3-B4) Salida temprana SIN entrar en scipy. La envolvente de
+        # potencia del bloque está acotada por max(pico actual, estados
+        # previos): el one-pole con coeficientes positivos nunca supera
+        # max(estado, entrada). Si ese tope ya está bajo umbral^2 (y makeup
+        # =1, sin amplificación), la reducción sería 0.0 dB en todo el
+        # bloque y el camino completo devolvería y intacto — pero gastando
+        # un bloque en float64, dos lfilter, sqrt y log10. Aquí devolvemos
+        # y directamente y DECAYEMOS los estados como los decaería la señal
+        # real (recurrencia con entrada nula), para que el siguiente bloque
+        # activo comprima exactamente igual que con el camino largo.
+        zi_f = self._comp_zi_fast
+        zi_s = self._comp_zi_slow
+        amp_max = float(np.abs(y).max())
+        bound = amp_max * amp_max
+        if zi_f is not None:
+            bound = max(bound, float(zi_f[0]), float(zi_s[0]))
+        if self.comp_makeup == 1.0 and bound < self.comp_threshold**2:
+            if zi_f is not None:
+                n = y.shape[0]
+                self._comp_zi_fast = zi_f * ((1.0 - a_att) ** n)
+                self._comp_zi_slow = zi_s * ((1.0 - a_rel) ** n)
+            return y
+        # Potencia instantánea vinculada (stereo-link): media de canales.
+        p = np.mean(np.asarray(y, dtype=np.float64) ** 2, axis=1)
         # one-pole: z[k] = z[k-1] + a*(x[k] - z[k-1]) <-> lfilter([a], [1, a-1]).
         # zi persiste entre bloques: la envolvente no se reinicia cada bloque.
         # (lfilter solo devuelve la tupla (y, zf) si zi no es None.)
-        zi_f = np.zeros(1) if self._comp_zi_fast is None else self._comp_zi_fast
-        zi_s = np.zeros(1) if self._comp_zi_slow is None else self._comp_zi_slow
+        zi_f = np.zeros(1) if zi_f is None else zi_f
+        zi_s = np.zeros(1) if zi_s is None else zi_s
         fast, self._comp_zi_fast = sig.lfilter([a_att], [1.0, a_att - 1.0], p, zi=zi_f)
         slow, self._comp_zi_slow = sig.lfilter([a_rel], [1.0, a_rel - 1.0], p, zi=zi_s)
         env_rms = np.sqrt(np.maximum(np.maximum(fast, slow), 0.0))
