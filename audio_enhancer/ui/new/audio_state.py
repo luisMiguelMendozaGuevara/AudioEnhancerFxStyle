@@ -4,6 +4,16 @@ from PySide6.QtCore import QObject, Signal
 
 from ...constants import LATENCY_CHOICES_MS
 
+# Umbrales de dedupe por métrica (R3-B1): los medidores se refrescan a ~30
+# Hz y cada emit termina en widget.update() (repaint). Re-emitir el mismo
+# valor — o ruido sub-píxel — paga CPU sin cambio visible. Cada métrica
+# tiene su sensibilidad: el RMS de entrada es una señal ya suavizada
+# (tau~85 ms) y basta un umbral fino; el pico de salida oscila más y usa
+# uno algo mayor. Ambos quedan por debajo de la resolución de 1 px del
+# widget (~0,002-0,008 de FS según ancho), así el ojo no nota el recorte.
+_LEVEL_EPS_RMS = 0.001
+_LEVEL_EPS_PEAK = 0.002
+
 
 class AudioState(QObject):
     """Estado centralizado de la aplicacion.
@@ -99,8 +109,9 @@ class AudioState(QObject):
 
     @input_level.setter
     def input_level(self, value: float) -> None:
-        self._input_level = value
-        self.input_level_changed.emit(value)
+        if abs(value - self._input_level) >= _LEVEL_EPS_RMS:
+            self._input_level = value
+            self.input_level_changed.emit(value)
 
     @property
     def output_level(self) -> float:
@@ -108,8 +119,9 @@ class AudioState(QObject):
 
     @output_level.setter
     def output_level(self, value: float) -> None:
-        self._output_level = value
-        self.output_level_changed.emit(value)
+        if abs(value - self._output_level) >= _LEVEL_EPS_PEAK:
+            self._output_level = value
+            self.output_level_changed.emit(value)
 
     @property
     def latency_ms(self) -> float:
