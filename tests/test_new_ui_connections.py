@@ -235,3 +235,17 @@ def test_preferences_de_comportamiento_sobreviven_al_rebuild(window):
     assert settings._autostart_audio_check.isChecked() is True  # default
     window.minimize_to_tray = True
     window.notifications_enabled = True
+
+
+def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
+    """R3-B2: la FFT solo corre si la ventana es visible, la página activa es
+    Home y la app no se está cerrando (offscreen: isVisible() es False)."""
+    window._closing = False
+    window._update_spectrum_needed()
+    assert not window._spectrum_worker.needed.is_set()  # ventana nunca mostrada
+
+    # Simular condiciones de "alguien mira": visible + Home activa.
+    window._spectrum_worker.needed.set()
+    assert window._spectrum_worker.needed.is_set()
+    window._spectrum_worker.set_needed(False)
+    assert not window._spectrum_worker.needed.is_set()

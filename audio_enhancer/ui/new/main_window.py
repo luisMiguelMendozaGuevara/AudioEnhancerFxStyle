@@ -112,14 +112,25 @@ class SpectrumWorker(QThread):
     def __init__(self, enhancer: Enhancer, parent=None) -> None:
         super().__init__(parent)
         self.enhancer = enhancer
+        # "active": hay audio que analizar (motor corriendo).
+        # "needed" (R3-B2): alguien está MIRANDO el espectro (ventana
+        # visible + página Home en primer plano). Van separados a propósito:
+        # con audio activo y configuración abierta, la FFT a 30 Hz era trabajo
+        # y allocations puras — nadie ve el canvas de Home desde otra página
+        # ni con la app minimizada a bandeja.
         self.active = threading.Event()
+        self.needed = threading.Event()
+        self.needed.set()  # sin cablear: comportamiento clásico (siempre activo)
 
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
 
+    def set_needed(self, needed: bool) -> None:
+        self.needed.set() if needed else self.needed.clear()
+
     def run(self) -> None:
         while not self.isInterruptionRequested():
-            if self.active.is_set() and self.enhancer.spectrum_enabled:
+            if self.active.is_set() and self.needed.is_set() and self.enhancer.spectrum_enabled:
                 try:
                     self.enhancer.compute_spectrum()
                     spec = self.enhancer.spectrum
@@ -130,7 +141,12 @@ class SpectrumWorker(QThread):
                     # en el log. Se deja constancia (debug: es el hilo visual,
                     # no debe ensuciar el log de producción).
                     logger.debug("compute_spectrum falló", exc_info=True)
-            self.msleep(33)
+                self.msleep(33)  # ~30 Hz: cadencia de refresco visual
+            else:
+                # Inactivo (sin audio / sin espectro visible): sondeo perezoso
+                # del flag a 4 Hz, sin FFT ni allocations. La reactivación al
+                # volver a Home sigue siendo imperceptible (<250 ms).
+                self.msleep(250)
 
     def stop(self) -> None:
         self.requestInterruption()
@@ -309,6 +325,7 @@ class NewMainWindow(QMainWindow):
         self.visual_timer.timeout.connect(self._refresh_visuals)
         self.visual_timer.start()
         self._sidebar.set_active("home")
+        self._update_spectrum_needed()
         logger.info("New UI ready: %s", self.metrics.summary())
 
     def _wire_pages(self) -> None:
@@ -475,6 +492,16 @@ class NewMainWindow(QMainWindow):
         settings._theme_combo.blockSignals(False)
         self._sync_behavior_checks()
         self._navigate_to(current_page)
+        self._update_spectrum_needed()
+
+    def _update_spectrum_needed(self) -> None:
+        """(R3-B2) FFT del spectrum solo cuando alguien la mira.
+
+        Visible = ventana al frente Y página Home en primer plano Y app no
+        cerrándose. Se llama en cada cambio de visibilidad o de página."""
+        home = self._pages.get("home")
+        needed = not self._closing and self.isVisible() and home is not None and self._stack.currentWidget() is home
+        self._spectrum_worker.set_needed(needed)
 
     def _navigate_to(self, page_id: str) -> None:
         page = self._pages.get(page_id)
@@ -483,6 +510,7 @@ class NewMainWindow(QMainWindow):
         if self._stack.currentWidget() is page:
             return
         self._stack.setCurrentWidget(page)
+        self._update_spectrum_needed()
         # Transicion de entrada: fade corto ease-out. El efecto se retira al
         # terminar para no penalizar el repintado del spectrum/meters.
         effect = QGraphicsOpacityEffect(page)
@@ -973,6 +1001,15 @@ class NewMainWindow(QMainWindow):
             self.showNormal()
             self.raise_()
             self.activateWindow()
+        self._update_spectrum_needed()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._update_spectrum_needed()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._update_spectrum_needed()
 
     def _quit_from_tray(self) -> None:
         self._shutdown()
