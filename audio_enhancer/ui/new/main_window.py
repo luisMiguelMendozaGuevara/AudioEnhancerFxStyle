@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-import time
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -30,12 +29,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...audio_controller import AudioController
 from ...autostart import is_enabled as _autostart_enabled
 from ...autostart import set_enabled as _set_auto_start
 from ...config import load_config, save_config
 from ...constants import (
     CABLE_KEYWORDS,
-    CHUNK,
     DANGER,
     DEFAULT_PRESET,
     LATENCY_CHOICES_MS,
@@ -46,7 +45,7 @@ from ...constants import (
     resource_path,
 )
 from ...dsp import Enhancer, EnhancerParams
-from ...engine import AudioEngine, _pa
+from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, translate
 from ...startup_metrics import StartupMetrics
 from .audio_state import AudioState
@@ -170,7 +169,13 @@ class NewMainWindow(QMainWindow):
             if saved_theme in ("dark", "light"):
                 Theme.set_mode(saved_theme)
         self.enhancer = Enhancer()
-        self.engine = AudioEngine(self.enhancer)
+        # (R3-C1) El ciclo de vida del audio vive en AudioController: la
+        # ventana solo reacciona a sus señales para pintar la interfaz.
+        self.controller = AudioController(self.enhancer)
+        self.controller.started.connect(self._on_audio_started)
+        self.controller.output_ready.connect(self._on_output_ready)
+        self.controller.start_failed.connect(self._on_start_failed)
+        self.controller.stopped.connect(self._on_audio_stopped)
         self.state = AudioState(self)
         # Estado -> DSP: los controles de las paginas escriben en AudioState;
         # sin este puente los sliders no afectan al audio (solo a la UI).
@@ -185,17 +190,12 @@ class NewMainWindow(QMainWindow):
         self.custom_presets = {}
         self.loopbacks = []
         self.speakers = []
-        self.pa = None
-        self.running = False
-        self.go = False
         # Preferencias de comportamiento (página Config): antes los tres
         # checkboxes eran decorativos — se pintaban y no afectaban a nada (C1).
         self.minimize_to_tray = True
         self.autostart_audio = True
         self.notifications_enabled = True
         self._closing = False
-        self._open_output_args = None
-        self._prefill_deadline = 0.0
         self._active_names = ("", "")
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
         self._keep_src = ""
@@ -212,6 +212,25 @@ class NewMainWindow(QMainWindow):
         self.setStyleSheet(Theme.stylesheet())
         self._build_shell()
         self._build_tray()
+
+    # ---------- puentes de compatibilidad hacia el controlador ----------
+
+    @property
+    def engine(self):
+        """Motor de audio (dueño: AudioController)."""
+        return self.controller.engine
+
+    @property
+    def running(self) -> bool:
+        return self.controller.running
+
+    @property
+    def go(self) -> bool:
+        return self.controller.go
+
+    @go.setter
+    def go(self, value: bool) -> None:
+        self.controller.go = bool(value)
 
     def _t(self, text):
         return translate(text, self.language)
@@ -523,12 +542,6 @@ class NewMainWindow(QMainWindow):
         anim.finished.connect(lambda: page.setGraphicsEffect(None))
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _ensure_pa(self):
-        """Instancia PyAudio unica para toda la vida de la app."""
-        if self.pa is None:
-            self.pa = _pa().PyAudio()
-        return self.pa
-
     def _start_discovery(self) -> None:
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
             return
@@ -609,36 +622,27 @@ class NewMainWindow(QMainWindow):
         if self.speakers and not audio_page._output_combo.currentText():
             audio_page._output_combo.setCurrentIndex(0)
 
-    @staticmethod
-    def _norm(name):
-        return "".join(name.lower().split())
-
     def _route_guard(self, *_args) -> None:
         audio_page = self._pages["audio"]
         src_name = audio_page._input_combo.currentText() or ""
         out_name = audio_page._output_combo.currentText() or ""
-        if not src_name or not out_name:
-            self.go = False
-            audio_page.set_route_warning(self._t("Selecciona una fuente y una salida."), WARN)
-            return
-        same = self._norm(src_name) == self._norm(out_name)
-        out_is_virtual = any(k in out_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
-        src_is_virtual = any(k in src_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
-        if same:
-            self.go = False
-            audio_page.set_route_warning(self._t("ECO: capturas y reproduces el mismo dispositivo."), DANGER)
-            return
-        if out_is_virtual:
-            self.go = False
-            audio_page.set_route_warning(self._t("La salida es virtual. Usa salida fisica."), DANGER)
-            return
-        self.go = True
-        if src_is_virtual:
+        # (R3-C1) La VALIDACIÓN vive en AudioController.evaluate_route (pura,
+        # testeable sin Qt); aquí solo se traduce la clave y se colorea.
+        go, key = AudioController.evaluate_route(src_name, out_name)
+        self.controller.go = go
+        if key == "ROUTE_MISSING":
+            text, color = self._t("Selecciona una fuente y una salida."), WARN
+        elif key == "ROUTE_ECO":
+            text, color = self._t("ECO: capturas y reproduces el mismo dispositivo."), DANGER
+        elif key == "ROUTE_VIRTUAL_OUT":
+            text, color = self._t("La salida es virtual. Usa salida fisica."), DANGER
+        elif key == "ROUTE_OK_VIRTUAL":
             # _t(): las claves ya estaban en el diccionario pero no se
             # traducían (B2) — en inglés se veía el texto español.
-            audio_page.set_route_warning(self._t("Ruteo correcto: cable virtual -> salida fisica."), OK)
+            text, color = self._t("Ruteo correcto: cable virtual -> salida fisica."), OK
         else:
-            audio_page.set_route_warning(self._t("Info: capturas un parlante fisico."), Theme.TEXT_DIM)
+            text, color = self._t("Info: capturas un parlante fisico."), Theme.TEXT_DIM
+        audio_page.set_route_warning(text, color)
 
     def _all_presets(self):
         presets = dict(PRESETS)
@@ -772,41 +776,24 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("Revisa el ruteo."), DANGER)
             return
         try:
-            self._start_audio(source, output)
+            # (R3-C1) Negociación de tasa, reset de estado DSP y prefill viven
+            # en el controlador; esta ventana solo pinta su señal 'started'.
+            self.controller.start(source, output, drift_target_ms=self.state.latency_pref)
         except Exception as exc:
             logger.exception("Failed to start")
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
-    def _start_audio(self, source, output) -> None:
-        logger.info("Auto/manual start: %s -> %s", source["name"], output["name"])
-        self._ensure_pa()
-        # La tasa la fija la FUENTE (loopback): la captura corre al ritmo del
-        # dispositivo que reproduce; abrir la captura a la tasa del output
-        # (codigo viejo, H5) desincronizaba relojes cuando ambas tasas
-        # difieren. La salida física abre a la misma tasa (WASAPI compartido
-        # remuestrea al rate nativo del dispositivo).
-        rate = int(source.get("defaultSampleRate", 48000) or 48000)
-        if rate < 8000 or rate > 384000:
-            rate = 48000
-        if rate != self.enhancer.sample_rate:
-            # Cambio de tasa: los estados zi de biquads y compresor (y las
-            # rampas) son historial de OTRA tasa; continuar con ellos inyecta
-            # artefactos al arrancar (M3). reset_state también limpia caches
-            # del analizador.
-            self.enhancer.sample_rate = rate
-            self.enhancer.reset_state()
-        self.engine.configure_ring(rate, drift_target_ms=self.state.latency_pref)
-        self.engine.start_capture(self.pa, source["index"], rate, device_info=source)
-        self.running = True
+    # ---------- slots de señales del AudioController ----------
+
+    def _on_audio_started(self, src_name: str, out_name: str, rate: int) -> None:
+        """Captura abierta: reflejar el estado ACTIVO en la interfaz."""
         self._spectrum_worker.set_active(True)
-        self._active_names = (source["name"], output["name"])
-        self._prefill_deadline = time.time() + 0.5
-        self._open_output_args = (output["index"], rate)
+        self._active_names = (src_name, out_name)
         self.state.processing = True
-        self.state.input_device = source["name"]
-        self.state.output_device = output["name"]
+        self.state.input_device = src_name
+        self.state.output_device = out_name
         self._status_bar.set_processing(True)
-        self._status_bar.set_route(source["name"], output["name"])
+        self._status_bar.set_route(src_name, out_name)
         self._status_bar.set_sample_rate(rate)
         self._header_status.setText("ACTIVE")
         self._header_status.setStyleSheet(
@@ -814,52 +801,24 @@ class NewMainWindow(QMainWindow):
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
         )
         self._status_bar.set_status_text(self._t("Activando salida..."), WARN)
-        QTimer.singleShot(10, self._poll_prefill)
 
-    def _poll_prefill(self) -> None:
-        if not self.running:
-            return
-        # Pre-cargar hasta la CONSIGNA de deriva (latencia objetivo), no a la
-        # mitad del ring: la salida arranca ya en el punto de equilibrio.
-        if self.engine.fill() >= self.engine.drift_target or time.time() > self._prefill_deadline:
-            self._open_output()
-        else:
-            QTimer.singleShot(10, self._poll_prefill)
+    def _on_output_ready(self, latency: float) -> None:
+        """Salida abierta tras el prefill: punto de operación estable."""
+        self._status_bar.set_latency(latency)
+        self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
+        self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
+        self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)
 
-    def _open_output(self) -> None:
-        if self._open_output_args is None:
-            return
-        out_index, rate = self._open_output_args
-        self._open_output_args = None
-        try:
-            self.engine.open_output(out_index, rate)
-            # Latencia REAL percibida: consigna del ring + un bloque de salida.
-            # Reportar nframes/rate (codigo viejo) mostraba 200 ms cuando el
-            # punto de operación real está en drift_target (~60 ms).
-            latency = ((self.engine.drift_target + CHUNK) / rate) * 1000.0
-            logger.info(
-                "Audio activo: ring a %d Hz, consigna %d frames, latencia %.1f ms",
-                rate,
-                self.engine.drift_target,
-                latency,
-            )
-            self._status_bar.set_latency(latency)
-            self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
-            self._pages["audio"].set_info(rate=rate, buffer=1024, latency=latency, status="Processing")
-            self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)
-        except Exception as exc:
-            self.engine.stop()
-            self.running = False
-            self._spectrum_worker.set_active(False)
-            self.state.processing = False
-            self._status_bar.set_processing(False)
-            self._header_status.setText("")
-            self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
+    def _on_start_failed(self, message: str) -> None:
+        """La salida falló (el controlador ya liberó la captura)."""
+        self._spectrum_worker.set_active(False)
+        self.state.processing = False
+        self._status_bar.set_processing(False)
+        self._header_status.setText("")
+        self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % message, DANGER)
 
-    def _stop_audio(self) -> None:
-        logger.info("Audio detenido por el usuario")
-        self.engine.stop()
-        self.running = False
+    def _on_audio_stopped(self) -> None:
+        """Parada limpia solicitada por el usuario."""
         self._spectrum_worker.set_active(False)
         self.state.processing = False
         self._status_bar.set_processing(False)
@@ -867,6 +826,10 @@ class NewMainWindow(QMainWindow):
         self._status_bar.set_status_text(self._t("Procesamiento detenido"), WARN)
         self._pages["audio"].set_info(status="Detenido")
         self._notify_tray(self._t("Procesamiento detenido"))
+
+    def _stop_audio(self) -> None:
+        """Parada limpia: el controlador emite 'stopped' y la UI reacciona."""
+        self.controller.stop()
 
     def _receive_spectrum(self, values) -> None:
         self._latest_spectrum = values
@@ -1029,9 +992,7 @@ class NewMainWindow(QMainWindow):
         if self._discovery_thread and self._discovery_thread.isRunning():
             self._discovery_thread.quit()
             self._discovery_thread.wait(1500)
-        with contextlib.suppress(Exception):
-            if self.pa:
-                self.pa.terminate()
+        self.controller.terminate_pa()
         if self.tray:
             self.tray.hide()
 
