@@ -1,7 +1,5 @@
 """Analizador de espectro profesional con QPainter.
 
-Spectrum analizador de espectro profesional con QPainter.
-
 Recibe datos de espectro y los dibuja. No hace FFT ni DSP.
 Incluye escala dB, etiquetas de frecuencia, indicador de pico y grilla.
 """
@@ -22,20 +20,8 @@ from PySide6.QtWidgets import QWidget
 
 from ..theme.colors import Theme, numeric_font
 
-# Frecuencias de las etiquetas del eje X
+# Frecuencias de las etiquetas del eje X (el texto se deriva: >=1000 -> "1k")
 _FREQ_LABELS = [31, 60, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-_FREQ_SHORT = {
-    31: "31",
-    60: "60",
-    125: "125",
-    250: "250",
-    500: "500",
-    1000: "1k",
-    2000: "2k",
-    4000: "4k",
-    8000: "8k",
-    16000: "16k",
-}
 
 # Rango dB para la visualizacion
 _DB_MIN = -60.0
@@ -152,7 +138,7 @@ class SpectrumWidget(QWidget):
         p.setPen(QColor(Theme.SPECTRUM_LABEL))
         for freq in _FREQ_LABELS:
             x = _freq_to_x(freq, w, ml, mr)
-            label = _FREQ_SHORT.get(freq, str(freq))
+            label = f"{freq // 1000}k" if freq >= 1000 else str(freq)
             p.drawText(int(x) - 12, int(h - mb + 4), 24, 14, Qt.AlignmentFlag.AlignCenter, label)
             # Linea vertical sutil
             p.setPen(QPen(QColor(Theme.SPECTRUM_GRID), 1, Qt.PenStyle.DotLine))

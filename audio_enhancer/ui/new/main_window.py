@@ -309,7 +309,7 @@ class NewMainWindow(QMainWindow):
         self.visual_timer.timeout.connect(self._refresh_visuals)
         self.visual_timer.start()
         self._sidebar.set_active("home")
-        logger.warning("New UI ready: %s", self.metrics.summary())
+        logger.info("New UI ready: %s", self.metrics.summary())
 
     def _wire_pages(self) -> None:
         home = self._pages["home"]
@@ -750,7 +750,7 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
     def _start_audio(self, source, output) -> None:
-        logger.warning("Auto/manual start: %s -> %s", source["name"], output["name"])
+        logger.info("Auto/manual start: %s -> %s", source["name"], output["name"])
         self._ensure_pa()
         # La tasa la fija la FUENTE (loopback): la captura corre al ritmo del
         # dispositivo que reproduce; abrir la captura a la tasa del output
@@ -809,7 +809,7 @@ class NewMainWindow(QMainWindow):
             # Reportar nframes/rate (codigo viejo) mostraba 200 ms cuando el
             # punto de operación real está en drift_target (~60 ms).
             latency = ((self.engine.drift_target + CHUNK) / rate) * 1000.0
-            logger.warning(
+            logger.info(
                 "Audio activo: ring a %d Hz, consigna %d frames, latencia %.1f ms",
                 rate,
                 self.engine.drift_target,
@@ -829,7 +829,7 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
     def _stop_audio(self) -> None:
-        logger.warning("Audio detenido por el usuario")
+        logger.info("Audio detenido por el usuario")
         self.engine.stop()
         self.running = False
         self._spectrum_worker.set_active(False)
@@ -849,7 +849,6 @@ class NewMainWindow(QMainWindow):
         # acercarse al techo). Antes ambos mostraban el mismo valor.
         self.state.input_level = float(self.enhancer.level_rms)
         self.state.output_level = float(self.enhancer.level_peak)
-        self.state.peak_level = float(self.enhancer.level_peak)
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None

@@ -19,7 +19,6 @@ class AudioState(QObject):
     output_device_changed = Signal(str)
     input_level_changed = Signal(float)
     output_level_changed = Signal(float)
-    peak_level_changed = Signal(float)
     latency_changed = Signal(float)
     sample_rate_changed = Signal(int)
     spectrum_changed = Signal(object)
@@ -43,7 +42,6 @@ class AudioState(QObject):
         # Niveles
         self._input_level: float = 0.0
         self._output_level: float = 0.0
-        self._peak_level: float = 0.0
         # Tecnico
         self._latency_ms: float = 0.0
         self._sample_rate: int = 48000
@@ -112,15 +110,6 @@ class AudioState(QObject):
     def output_level(self, value: float) -> None:
         self._output_level = value
         self.output_level_changed.emit(value)
-
-    @property
-    def peak_level(self) -> float:
-        return self._peak_level
-
-    @peak_level.setter
-    def peak_level(self, value: float) -> None:
-        self._peak_level = value
-        self.peak_level_changed.emit(value)
 
     @property
     def latency_ms(self) -> float:
@@ -240,6 +229,9 @@ class AudioState(QObject):
 
     # (C5) route_ok/route_warning eliminados: nadie los leía ni escribía —
     # el aviso de ruteo lo pinta AudioPage.set_route_warning directamente.
+    # (R3-A) update_levels_from_enhancer eliminado: nadie lo llamaba —
+    # el camino vivo es main_window._refresh_visuals, que escribe
+    # input_level/output_level directamente cada tick del timer.
 
     def sync_from_enhancer(self, enhancer) -> None:
         """Lee todo el estado del Enhancer y emite senales."""

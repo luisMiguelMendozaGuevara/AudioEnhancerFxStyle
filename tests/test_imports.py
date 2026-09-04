@@ -8,7 +8,6 @@ def test_importan_todos_los_modulos():
     for nombre in (
         "audio_enhancer.constants",
         "audio_enhancer.config",
-        "audio_enhancer.device_state",
         "audio_enhancer.dsp",
         "audio_enhancer.engine",
         "audio_enhancer.i18n",
