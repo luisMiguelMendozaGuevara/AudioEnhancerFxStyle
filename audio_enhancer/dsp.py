@@ -146,6 +146,12 @@ class Enhancer:
         self._c_bass: float = 0.0
         self._c_treble: float = 0.0
         self._c_eq = np.zeros(len(self.eq_bands), dtype=np.float32)
+        # (R3-B5) Objetivo numpy de las ganancias EQ, reconstruido SOLO en el
+        # setter (hilo de UI): el callback ya no copia la lista ni aloc un
+        # array por bloque. _eq_scratch es el buffer de trabajo de la rampa
+        # in-place (tampoco aloc por bloque).
+        self._eq_target = np.zeros(len(self.eq_bands), dtype=np.float32)
+        self._eq_scratch = np.zeros(len(self.eq_bands), dtype=np.float32)
         self._c_blend: float = 1.0
         # Estados de filtros y analizador
         self._states: dict[str, np.ndarray] = {}
@@ -199,6 +205,15 @@ class Enhancer:
     @eq_gains.setter
     def eq_gains(self, value) -> None:
         self._eq_gains = [float(v) for v in value]
+        # (R3-B5) El objetivo numpy se recalcula aquí, fuera del callback: la
+        # escritura llega por UI/preset, nunca por el hilo de audio. Si la
+        # longitud cambiara (no ocurre hoy: la UI fija 9 bandas), la rampa se
+        # reinicia a cero del nuevo tamaño para evitar un broadcasting roto.
+        target = np.asarray(self._eq_gains, dtype=np.float32)
+        if target.shape != self._c_eq.shape:
+            self._c_eq = np.zeros_like(target)
+            self._eq_scratch = np.zeros_like(target)
+        self._eq_target = target
 
     @property
     def eq_q(self) -> float:
@@ -341,11 +356,16 @@ class Enhancer:
             self._sos_cache = {}
             self._channels = channels
         # rampa anti-cremallera de los objetivos de la UI (el volumen se
-        # suaviza aparte, por muestra, en _apply_volume)
+        # suaviza aparte, por muestra, en _apply_volume). La de EQ es
+        # IN-PLACE sobre _c_eq con buffer propio (R3-B5): cero allocations
+        # por bloque; antes copiaba la lista de ganancias y aloc un array
+        # nuevo en cada pasada del callback.
         alpha_eq = 1.0 - np.exp(-block_sec / 0.03)
         self._c_bass = self._ramp(self._c_bass, self.bass, alpha_eq)
         self._c_treble = self._ramp(self._c_treble, self.treble, alpha_eq)
-        self._c_eq = self._ramp(self._c_eq, np.asarray(self.eq_gains, dtype=np.float32), alpha_eq)
+        np.subtract(self._eq_target, self._c_eq, out=self._eq_scratch)
+        self._eq_scratch *= alpha_eq
+        self._c_eq += self._eq_scratch
         bass = float(self._c_bass)
         treb = float(self._c_treble)
         # Histéresis Schmitt por sección: ENTRA con |g| >= SECTION_ENTER_DB y

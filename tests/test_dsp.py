@@ -469,3 +469,28 @@ def test_compresor_salida_temprana_identica_y_estado_que_decae():
     # Y el compresor sigue reaccionando en el siguiente bloque fuerte.
     enh.process(fuerte.copy())
     assert float(enh._comp_zi_slow[0]) > zi_despues
+
+
+def test_eq_target_cache_rampa_inplace_converge():
+    """R3-B5: el objetivo numpy se reconstruye solo en el setter; el callback
+    rampa in-place sin reasignar buffers y converge al objetivo."""
+    enh = Enhancer()
+    enh.eq_gains = [6.0] * 9
+    assert float(enh._eq_target[0]) == 6.0
+
+    objetivo = enh._eq_target
+    scratch = enh._eq_scratch
+    silencio = np.zeros((1024, 2), dtype=np.float32)
+    for _ in range(60):
+        enh.process(silencio)
+    # La rampa convergió al objetivo...
+    assert float(enh._c_eq[0]) == pytest.approx(6.0, rel=1e-3)
+    # ...sin reasignar ninguno de los buffers (rampa in-place real).
+    assert enh._eq_target is objetivo
+    assert enh._eq_scratch is scratch
+
+    # Cambio de ganancias por UI: el objetivo se regenera y la rampa lo sigue.
+    enh.eq_gains = [-3.0] * 9
+    for _ in range(80):
+        enh.process(silencio)
+    assert float(enh._c_eq[0]) == pytest.approx(-3.0, rel=1e-3)
