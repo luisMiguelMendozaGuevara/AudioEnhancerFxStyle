@@ -17,15 +17,30 @@ from ..theme.colors import Theme
 
 
 class PresetsPage(QWidget):
-    """Pagina de presets: incluidos, personalizados, favoritos."""
+    """Pagina de presets: incluidos, personalizados, favoritos.
+
+    API pública (R3-C3): save_requested(nombre) y delete_requested(nombre);
+    lectura/borrado del campo de nombre por métodos públicos."""
 
     delete_requested = Signal(str)
+    save_requested = Signal(str)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._t = t or (lambda text: text)
         self._build()
+        self._save_btn.clicked.connect(self._emit_save)
+
+    def _emit_save(self) -> None:
+        self.save_requested.emit(self.name_text())
+
+    def name_text(self) -> str:
+        """Nombre tecleado para el nuevo preset (sin espacios laterales)."""
+        return self._name_entry.text().strip()
+
+    def clear_name_entry(self) -> None:
+        self._name_entry.clear()
 
     def _card(self) -> QFrame:
         card = QFrame()

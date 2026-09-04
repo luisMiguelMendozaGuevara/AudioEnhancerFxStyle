@@ -347,25 +347,28 @@ class NewMainWindow(QMainWindow):
         logger.info("New UI ready: %s", self.metrics.summary())
 
     def _wire_pages(self) -> None:
+        # (R3-C3) La ventana SOLO usa las señales y métodos públicos de las
+        # páginas: cero accesos a widgets internos ajenos.
         home = self._pages["home"]
-        home._start_button.clicked.connect(self.toggle_audio)
-        home._preset_combo.currentTextChanged.connect(self._on_preset_selected)
-        home._ab_button.clicked.connect(self.toggle_ab)
-        home._volume_slider.valueChanged.connect(self._on_volume_slider)
+        home.start_requested.connect(self.toggle_audio)
+        home.preset_selected.connect(self._on_preset_selected)
+        home.ab_toggled.connect(self.toggle_ab)
+        home.volume_edited.connect(self._on_volume_slider)
         audio_page = self._pages["audio"]
-        audio_page._input_combo.currentTextChanged.connect(self._route_guard)
-        audio_page._output_combo.currentTextChanged.connect(self._route_guard)
-        audio_page._refresh_btn.clicked.connect(self._start_discovery)
-        audio_page._latency_combo.currentIndexChanged.connect(self._on_latency_pref_changed)
-        self._pages["presets"]._save_btn.clicked.connect(self._save_custom_preset)
+        audio_page.input_selected.connect(self._route_guard)
+        audio_page.output_selected.connect(self._route_guard)
+        audio_page.refresh_requested.connect(self._start_discovery)
+        audio_page.latency_selected.connect(self._on_latency_pref_changed)
+        self._pages["presets"].save_requested.connect(self._save_custom_preset)
         self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
-        self._pages["settings"]._autostart_check.toggled.connect(self._toggle_autostart)
-        self._pages["settings"]._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        self._pages["settings"]._lang_combo.currentTextChanged.connect(self._on_language_changed)
+        settings = self._pages["settings"]
+        settings.autostart_toggled.connect(self._toggle_autostart)
+        settings.theme_selected.connect(self._on_theme_changed)
+        settings.language_selected.connect(self._on_language_changed)
         # (C1) los tres checkboxes de comportamiento ya SÍ gobiernan la app.
-        self._pages["settings"]._tray_check.toggled.connect(self._on_tray_pref_changed)
-        self._pages["settings"]._autostart_audio_check.toggled.connect(self._on_autostart_audio_changed)
-        self._pages["settings"]._notifications_check.toggled.connect(self._on_notifications_changed)
+        settings.tray_pref_changed.connect(self._on_tray_pref_changed)
+        settings.autostart_audio_pref_changed.connect(self._on_autostart_audio_changed)
+        settings.notifications_pref_changed.connect(self._on_notifications_changed)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
@@ -395,17 +398,7 @@ class NewMainWindow(QMainWindow):
         settings = self._pages.get("settings")
         if settings is None:
             return
-        for attr, value in (
-            ("_tray_check", self.minimize_to_tray),
-            ("_autostart_audio_check", self.autostart_audio),
-            ("_notifications_check", self.notifications_enabled),
-        ):
-            widget = getattr(settings, attr, None)
-            if widget is None:
-                continue
-            widget.blockSignals(True)
-            widget.setChecked(value)
-            widget.blockSignals(False)
+        settings.set_behavior(self.minimize_to_tray, self.autostart_audio, self.notifications_enabled)
 
     def _notify_tray(self, body: str) -> None:
         """Notificación de bandeja respetando la preferencia del usuario."""
@@ -469,9 +462,9 @@ class NewMainWindow(QMainWindow):
             "home",
         )
         audio_old = self._pages.get("audio")
-        cur_src = audio_old._input_combo.currentText() if audio_old else ""
-        cur_out = audio_old._output_combo.currentText() if audio_old else ""
-        cur_preset = self._pages["home"]._preset_combo.currentText()
+        cur_src = audio_old.selected_source() if audio_old else ""
+        cur_out = audio_old.selected_output() if audio_old else ""
+        cur_preset = self._pages["home"].preset_text()
         for page in self._pages.values():
             self._stack.removeWidget(page)
             page.deleteLater()
@@ -492,22 +485,16 @@ class NewMainWindow(QMainWindow):
         # Repoblar el combo de preset sin disparar _on_preset_selected
         # (machacaria los valores manuales del usuario).
         home = self._pages["home"]
-        home._preset_combo.blockSignals(True)
-        self._refresh_preset_list(cur_preset or None)
-        home._preset_combo.blockSignals(False)
+        home.set_preset_items(list(self._all_presets()))  # repoblar sin disparar _on_preset_selected
+        if cur_preset:
+            home.set_preset(cur_preset)
         self._sync_ui_from_state()
         self._route_guard()
-        home._set_running(self.running)
+        home.set_running(self.running)
         settings = self._pages["settings"]
-        settings._autostart_check.blockSignals(True)
-        settings._autostart_check.setChecked(_autostart_enabled())
-        settings._autostart_check.blockSignals(False)
-        settings._lang_combo.blockSignals(True)
-        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
-        settings._lang_combo.blockSignals(False)
-        settings._theme_combo.blockSignals(True)
-        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
-        settings._theme_combo.blockSignals(False)
+        settings.set_autostart_checked(_autostart_enabled())
+        settings.set_language_text("English" if self.language == "en" else "Espanol")
+        settings.set_theme_index(1 if Theme.mode == "light" else 0)
         self._sync_behavior_checks()
         self._navigate_to(current_page)
         self._update_spectrum_needed()
@@ -547,13 +534,11 @@ class NewMainWindow(QMainWindow):
         audio_page = self._pages.get("audio")
         if audio_page is None:
             return
-        if audio_page._input_combo.count():
-            self._keep_src = audio_page._input_combo.currentText()
-        if audio_page._output_combo.count():
-            self._keep_out = audio_page._output_combo.currentText()
-        audio_page._input_combo.setEnabled(False)
-        audio_page._output_combo.setEnabled(False)
-        audio_page._refresh_btn.setEnabled(False)
+        if audio_page.has_source_items():
+            self._keep_src = audio_page.selected_source()
+        if audio_page.has_output_items():
+            self._keep_out = audio_page.selected_output()
+        audio_page.set_devices_enabled(False)
         self._status_bar.set_status_text(self._t("Detectando dispositivos..."), WARN)
         thread = QThread(self)
         worker = DeviceDiscoveryWorker()
@@ -579,9 +564,7 @@ class NewMainWindow(QMainWindow):
         audio_page.set_loopbacks([d["name"] for d in self.loopbacks])
         audio_page.set_speakers([d["name"] for d in self.speakers])
         self._restore_device_selection()
-        audio_page._input_combo.setEnabled(True)
-        audio_page._output_combo.setEnabled(True)
-        audio_page._refresh_btn.setEnabled(True)
+        audio_page.set_devices_enabled(True)
         if error:
             self._status_bar.set_status_text(self._t("No se pudieron detectar dispositivos: %s") % error, DANGER)
         else:
@@ -599,9 +582,9 @@ class NewMainWindow(QMainWindow):
         src_names = [d["name"] for d in self.loopbacks]
         out_names = [d["name"] for d in self.speakers]
         if self._keep_src in src_names:
-            audio_page._input_combo.setCurrentText(self._keep_src)
+            audio_page.set_input(self._keep_src)
         if self._keep_out in out_names:
-            audio_page._output_combo.setCurrentText(self._keep_out)
+            audio_page.set_output(self._keep_out)
         self._keep_src = ""
         self._keep_out = ""
 
@@ -611,20 +594,20 @@ class NewMainWindow(QMainWindow):
 
     def _auto_select(self) -> None:
         audio_page = self._pages["audio"]
-        if self.loopbacks and not audio_page._input_combo.currentText():
+        if self.loopbacks and not audio_page.selected_source():
             idx = 0
             for i, d in enumerate(self.loopbacks):
                 if any(k in d["name"].lower() for k in CABLE_KEYWORDS):
                     idx = i
                     break
-            audio_page._input_combo.setCurrentIndex(idx)
-        if self.speakers and not audio_page._output_combo.currentText():
-            audio_page._output_combo.setCurrentIndex(0)
+            audio_page.select_source_index(idx)
+        if self.speakers and not audio_page.selected_output():
+            audio_page.select_output_index(0)
 
     def _route_guard(self, *_args) -> None:
         audio_page = self._pages["audio"]
-        src_name = audio_page._input_combo.currentText() or ""
-        out_name = audio_page._output_combo.currentText() or ""
+        src_name = audio_page.selected_source() or ""
+        out_name = audio_page.selected_output() or ""
         # (R3-C1) La VALIDACIÓN vive en AudioController.evaluate_route (pura,
         # testeable sin Qt); aquí solo se traduce la clave y se colorea.
         go, key = AudioController.evaluate_route(src_name, out_name)
@@ -651,7 +634,7 @@ class NewMainWindow(QMainWindow):
     def _refresh_preset_list(self, keep=None) -> None:
         home = self._pages["home"]
         all_presets = self._all_presets()  # (D2) una sola construcción del dict
-        current = keep or home._preset_combo.currentText()
+        current = keep or home.preset_text()
         home.set_preset_items(list(all_presets))
         if current in all_presets:
             home.set_preset(current)
@@ -693,7 +676,7 @@ class NewMainWindow(QMainWindow):
 
     def _save_custom_preset(self) -> None:
         presets_page = self._pages["presets"]
-        name = presets_page._name_entry.text().strip()
+        name = presets_page.name_text()
         if not name:
             self._status_bar.set_status_text(self._t("Escribe un nombre para el preset."), WARN)
             return
@@ -703,7 +686,7 @@ class NewMainWindow(QMainWindow):
             float(self.enhancer.treble),
             [float(g) for g in self.enhancer.eq_gains],
         )
-        presets_page._name_entry.clear()
+        presets_page.clear_name_entry()
         self._refresh_preset_list(name)
         self._save_config()
 
@@ -737,8 +720,8 @@ class NewMainWindow(QMainWindow):
         audio_page = self._pages.get("audio")
         if audio_page is None:
             return  # recarga de interfaz en curso
-        src_text = audio_page._input_combo.currentText()
-        out_text = audio_page._output_combo.currentText()
+        src_text = audio_page.selected_source()
+        out_text = audio_page.selected_output()
         source = next((d for d in self.loopbacks if d["name"] == src_text), None)
         output = next((d for d in self.speakers if d["name"] == out_text), None)
         if not self.go or source is None or output is None:
@@ -857,23 +840,17 @@ class NewMainWindow(QMainWindow):
         self._sync_ui_from_state()
         self._sync_behavior_checks()
         settings = self._pages["settings"]
-        settings._autostart_check.blockSignals(True)
-        settings._autostart_check.setChecked(_autostart_enabled())
-        settings._autostart_check.blockSignals(False)
-        settings._lang_combo.blockSignals(True)
-        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
-        settings._lang_combo.blockSignals(False)
-        settings._theme_combo.blockSignals(True)
-        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
-        settings._theme_combo.blockSignals(False)
+        settings.set_autostart_checked(_autostart_enabled())
+        settings.set_language_text("English" if self.language == "en" else "Espanol")
+        settings.set_theme_index(1 if Theme.mode == "light" else 0)
 
     def _save_config(self) -> None:
         audio_page = self._pages["audio"]
         home = self._pages["home"]
         config = {
-            "source": audio_page._input_combo.currentText(),
-            "output": audio_page._output_combo.currentText(),
-            "preset": home._preset_combo.currentText() or DEFAULT_PRESET,
+            "source": audio_page.selected_source(),
+            "output": audio_page.selected_output(),
+            "preset": home.preset_text() or DEFAULT_PRESET,
             "language": self.language,
             "volume": float(self.enhancer.volume),
             "bass": float(self.enhancer.bass),

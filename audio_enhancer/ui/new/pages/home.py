@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -20,7 +20,16 @@ from ..widgets.spectrum import SpectrumWidget
 
 
 class HomePage(QWidget):
-    """Pagina principal: estado, spectrum, meters, preset, volumen, A/B."""
+    """Pagina principal: estado, spectrum, meters, preset, volumen, A/B.
+
+    API pública (R3-C3): la ventana se conecta a las señales
+    start_requested/preset_selected/ab_toggled/volume_edited y no toca
+    widgets internos."""
+
+    start_requested = Signal()
+    preset_selected = Signal(str)
+    ab_toggled = Signal()
+    volume_edited = Signal(int)  # valor crudo del slider (0-200)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -131,6 +140,7 @@ class HomePage(QWidget):
         self._start_button.setProperty("variant", "primary")
         self._start_button.setMinimumHeight(44)
         self._start_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._start_button.clicked.connect(self.start_requested.emit)
         layout.addWidget(self._start_button)
 
         row_top = QHBoxLayout()
@@ -141,6 +151,7 @@ class HomePage(QWidget):
         )
         row_top.addWidget(lbl_preset)
         self._preset_combo = QComboBox()
+        self._preset_combo.currentTextChanged.connect(self.preset_selected.emit)
         row_top.addWidget(self._preset_combo, 1)
         self._ab_button = QPushButton("A / B")
         self._ab_button.setFixedWidth(64)
@@ -149,6 +160,7 @@ class HomePage(QWidget):
             f"padding: 6px 12px; color: {Theme.TEXT_ON_ACCENT}; font-weight: {Theme.FONT_WEIGHT_BOLD}; }}"
             f"QPushButton:hover {{ background: {Theme.ACCENT_HOVER}; }}"
         )
+        self._ab_button.clicked.connect(self.ab_toggled.emit)
         row_top.addWidget(self._ab_button)
         layout.addLayout(row_top)
 
@@ -161,6 +173,7 @@ class HomePage(QWidget):
         self._volume_slider = QSlider(Qt.Orientation.Horizontal)
         self._volume_slider.setRange(0, 200)
         self._volume_slider.setValue(100)
+        self._volume_slider.valueChanged.connect(self._on_volume_moved)
         row_vol.addWidget(self._volume_slider, 1)
         self._volume_label = QLabel("1.00x")
         self._volume_label.setFixedWidth(48)
@@ -172,7 +185,17 @@ class HomePage(QWidget):
         layout.addLayout(row_vol)
         parent.addWidget(card)
 
-    def _set_running(self, active: bool) -> None:
+    def _on_volume_moved(self, raw: int) -> None:
+        """El label del volumen es asunto de la página; la ventana solo
+        recibe el valor crudo por la señal volume_edited."""
+        self._volume_label.setText(f"{raw / 100.0:.2f}x")
+        self.volume_edited.emit(raw)
+
+    def preset_text(self) -> str:
+        """Preset actualmente seleccionado (lectura pública)."""
+        return self._preset_combo.currentText()
+
+    def set_running(self, active: bool) -> None:
         """Refleja el estado del motor en el boton principal."""
         self._start_button.setText(self._t("Detener audio") if active else self._t("Iniciar audio"))
         self._start_button.setProperty("variant", "danger" if active else "primary")
@@ -181,7 +204,7 @@ class HomePage(QWidget):
         style.polish(self._start_button)
 
     def _on_processing_changed(self, active: bool) -> None:
-        self._set_running(active)
+        self.set_running(active)
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 5px;")
             self._status_text.setText(self._t("ACTIVO"))

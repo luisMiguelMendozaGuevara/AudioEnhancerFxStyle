@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,13 +16,32 @@ from ..theme.colors import Theme
 
 
 class SettingsPage(QWidget):
-    """Pagina de configuracion."""
+    """Pagina de configuracion.
+
+    API pública (R3-C3): señales autostart_toggled/theme_selected/
+    language_selected/tray_pref_changed/autostart_audio_pref_changed/
+    notifications_pref_changed; escrituras sin parpadeo de señales vía
+    set_autostart_checked/set_language_text/set_theme_index/set_behavior."""
+
+    autostart_toggled = Signal(bool)
+    theme_selected = Signal(int)
+    language_selected = Signal(str)
+    tray_pref_changed = Signal(bool)
+    autostart_audio_pref_changed = Signal(bool)
+    notifications_pref_changed = Signal(bool)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._t = t or (lambda text: text)
         self._build()
+        # (R3-C3) La página expone sus propios widgets como señales públicas.
+        self._autostart_check.toggled.connect(self.autostart_toggled.emit)
+        self._theme_combo.currentIndexChanged.connect(self.theme_selected.emit)
+        self._lang_combo.currentTextChanged.connect(self.language_selected.emit)
+        self._tray_check.toggled.connect(self.tray_pref_changed.emit)
+        self._autostart_audio_check.toggled.connect(self.autostart_audio_pref_changed.emit)
+        self._notifications_check.toggled.connect(self.notifications_pref_changed.emit)
 
     def _card(self) -> QFrame:
         card = QFrame()
@@ -127,3 +146,32 @@ class SettingsPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+    # ---------- API pública de escritura (sin re-disparar señales) ----------
+
+    def set_autostart_checked(self, on: bool) -> None:
+        self._autostart_check.blockSignals(True)
+        self._autostart_check.setChecked(on)
+        self._autostart_check.blockSignals(False)
+
+    def set_language_text(self, text: str) -> None:
+        self._lang_combo.blockSignals(True)
+        self._lang_combo.setCurrentText(text)
+        self._lang_combo.blockSignals(False)
+
+    def set_theme_index(self, index: int) -> None:
+        self._theme_combo.blockSignals(True)
+        self._theme_combo.setCurrentIndex(index)
+        self._theme_combo.blockSignals(False)
+
+    def set_behavior(self, tray: bool, autostart_audio: bool, notifications: bool) -> None:
+        """Refleja las preferencias de comportamiento tras aplicar config o
+        reconstruir páginas (los widgets nuevos nacen con defaults)."""
+        for check, value in (
+            (self._tray_check, tray),
+            (self._autostart_audio_check, autostart_audio),
+            (self._notifications_check, notifications),
+        ):
+            check.blockSignals(True)
+            check.setChecked(value)
+            check.blockSignals(False)
