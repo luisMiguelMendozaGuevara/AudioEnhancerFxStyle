@@ -8,7 +8,7 @@ import os
 import sys
 
 APP_NAME = "Audio Enhancer FxStyle"
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 # (C4) APP_DIR eliminado: duplicaba EXE_DIR y nadie lo usaba.
 
 # Título de ventana/bandeja. Se usa también en "traer al frente" de instancia

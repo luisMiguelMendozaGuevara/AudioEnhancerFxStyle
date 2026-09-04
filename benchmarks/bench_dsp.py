@@ -17,6 +17,8 @@ Escenarios:
                 señal moderada por debajo de umbrales (caso común)
     full_hot    cadena completa con señal sobre umbrales (compresión y
                 limitación activas, peor caso de CPU)
+    full_hot_sin_limiter  igual pero con el limitador APAGADO y señal que
+                cruza el techo de seguridad en todos los bloques
     spectrum    compute_spectrum() por tick (hilo de UI, no callback)
 
 Métricas por escenario (µs/bloque sobre CHUNK=1024 @48 kHz ≈ 21,3 ms):
@@ -78,6 +80,17 @@ def _signal_moderate(n: int, rng: np.random.Generator) -> np.ndarray:
     return st.astype(np.float32)
 
 
+def _signal_over_ceiling(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Señal calibrada para que el techo de seguridad entre en TODOS los
+    bloques (limitador apagado): normalizada a pico ~1,2 antes del volumen
+    (1,4), de modo que tras el EQ y el volumen cruce el techo 0,99 con
+    holgura. Sin esto, la realización del rng puede dejar la señal "hot"
+    por debajo del techo y el escenario deja de medir el peor caso."""
+    x = _signal_hot(n, rng)
+    peak = float(np.abs(x).max())
+    return (x * (1.2 / peak)).astype(np.float32)
+
+
 def _time_blocks(enh: Enhancer, feed, n_blocks: int) -> list[float]:
     """Devuelve duraciones en µs de process() (feed entrega el bloque i)."""
     samples: list[float] = []
@@ -114,6 +127,7 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
     rng = np.random.default_rng(RNG_SEED)
     hot = _signal_hot(CHUNK, rng)
     moderate = _signal_moderate(CHUNK, rng)
+    over_ceiling = _signal_over_ceiling(CHUNK, rng)
 
     scenarios: dict[str, tuple[Enhancer, object]] = {
         "bypass": (
@@ -131,6 +145,13 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
         "full_hot": (
             _make_enhancer(volume=1.4),
             lambda _i: hot,
+        ),
+        # Peor caso del techo de seguridad: limitador musical APAGADO con
+        # señal que cruza el techo en todos los bloques (el look-ahead entra
+        # como techo 0.99; mismo coste que el limitador true-peak activo).
+        "full_hot_sin_limiter": (
+            _make_enhancer(volume=1.4, limiter=False),
+            lambda _i: over_ceiling,
         ),
     }
 
@@ -172,7 +193,7 @@ def _print_table(results: dict) -> None:
     print(header)
     print("-" * len(header))
     budget_us = meta["block_ms"] * 1000.0
-    for name in ("bypass", "eq_only", "full", "full_hot", "spectrum"):
+    for name in ("bypass", "eq_only", "full", "full_hot", "full_hot_sin_limiter", "spectrum"):
         entry = results.get(name)
         if not entry:
             continue

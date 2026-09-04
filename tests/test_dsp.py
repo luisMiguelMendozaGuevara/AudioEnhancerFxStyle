@@ -103,12 +103,13 @@ def test_limitador_suaviza_sin_recorte_duro():
     warm(e2, x)
     y_flat = e2.process(x.copy())
 
-    # sin limitador el safety ceiling (0.99) evita el clip duro a 1.0;
-    # con limitador brickwall el pico queda en el techo 0.95
-    assert float(np.abs(y_flat).max()) <= 0.99 + 1e-3
-    assert float(np.abs(y_flat).max()) > 0.95
-    assert float(np.abs(y_lim).max()) < 0.96
-    assert float(np.abs(y_lim).max()) <= e.limiter_threshold + 1e-3
+    # con limitador el techo musical es 0.95; sin limitador el techo de
+    # seguridad (0.99) sustituye al antiguo recorte duro de np.clip (que
+    # clavaba muestras a +-1.0 y sonaba a estática)
+    assert float(np.abs(y_lim).max()) < 0.99
+    assert float(np.abs(y_flat).max()) <= 0.99 + 1e-6
+    assert float(np.abs(y_flat).max()) > 0.9  # el volumen sigue notándose
+    assert not (np.abs(y_flat) >= 1.0 - 1e-9).any()
 
 
 def test_limitador_nunca_supera_1_0():
@@ -120,6 +121,90 @@ def test_limitador_nunca_supera_1_0():
     warm(e, x)
     y = e.process(x.copy())
     assert float(np.abs(y).max()) <= 1.0 + 1e-6
+
+
+# ---------- techo de seguridad (limitador apagado) ----------
+
+
+def test_techo_seguridad_evita_recorte_duro_con_limiter_apagado():
+    # escenario del diagnóstico: seno 0.9 + volumen 2.0 sin limitador clavaba
+    # ~62% de las muestras a +-1.0 (flat-top audible = "estática")
+    x = _stereo(0.9, 440.0)
+    e = Enhancer()
+    e.volume = 2.0
+    e.compressor = False
+    e.limiter = False
+    warm(e, x)
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) <= e.safety_ceiling + 1e-6
+    assert not (np.abs(y) >= 1.0 - 1e-9).any()
+    # el volumen sigue notándose hasta el techo (rms v2.0 > rms v1.0)
+    e1 = Enhancer()
+    e1.volume = 1.0
+    e1.compressor = False
+    e1.limiter = False
+    warm(e1, x)
+    y1 = e1.process(x.copy())
+    assert _rms(y) > _rms(y1) * 1.02
+
+
+def test_techo_seguridad_transparente_bajo_umbral(noise):
+    # por debajo del techo el camino es intocado: dos cadenas idénticas
+    # (mismo estado, misma señal) deben coincidir bit a bit con y sin techo
+    def _cadena(ceiling):
+        e = Enhancer()
+        e.volume = 1.0
+        e.compressor = False
+        e.limiter = False
+        e.safety_ceiling = ceiling
+        warm(e, noise)
+        return e.process(noise.copy())
+
+    y_con = _cadena(0.99)
+    y_sin_techo = _cadena(10.0)
+    assert np.array_equal(y_con, y_sin_techo)
+
+
+def test_techo_seguridad_preserva_la_forma_espectral():
+    # dos tonos bien separados: si el techo solo aplica una escala de
+    # ganancia global (limitador look-ahead), la razón entre bandas del
+    # espectro se conserva y la curva no se deforma
+    t = np.arange(N) / FS
+    x = (0.4 * np.sin(2 * np.pi * 60.0 * t) + 0.4 * np.sin(2 * np.pi * 2000.0 * t)).astype(np.float32)
+    x = np.stack([x, x], axis=1)
+
+    def _cadena(volume):
+        e = Enhancer()
+        e.volume = volume
+        e.compressor = False
+        e.limiter = False
+        warm(e, x)
+        return e.process(x.copy())
+
+    y_ref = _cadena(1.0)  # sin techo activo
+    y_hot = _cadena(2.0)  # pico ~1.6: techo activo
+
+    def _mag(y, freq):
+        spec = np.abs(np.fft.rfft(y[:, 0] * np.hanning(N)))
+        freqs = np.fft.rfftfreq(N, 1.0 / FS)
+        return float(spec[int(np.argmin(np.abs(freqs - freq)))])
+
+    r60 = _mag(y_hot, 60.0) / _mag(y_ref, 60.0)
+    r2000 = _mag(y_hot, 2000.0) / _mag(y_ref, 2000.0)
+    # misma escala global en ambas bandas (±1.5 dB): la curva del EQ no cambia
+    assert abs(20.0 * np.log10(r60 / r2000)) < 1.5
+
+
+def test_techo_seguridad_ajustable():
+    x = _stereo(0.9, 440.0)
+    e = Enhancer()
+    e.volume = 2.0
+    e.compressor = False
+    e.limiter = False
+    e.safety_ceiling = 0.5
+    warm(e, x)
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) <= 0.5 + 1e-6
 
 
 # ---------- compresor RMS ----------

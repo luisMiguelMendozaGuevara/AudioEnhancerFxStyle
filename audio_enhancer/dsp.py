@@ -113,6 +113,13 @@ class Enhancer:
         # Limitador brickwall con look-ahead (seguridad a nivel final)
         self.limiter: bool = True
         self.limiter_threshold: float = 0.95  # techo (pico de salida)
+        # Techo de seguridad para cuando el limitador musical está APAGADO:
+        # sin él, el único techo de la cadena era np.clip (recorte duro:
+        # muestras clavadas a +-1.0 = flat-top audible, ~62% del bloque con
+        # volumen 2.0 sobre un seno a 0.9). 0.99 (~-0.09 dBFS) es transparente
+        # y deja el np.clip final como guardia digital que en la práctica ya
+        # no llega a actuar. Ajustable por quien quiera más margen.
+        self.safety_ceiling: float = 0.99
         # True-peak: envolvente medida sobre la señal 4x sobremuestreada
         # (detecta picos inter-muestra invisibles al pico por muestra; típico
         # con contenido cerca de Nyquist).
@@ -343,8 +350,7 @@ class Enhancer:
             return wet[:, 0] if mono else wet
         dry = data.copy()
         y = dry * (1.0 - self._c_blend) + wet * self._c_blend
-        y = self._safety_ceiling(y) if not self.limiter else np.clip(y, -1.0, 1.0)
-        y = y.astype(np.float32, copy=False)
+        y = np.clip(y, -1.0, 1.0).astype(np.float32)
         self._measure_levels(y)
         return y[:, 0] if mono else y
 
@@ -419,15 +425,29 @@ class Enhancer:
                 self._states[s[0]] = np.asarray(z, dtype=np.float32)
             y = out
         # Cadena en orden de mastering: filtros -> compresor -> volumen ->
-        # limitador. El limitador va AL FINAL porque es el único que puede
-        # garantizar el techo sobre la señal que realmente sale: antes el
-        # volumen se aplicaba antes del compresor y el limitador "suave"
-        # dejaba pasar ~70% del exceso por encima de su umbral.
+        # limitador (o techo de seguridad si está apagado). Va AL FINAL porque
+        # es el único que puede garantizar el techo sobre la señal que
+        # realmente sale: antes el volumen se aplicaba antes del compresor y
+        # el limitador "suave" dejaba pasar ~70% del exceso por encima de su
+        # umbral.
         if self.compressor:
             y = self._compress(y, block_sec)
         y = self._apply_volume(y, block_sec)
-        y = self._limit(y) if self.limiter else self._safety_ceiling(y)
-        return y.astype(np.float32, copy=False)
+        if self.limiter:
+            y = self._limit(y)
+        elif y.size:
+            # Techo de seguridad SIEMPRE activo: con el limitador apagado el
+            # único techo era np.clip (recorte duro). El MISMO limitador
+            # look-ahead cubre el hueco con techo transparente: una sola
+            # implementación de ganancia suavizada que escala la señal
+            # linealmente (la curva del EQ se preserva intacta). Con el
+            # limitador encendido es no-op: 0.95 < 0.99 y _limit ya garantiza
+            # su techo. Guarda SIN alocar (max/min son reducciones puras, sin
+            # array temporal; el caso común bajo el techo cuesta dos pasadas).
+            peak = max(float(y.max()), -float(y.min()))
+            if peak > self.safety_ceiling:
+                y = self._limit(y, thr=self.safety_ceiling)
+        return np.clip(y, -1.0, 1.0).astype(np.float32)
 
     def _apply_volume(self, data, block_sec):
         """Aplica el volumen con una rampa exponencial POR MUESTRA (tau ~100 ms).
@@ -516,13 +536,18 @@ class Enhancer:
         gain = (10.0 ** (red_db / 20.0)) * self.comp_makeup
         return (y * gain[:, None].astype(np.float32)).astype(np.float32, copy=False)
 
-    def _limit(self, y):
+    def _limit(self, y, thr=None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).
 
         Reemplaza al antiguo "soft limiter" por muestra: esa curva dependía de
         `strength` y dejaba pasar hasta ~70% del exceso (un pico de 1.4 salía
         ~1.14) porque atenuaba poco y SIN anticipación: cuando la ganancia
         reaccionaba, el transitorio ya había cruzado.
+
+        ``thr`` permite reutilizar ESTA MISMA maquinaria (look-ahead + Hann +
+        garantía de techo) como techo de seguridad cuando el limitador
+        musical está apagado: un solo código de suavizado de ganancia que
+        preserva la forma espectral (escala lineal), sin duplicados.
 
         Diseño estándar de mastering:
         1. Envolvente de pico vinculada (máximo entre canales, mono-link).
@@ -540,7 +565,8 @@ class Enhancer:
         (contenido cerca de Nyquist, p.ej. un seno a fs/4 desfasado muestrea a
         0.707×A con pico real A) quedan cubiertos. La ganancia sobremuestreada
         se colapsa por min-pooling de 4 en 4 (peor caso por muestra base)."""
-        thr = float(self.limiter_threshold)
+        if thr is None:
+            thr = float(self.limiter_threshold)
         if y.size == 0:
             return y
         linked = np.abs(y).max(axis=1)  # envolvente de pico vinculada
@@ -605,35 +631,6 @@ class Enhancer:
         peak = float(np.abs(sig.resample_poly(out, 4, 1, axis=0)).max()) if self.true_peak else float(np.abs(out).max())
         if peak > thr:
             out *= thr / peak
-        return out
-
-    def _safety_ceiling(self, y, thr: float = 0.99) -> np.ndarray:
-        """Tope transparente siempre activo cuando el limiter está OFF.
-
-        Sin limiter, el final de _process_dsp hacía np.clip(y,-1,1) -> flat-top
-        duro que suena a estática/hash en picos. Este safety sólo actúa si
-        peak > thr (thr=0.99 < 1.0): deja intacto el audio por debajo del techo
-        y aplica brickwall suave (look-ahead + Hann) para no hard-clipear."""
-        if y.size == 0:
-            return y
-        peak = float(np.abs(y).max())
-        if peak <= thr:
-            return y
-        la = max(1, int(self.sample_rate * 0.003))
-        linked = np.abs(y).max(axis=1)
-        padded = np.concatenate([linked, np.full(la, linked[-1], dtype=linked.dtype)])
-        win = np.lib.stride_tricks.sliding_window_view(padded, la + 1)
-        env = win.max(axis=1)
-        g = np.where(env > thr, thr / np.maximum(env, 1e-9), 1.0)
-        k = max(3, int(self.sample_rate * 0.002) | 1)
-        kernel = _smooth_kernel(k)
-        half = k // 2
-        g_pad = np.concatenate([np.full(half, g[0]), g, np.full(half, g[-1])])
-        g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
-        out = y * g_s[:, None].astype(np.float32)
-        peak2 = float(np.abs(out).max())
-        if peak2 > thr:
-            out *= thr / peak2
         return out
 
     # ---------- analizador de espectro ----------
