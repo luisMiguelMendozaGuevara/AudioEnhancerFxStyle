@@ -103,9 +103,12 @@ def test_limitador_suaviza_sin_recorte_duro():
     warm(e2, x)
     y_flat = e2.process(x.copy())
 
-    # sin limitador el pico llega al clip duro (1.0); con limitador se suaviza
-    assert float(np.abs(y_flat).max()) > 0.998
-    assert float(np.abs(y_lim).max()) < 0.99
+    # sin limitador el safety ceiling (0.99) evita el clip duro a 1.0;
+    # con limitador brickwall el pico queda en el techo 0.95
+    assert float(np.abs(y_flat).max()) <= 0.99 + 1e-3
+    assert float(np.abs(y_flat).max()) > 0.95
+    assert float(np.abs(y_lim).max()) < 0.96
+    assert float(np.abs(y_lim).max()) <= e.limiter_threshold + 1e-3
 
 
 def test_limitador_nunca_supera_1_0():

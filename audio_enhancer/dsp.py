@@ -343,7 +343,8 @@ class Enhancer:
             return wet[:, 0] if mono else wet
         dry = data.copy()
         y = dry * (1.0 - self._c_blend) + wet * self._c_blend
-        y = np.clip(y, -1.0, 1.0).astype(np.float32)
+        y = self._safety_ceiling(y) if not self.limiter else np.clip(y, -1.0, 1.0)
+        y = y.astype(np.float32, copy=False)
         self._measure_levels(y)
         return y[:, 0] if mono else y
 
@@ -425,9 +426,8 @@ class Enhancer:
         if self.compressor:
             y = self._compress(y, block_sec)
         y = self._apply_volume(y, block_sec)
-        if self.limiter:
-            y = self._limit(y)
-        return np.clip(y, -1.0, 1.0).astype(np.float32)
+        y = self._limit(y) if self.limiter else self._safety_ceiling(y)
+        return y.astype(np.float32, copy=False)
 
     def _apply_volume(self, data, block_sec):
         """Aplica el volumen con una rampa exponencial POR MUESTRA (tau ~100 ms).
@@ -605,6 +605,35 @@ class Enhancer:
         peak = float(np.abs(sig.resample_poly(out, 4, 1, axis=0)).max()) if self.true_peak else float(np.abs(out).max())
         if peak > thr:
             out *= thr / peak
+        return out
+
+    def _safety_ceiling(self, y, thr: float = 0.99) -> np.ndarray:
+        """Tope transparente siempre activo cuando el limiter está OFF.
+
+        Sin limiter, el final de _process_dsp hacía np.clip(y,-1,1) -> flat-top
+        duro que suena a estática/hash en picos. Este safety sólo actúa si
+        peak > thr (thr=0.99 < 1.0): deja intacto el audio por debajo del techo
+        y aplica brickwall suave (look-ahead + Hann) para no hard-clipear."""
+        if y.size == 0:
+            return y
+        peak = float(np.abs(y).max())
+        if peak <= thr:
+            return y
+        la = max(1, int(self.sample_rate * 0.003))
+        linked = np.abs(y).max(axis=1)
+        padded = np.concatenate([linked, np.full(la, linked[-1], dtype=linked.dtype)])
+        win = np.lib.stride_tricks.sliding_window_view(padded, la + 1)
+        env = win.max(axis=1)
+        g = np.where(env > thr, thr / np.maximum(env, 1e-9), 1.0)
+        k = max(3, int(self.sample_rate * 0.002) | 1)
+        kernel = _smooth_kernel(k)
+        half = k // 2
+        g_pad = np.concatenate([np.full(half, g[0]), g, np.full(half, g[-1])])
+        g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
+        out = y * g_s[:, None].astype(np.float32)
+        peak2 = float(np.abs(out).max())
+        if peak2 > thr:
+            out *= thr / peak2
         return out
 
     # ---------- analizador de espectro ----------
