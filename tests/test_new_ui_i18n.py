@@ -25,22 +25,24 @@ def qapp():
 
 
 @pytest.fixture(scope="module")
-def window(qapp):
+def window(qapp, tmp_path_factory):
+    # Aislar de la config real (R3-C2): la ventana ahora lee vía
+    # ConfigManager, que resuelve CONFIG_PATH del módulo en cada operación;
+    # basta redirigir esa ruta a un tmp para no tocar el config del usuario.
+    import audio_enhancer.config_manager as cfg_manager_mod
     from audio_enhancer.ui.new import main_window as mw
 
-    # Aislar de la config real: los tests de idioma no deben contaminar
-    # el config.json del usuario ni el arranque de otras ventanas.
-    orig_load, orig_save = mw.load_config, mw.save_config
+    tmp_cfg = tmp_path_factory.mktemp("ui-config") / "config.json"
+    orig_path = cfg_manager_mod.CONFIG_PATH
     # Idioma FIJADO en español (B3): los tests no pueden depender del
-    # locale del host (en CI ubuntu el locale no es español y fallaban).
+    # locale del host.
     orig_detect = mw.detect_system_language
-    mw.load_config = lambda: {}
-    mw.save_config = lambda cfg: True
+    cfg_manager_mod.CONFIG_PATH = str(tmp_cfg)
     mw.detect_system_language = lambda: "es"
     w = mw.NewMainWindow()
     w.build_content()
     yield w
-    mw.load_config, mw.save_config = orig_load, orig_save
+    cfg_manager_mod.CONFIG_PATH = orig_path
     mw.detect_system_language = orig_detect
     w._closing = True
     w.engine.stop()

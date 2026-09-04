@@ -1,0 +1,152 @@
+"""Gestor de configuración: esquema, saneo, defaults y persistencia.
+
+(R3-C2) Extraído de NewMainWindow: toda conversión de tipos y validación
+del config.json vive aquí. La ventana pide ``load()`` y recibe un
+diccionario SANEADO con tipos garantizados; un config.json editado a mano
+no puede tumbar el arranque ni colar presets malformados al DSP.
+
+Capas (de abajo arriba):
+    config.py         — I/O atómico del JSON (sin semántica)
+    ConfigManager     — esquema, coerción, defaults y migración (este módulo)
+    NewMainWindow     — consume el diccionario saneado; pinta la interfaz
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from .config import load_config, save_config
+from .constants import CONFIG_PATH, DEFAULT_PRESET, LATENCY_CHOICES_MS
+
+logger = logging.getLogger("audio_enhancer.config_manager")
+
+
+class ConfigManager:
+    """Esquema del config.json + coerción segura + defaults."""
+
+    def __init__(self, eq_band_count: int, path: str | None = None) -> None:
+        self._eq_count = int(eq_band_count)
+        # None = resolver CONFIG_PATH en CADA operación (no al importar): así
+        # los tests pueden redirigir la ruta parcheando el módulo.
+        self.path = path
+
+    def _resolve_path(self) -> str:
+        return self.path or CONFIG_PATH
+
+    # ---------- coerciones (antes _cfg_float/_cfg_bool de la ventana) ----------
+
+    @staticmethod
+    def as_float(value: Any, default: float) -> float:
+        """float con red de seguridad (C2): config editado a mano no tumba el arranque."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def as_bool(value: Any, default: bool) -> bool:
+        """bool estricto: solo JSON true/false; cualquier otra cosa -> default."""
+        return value if isinstance(value, bool) else default
+
+    # ---------- presets ----------
+
+    def sanitize_preset(self, value: Any) -> tuple[float, float, float, list[float]] | None:
+        """Valida (vol, bass, treble, gains) con coerción segura; None si inválido.
+
+        Un preset con ganancias de otra longitud desalinearía _c_eq del DSP
+        (broadcasting roto dentro del callback); mejor fuera en la puerta."""
+        if (
+            not isinstance(value, (list, tuple))
+            or len(value) != 4
+            or not isinstance(value[3], (list, tuple))
+            or len(value[3]) != self._eq_count
+        ):
+            return None
+        try:
+            return (float(value[0]), float(value[1]), float(value[2]), [float(g) for g in value[3]])
+        except (TypeError, ValueError):
+            return None
+
+    # ---------- migración ----------
+
+    @staticmethod
+    def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
+        """Migraciones de configs antiguas. Hoy: identidad.
+
+        Punto único y testeable para cuando cambie el esquema (p. ej.
+        renombrar claves, convertir listas de presets a dict, etc.): se
+        añade un paso aquí y el resto del código ignora las versiones viejas.
+        """
+        return raw
+
+    # ---------- alto nivel ----------
+
+    def load(self) -> dict[str, Any]:
+        """Lee, migra y SANEAD la configuración completa. Nunca lanza.
+
+        Devuelve SIEMPRE todas las claves del esquema con tipos garantizados
+        (los opcionales como None si no hay valor usable)."""
+        raw = self._migrate(load_config(self._resolve_path()))
+        if not raw:
+            raw = {}
+
+        # EQ: lista de la longitud exacta y floats; si no, None (el caller
+        # conserva las ganancias actuales del DSP).
+        eq_gains = None
+        candidate = raw.get("eq_gains")
+        if isinstance(candidate, list) and len(candidate) == self._eq_count:
+            try:
+                eq_gains = [float(g) for g in candidate]
+            except (TypeError, ValueError):
+                eq_gains = None
+
+        # Latencia: solo los valores ofrecidos por la UI (40/60/100).
+        try:
+            latency = int(raw.get("latency_pref", 60) or 60)
+        except (TypeError, ValueError):
+            latency = 60
+        if latency not in LATENCY_CHOICES_MS:
+            latency = LATENCY_CHOICES_MS[1]
+
+        # Presets personalizados: dict nombre -> tupla saneada.
+        custom: dict[str, tuple[float, float, float, list[float]]] = {}
+        raw_custom = raw.get("custom_presets")
+        if isinstance(raw_custom, dict):
+            for name, value in raw_custom.items():
+                preset = self.sanitize_preset(value)
+                if preset is not None:
+                    custom[str(name)] = preset
+
+        language = raw.get("language")
+        if language not in ("es", "en"):
+            language = None
+        theme = raw.get("theme")
+        if theme not in ("dark", "light"):
+            theme = None
+
+        return {
+            "source": str(raw.get("source", "") or ""),
+            "output": str(raw.get("output", "") or ""),
+            "preset": str(raw.get("preset", "") or "") or DEFAULT_PRESET,
+            "language": language,
+            "theme": theme,
+            "volume": self.as_float(raw.get("volume"), 1.0),
+            "bass": self.as_float(raw.get("bass"), 0.0),
+            "treble": self.as_float(raw.get("treble"), 0.0),
+            "eq_gains": eq_gains,
+            "limiter": self.as_bool(raw.get("limiter"), True),
+            "compressor": self.as_bool(raw.get("compressor"), True),
+            "latency_pref": latency,
+            "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),
+            "autostart_audio": self.as_bool(raw.get("autostart_audio"), True),
+            "notifications": self.as_bool(raw.get("notifications"), True),
+            "custom_presets": custom,
+        }
+
+    def save(self, cfg: dict[str, Any]) -> bool:
+        """Guarda la configuración (I/O atómica en config.py). False si falló."""
+        if not save_config(cfg, self._resolve_path()):
+            logger.warning("No se pudo persistir la configuración en %s", self.path)
+            return False
+        return True

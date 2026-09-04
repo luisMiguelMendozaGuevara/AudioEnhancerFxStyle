@@ -32,19 +32,18 @@ from PySide6.QtWidgets import (
 from ...audio_controller import AudioController
 from ...autostart import is_enabled as _autostart_enabled
 from ...autostart import set_enabled as _set_auto_start
-from ...config import load_config, save_config
+from ...config_manager import ConfigManager
 from ...constants import (
     CABLE_KEYWORDS,
     DANGER,
     DEFAULT_PRESET,
-    LATENCY_CHOICES_MS,
     OK,
     VIRTUAL_CABLE_KEYWORDS,
     WARN,
     WINDOW_TITLE,
     resource_path,
 )
-from ...dsp import Enhancer, EnhancerParams
+from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
 from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, translate
 from ...startup_metrics import StartupMetrics
@@ -158,16 +157,16 @@ class NewMainWindow(QMainWindow):
         super().__init__()
         self.metrics = startup_metrics or StartupMetrics()
         self.metrics.mark("root_created")
+        # (R3-C2) Esquema/coerción/defaults del config.json en ConfigManager.
+        self._config = ConfigManager(eq_band_count=len(EQ_BANDS))
         self.language = detect_system_language()
         # Idioma guardado por el usuario tiene prioridad sobre el del sistema.
         with contextlib.suppress(Exception):
-            saved_cfg = load_config() or {}
-            saved_lang = saved_cfg.get("language")
-            if saved_lang in ("es", "en"):
-                self.language = saved_lang
-            saved_theme = saved_cfg.get("theme")
-            if saved_theme in ("dark", "light"):
-                Theme.set_mode(saved_theme)
+            saved_cfg = self._config.load()
+            if saved_cfg["language"]:
+                self.language = saved_cfg["language"]
+            if saved_cfg["theme"]:
+                Theme.set_mode(saved_cfg["theme"])
         self.enhancer = Enhancer()
         # (R3-C1) El ciclo de vida del audio vive en AudioController: la
         # ventana solo reacciona a sus señales para pintar la interfaz.
@@ -669,39 +668,10 @@ class NewMainWindow(QMainWindow):
         self._save_config()
         self._status_bar.set_status_text(self._t("Preset eliminado: %s") % name, WARN)
 
-    @staticmethod
-    def _cfg_float(value, default: float) -> float:
-        """float con red de seguridad (C2): config editado a mano no tumba el arranque."""
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _cfg_bool(value, default: bool) -> bool:
-        """bool estricto (C2): solo JSON true/false; cualquier otra cosa -> default."""
-        return value if isinstance(value, bool) else default
-
-    def _sanitize_preset_value(self, value):
-        """Valida (vol, bass, treble, gains) con coerción segura; None si inválido.
-
-        Un preset con ganancias de otra longitud desalinearía _c_eq del DSP
-        ( broadcasting roto dentro del callback); mejor fuera en la puerta."""
-        if (
-            not isinstance(value, (list, tuple))
-            or len(value) != 4
-            or not isinstance(value[3], (list, tuple))
-            or len(value[3]) != len(self.enhancer.eq_gains)
-        ):
-            return None
-        try:
-            return (float(value[0]), float(value[1]), float(value[2]), [float(g) for g in value[3]])
-        except (TypeError, ValueError):
-            return None
-
     def _on_preset_selected(self, name: str) -> None:
         raw = self._all_presets().get(name)
-        preset = self._sanitize_preset_value(raw) if raw is not None else None
+        # (R3-C2) La validación de presets vive en ConfigManager.
+        preset = self._config.sanitize_preset(raw) if raw is not None else None
         if preset is None:
             return
         vol, bass, treble, gains = preset
@@ -859,52 +829,31 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_metrics(text)
 
     def _apply_config(self) -> None:
-        config = load_config()
-        if not config:
-            self._refresh_preset_list(DEFAULT_PRESET)
-            self._sync_behavior_checks()
-            return
-        self._keep_src = str(config.get("source", "") or "")
-        self._keep_out = str(config.get("output", "") or "")
-        # (C2) el config.json es editable a mano: un tipo raro no debe tumbar
-        # el arranque ni colar presets malformados al DSP.
-        custom = config.get("custom_presets")
-        if isinstance(custom, dict):
-            self.custom_presets = {}
-            for name, value in custom.items():
-                preset = self._sanitize_preset_value(value)
-                if preset is not None:
-                    self.custom_presets[str(name)] = preset
-        gains = config.get("eq_gains")
-        gains_ok = isinstance(gains, list) and len(gains) == len(self.enhancer.eq_gains)
-        if gains_ok:
-            try:
-                gains_tuple = tuple(float(g) for g in gains)
-            except (TypeError, ValueError):
-                gains_ok = False
+        # (R3-C2) ConfigManager devuelve SIEMPRE el diccionario completo y
+        # saneado: coerción, defaults y validación de presets viven allí.
+        cfg = self._config.load()
+        self._keep_src = cfg["source"]
+        self._keep_out = cfg["output"]
+        self.custom_presets = dict(cfg["custom_presets"])
         self.enhancer.apply_params(
             EnhancerParams(
-                volume=self._cfg_float(config.get("volume"), 1.0),
-                bass=self._cfg_float(config.get("bass"), 0.0),
-                treble=self._cfg_float(config.get("treble"), 0.0),
-                eq_gains=gains_tuple if gains_ok else tuple(self.enhancer.eq_gains),
-                limiter=self._cfg_bool(config.get("limiter"), True),
-                compressor=self._cfg_bool(config.get("compressor"), True),
+                volume=cfg["volume"],
+                bass=cfg["bass"],
+                treble=cfg["treble"],
+                eq_gains=tuple(cfg["eq_gains"]) if cfg["eq_gains"] is not None else tuple(self.enhancer.eq_gains),
+                limiter=cfg["limiter"],
+                compressor=cfg["compressor"],
                 blend=float(self.enhancer.blend),
             )
         )
-        # Preferencia de latencia persistida (40/60/100 ms).
-        try:
-            lat = int(config.get("latency_pref", 60) or 60)
-        except (TypeError, ValueError):
-            lat = 60
-        self.state.latency_pref = lat if lat in LATENCY_CHOICES_MS else 60
+        # Preferencia de latencia persistida (40/60/100 ms), ya validada.
+        self.state.latency_pref = cfg["latency_pref"]
         self._pages["audio"].set_latency_pref(self.state.latency_pref)
         # (C1) preferencias de comportamiento, antes checkboxes decorativos.
-        self.minimize_to_tray = self._cfg_bool(config.get("minimize_to_tray"), True)
-        self.autostart_audio = self._cfg_bool(config.get("autostart_audio"), True)
-        self.notifications_enabled = self._cfg_bool(config.get("notifications"), True)
-        self._refresh_preset_list(config.get("preset", DEFAULT_PRESET))
+        self.minimize_to_tray = cfg["minimize_to_tray"]
+        self.autostart_audio = cfg["autostart_audio"]
+        self.notifications_enabled = cfg["notifications"]
+        self._refresh_preset_list(cfg["preset"])
         self._sync_ui_from_state()
         self._sync_behavior_checks()
         settings = self._pages["settings"]
@@ -939,7 +888,7 @@ class NewMainWindow(QMainWindow):
             "notifications": bool(self.notifications_enabled),
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
-        if not save_config(config):
+        if not self._config.save(config):
             logger.warning("Failed to save config")
 
     def _toggle_autostart(self, enabled: bool) -> None:

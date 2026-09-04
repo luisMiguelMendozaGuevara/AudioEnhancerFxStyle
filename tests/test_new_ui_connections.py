@@ -25,23 +25,24 @@ def qapp():
 
 
 @pytest.fixture(scope="module")
-def window(qapp):
+def window(qapp, tmp_path_factory):
+    # Aislar de la config real (R3-C2): la ventana ahora lee vía
+    # ConfigManager, que resuelve CONFIG_PATH del módulo en cada operación;
+    # basta redirigir esa ruta a un tmp para no tocar el config del usuario.
+    import audio_enhancer.config_manager as cfg_manager_mod
     from audio_enhancer.ui.new import main_window as mw
 
-    # Aislar de la config real: los tests de idioma no deben contaminar
-    # el config.json del usuario ni el arranque de otras ventanas.
-    orig_load, orig_save = mw.load_config, mw.save_config
-    # Idioma FIJADO en español (B3): detect_system_language depende del
-    # locale del host, así que en una máquina inglesa los tests que asumen
-    # etiquetas españolas fallaban sin ningún defecto real del producto.
+    tmp_cfg = tmp_path_factory.mktemp("ui-config") / "config.json"
+    orig_path = cfg_manager_mod.CONFIG_PATH
+    # Idioma FIJADO en español (B3): los tests no pueden depender del
+    # locale del host.
     orig_detect = mw.detect_system_language
-    mw.load_config = lambda: {}
-    mw.save_config = lambda cfg: True
+    cfg_manager_mod.CONFIG_PATH = str(tmp_cfg)
     mw.detect_system_language = lambda: "es"
     w = mw.NewMainWindow()
     w.build_content()
     yield w
-    mw.load_config, mw.save_config = orig_load, orig_save
+    cfg_manager_mod.CONFIG_PATH = orig_path
     mw.detect_system_language = orig_detect
     w._closing = True
     w.engine.stop()
@@ -181,9 +182,15 @@ def test_checkboxs_de_comportamiento_gobiernan_la_app(window):
     window._pages["settings"]._notifications_check.setChecked(True)
 
 
-def test_config_con_tipos_raros_no_tumba_el_arranque(window, monkeypatch):
-    """(C2) config.json editado a mano con tipos incorrectos -> defaults."""
-    from audio_enhancer.ui.new import main_window as mw
+def test_config_con_tipos_raros_no_tumba_el_arranque(window):
+    """(C2/R3-C2) config.json editado a mano con tipos incorrectos -> defaults.
+
+    La basura se escribe en la ruta AISLADA del fixture (CONFIG_PATH del
+    módulo config_manager, redirigido a tmp) y ConfigManager la sanea."""
+    import json
+    from pathlib import Path
+
+    import audio_enhancer.config_manager as cfg_manager_mod
 
     basura = {
         "volume": "alto",
@@ -193,17 +200,18 @@ def test_config_con_tipos_raros_no_tumba_el_arranque(window, monkeypatch):
         "latency_pref": "rapida",
         "limiter": "sí",
         "custom_presets": {
-            "malo": (1.0, 2.0, 3.0, [0.0] * 10),  # 10 ganancias: longitud incorrecta
+            "malo": [1.0, 2.0, 3.0, [0.0] * 10],  # 10 ganancias: longitud incorrecta
             "malo2": "no soy un preset",
-            "bueno": (1.5, 4.0, -2.0, [1.0] * 9),
+            "bueno": [1.5, 4.0, -2.0, [1.0] * 9],
         },
     }
-    original = mw.load_config
-    mw.load_config = lambda: basura
+    ruta = Path(cfg_manager_mod.CONFIG_PATH)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(basura), encoding="utf-8")
     try:
         window._apply_config()  # no debe lanzar
     finally:
-        mw.load_config = original
+        ruta.unlink(missing_ok=True)
     # Valores no coercibles -> defaults intactos
     assert window.enhancer.volume == pytest.approx(1.0)
     assert window.enhancer.bass == pytest.approx(0.0)
