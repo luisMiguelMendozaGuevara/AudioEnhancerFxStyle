@@ -22,10 +22,10 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pyinstaller
+        run: python -m pip install --upgrade pip && python -m pip install . pyinstaller
 
       - name: Build executable
         shell: cmd
