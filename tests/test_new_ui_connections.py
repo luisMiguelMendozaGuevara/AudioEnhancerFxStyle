@@ -147,6 +147,24 @@ def test_spectrum_flows_to_home_widget(window):
     assert window._pages["home"]._spectrum._smooth  # datos recibidos
 
 
+def test_spectrum_necesario_tambien_en_ecualizador(window, monkeypatch):
+    """El Ecualizador dibuja barras de espectro: la FFT debe seguir activa ahí.
+
+    Regresion: el gate R3-B2 solo miraba la pagina Inicio, asi que al abrir el
+    ecualizador el SpectrumWorker paraba y las barras quedaban congeladas
+    (no actualizaban automaticamente)."""
+    monkeypatch.setattr(window, "isVisible", lambda: True)
+    window._closing = False
+    window._stack.setCurrentWidget(window._pages["home"])
+    window._update_spectrum_needed()
+    assert window._spectrum_worker.needed.is_set()
+    window._navigate_to("equalizer")
+    assert window._spectrum_worker.needed.is_set()  # el EQ tambien dibuja espectro
+    window._navigate_to("presets")
+    assert not window._spectrum_worker.needed.is_set()  # pagina sin espectro
+    window._navigate_to("home")
+
+
 def test_route_guard_updates_audio_page(window):
     page = window._pages["audio"]
     page._input_combo.setCurrentText("")

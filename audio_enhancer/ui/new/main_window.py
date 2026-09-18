@@ -502,10 +502,12 @@ class NewMainWindow(QMainWindow):
     def _update_spectrum_needed(self) -> None:
         """(R3-B2) FFT del spectrum solo cuando alguien la mira.
 
-        Visible = ventana al frente Y página Home en primer plano Y app no
-        cerrándose. Se llama en cada cambio de visibilidad o de página."""
-        home = self._pages.get("home")
-        needed = not self._closing and self.isVisible() and home is not None and self._stack.currentWidget() is home
+        Visible = ventana al frente Y una pagina que DIBUJA espectro en primer
+        plano (Inicio y Ecualizador, ambas pintan las barras) Y app no
+        cerrándose. Se llama en cada cambio de visibilidad o de pagina."""
+        current = self._stack.currentWidget()
+        watched = {p for p in (self._pages.get("home"), self._pages.get("equalizer")) if p is not None}
+        needed = not self._closing and self.isVisible() and current in watched
         self._spectrum_worker.set_needed(needed)
 
     def _navigate_to(self, page_id: str) -> None:
