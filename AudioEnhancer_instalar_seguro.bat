@@ -43,7 +43,11 @@ if errorlevel 1 (
         exit /b 1
     )
 )
-"%PYTHON_EXE%" -m pip install --upgrade numpy scipy PySide6 PyAudioWPatch
+if exist "%APP_DIR%requirements.txt" (
+    "%PYTHON_EXE%" -m pip install --upgrade -r "%APP_DIR%requirements.txt"
+) else (
+    "%PYTHON_EXE%" -m pip install --upgrade numpy scipy PySide6 PyAudioWPatch
+)
 if errorlevel 1 (
     echo [ERROR] No se pudieron instalar las dependencias.
     pause

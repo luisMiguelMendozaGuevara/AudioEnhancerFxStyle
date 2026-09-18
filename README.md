@@ -143,7 +143,7 @@ You can also use `AudioEnhancer_instalar_seguro.bat`, which creates the virtual 
 ## Building an Executable
 
 ```bat
-.venv\Scripts\pip install pyinstaller
+.venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --windowed ^
   --name AudioEnhancerFxStyle ^
   --icon assets\app.ico ^

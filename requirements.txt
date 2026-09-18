@@ -1,6 +1,7 @@
+# Dependencias de EJECUCION de AudioEnhancerFxStyle.
+# Fuente de verdad: pyproject.toml [project].dependencies (mantener alineado).
+# Instalar:  pip install -r requirements.txt
 numpy>=1.26
 scipy>=1.11
-customtkinter>=5.2
+PySide6>=6.7,<7
 PyAudioWPatch>=0.2.12.8
-pystray>=0.19
-Pillow>=10.0
