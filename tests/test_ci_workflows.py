@@ -39,4 +39,6 @@ def test_pyinstaller_instala_desde_pyproject():
     text = _read("pyinstaller-build.yml")
     assert "requirements.txt" not in text, "requirements.txt fue purgado en Fase 0"
     assert "pyproject.toml" in text, "la cache de pip debe seguir a pyproject.toml"
-    assert "pip install . pyinstaller" in text
+    # Instala desde el extra [dev] de pyproject (runtime + pytest/ruff/pyinstaller):
+    # las versiones viven en UN solo lugar (pyproject.toml), no en el workflow.
+    assert '".[dev]"' in text
