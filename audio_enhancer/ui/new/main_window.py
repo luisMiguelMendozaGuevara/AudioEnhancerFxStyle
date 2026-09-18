@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import time
+import threading
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -29,7 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...config import load_config, save_config
+from ...audio_controller import AudioController
+from ...autostart import is_enabled as _autostart_enabled
+from ...autostart import set_enabled as _set_auto_start
+from ...config_manager import ConfigManager
 from ...constants import (
     CABLE_KEYWORDS,
     DANGER,
@@ -40,8 +43,8 @@ from ...constants import (
     WINDOW_TITLE,
     resource_path,
 )
-from ...dsp import Enhancer
-from ...engine import AudioEngine, _pa
+from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
+from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, translate
 from ...startup_metrics import StartupMetrics
 from .audio_state import AudioState
@@ -56,7 +59,6 @@ from .widgets.sidebar import Sidebar
 from .widgets.status_bar import AppStatusBar
 
 logger = logging.getLogger("audio_enhancer.new_ui")
-AUTOSTART_KEY = "AudioEnhancerFxStyle"
 
 
 class DeviceDiscoveryWorker(QObject):
@@ -108,21 +110,41 @@ class SpectrumWorker(QThread):
     def __init__(self, enhancer: Enhancer, parent=None) -> None:
         super().__init__(parent)
         self.enhancer = enhancer
-        self.active = __import__("threading").Event()
+        # "active": hay audio que analizar (motor corriendo).
+        # "needed" (R3-B2): alguien está MIRANDO el espectro (ventana
+        # visible + página Home en primer plano). Van separados a propósito:
+        # con audio activo y configuración abierta, la FFT a 30 Hz era trabajo
+        # y allocations puras — nadie ve el canvas de Home desde otra página
+        # ni con la app minimizada a bandeja.
+        self.active = threading.Event()
+        self.needed = threading.Event()
+        self.needed.set()  # sin cablear: comportamiento clásico (siempre activo)
 
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
 
+    def set_needed(self, needed: bool) -> None:
+        self.needed.set() if needed else self.needed.clear()
+
     def run(self) -> None:
         while not self.isInterruptionRequested():
-            if self.active.is_set() and self.enhancer.spectrum_enabled:
+            if self.active.is_set() and self.needed.is_set() and self.enhancer.spectrum_enabled:
                 try:
                     self.enhancer.compute_spectrum()
                     spec = self.enhancer.spectrum
                     self.spectrum_ready.emit(None if spec is None else [float(v) for v in spec])
                 except Exception:
-                    pass
-            self.msleep(33)
+                    # Antes tragaba la excepción en silencio: un fallo repetido
+                    # del analizador dejaba el espectro congelado sin rastro
+                    # en el log. Se deja constancia (debug: es el hilo visual,
+                    # no debe ensuciar el log de producción).
+                    logger.debug("compute_spectrum falló", exc_info=True)
+                self.msleep(33)  # ~30 Hz: cadencia de refresco visual
+            else:
+                # Inactivo (sin audio / sin espectro visible): sondeo perezoso
+                # del flag a 4 Hz, sin FFT ni allocations. La reactivación al
+                # volver a Home sigue siendo imperceptible (<250 ms).
+                self.msleep(250)
 
     def stop(self) -> None:
         self.requestInterruption()
@@ -135,18 +157,24 @@ class NewMainWindow(QMainWindow):
         super().__init__()
         self.metrics = startup_metrics or StartupMetrics()
         self.metrics.mark("root_created")
+        # (R3-C2) Esquema/coerción/defaults del config.json en ConfigManager.
+        self._config = ConfigManager(eq_band_count=len(EQ_BANDS))
         self.language = detect_system_language()
         # Idioma guardado por el usuario tiene prioridad sobre el del sistema.
         with contextlib.suppress(Exception):
-            saved_cfg = load_config() or {}
-            saved_lang = saved_cfg.get("language")
-            if saved_lang in ("es", "en"):
-                self.language = saved_lang
-            saved_theme = saved_cfg.get("theme")
-            if saved_theme in ("dark", "light"):
-                Theme.set_mode(saved_theme)
+            saved_cfg = self._config.load()
+            if saved_cfg["language"]:
+                self.language = saved_cfg["language"]
+            if saved_cfg["theme"]:
+                Theme.set_mode(saved_cfg["theme"])
         self.enhancer = Enhancer()
-        self.engine = AudioEngine(self.enhancer)
+        # (R3-C1) El ciclo de vida del audio vive en AudioController: la
+        # ventana solo reacciona a sus señales para pintar la interfaz.
+        self.controller = AudioController(self.enhancer)
+        self.controller.started.connect(self._on_audio_started)
+        self.controller.output_ready.connect(self._on_output_ready)
+        self.controller.start_failed.connect(self._on_start_failed)
+        self.controller.stopped.connect(self._on_audio_stopped)
         self.state = AudioState(self)
         # Estado -> DSP: los controles de las paginas escriben en AudioState;
         # sin este puente los sliders no afectan al audio (solo a la UI).
@@ -161,13 +189,14 @@ class NewMainWindow(QMainWindow):
         self.custom_presets = {}
         self.loopbacks = []
         self.speakers = []
-        self.pa = None
-        self.running = False
-        self.go = False
+        # Preferencias de comportamiento (página Config): antes los tres
+        # checkboxes eran decorativos — se pintaban y no afectaban a nada (C1).
+        self.minimize_to_tray = True
+        self.autostart_audio = True
+        self.notifications_enabled = True
         self._closing = False
-        self._open_output_args = None
-        self._prefill_deadline = 0.0
         self._active_names = ("", "")
+        self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
         self._keep_src = ""
         self._keep_out = ""
         self._latest_spectrum = None
@@ -182,6 +211,25 @@ class NewMainWindow(QMainWindow):
         self.setStyleSheet(Theme.stylesheet())
         self._build_shell()
         self._build_tray()
+
+    # ---------- puentes de compatibilidad hacia el controlador ----------
+
+    @property
+    def engine(self):
+        """Motor de audio (dueño: AudioController)."""
+        return self.controller.engine
+
+    @property
+    def running(self) -> bool:
+        return self.controller.running
+
+    @property
+    def go(self) -> bool:
+        return self.controller.go
+
+    @go.setter
+    def go(self, value: bool) -> None:
+        self.controller.go = bool(value)
 
     def _t(self, text):
         return translate(text, self.language)
@@ -295,29 +343,74 @@ class NewMainWindow(QMainWindow):
         self.visual_timer.timeout.connect(self._refresh_visuals)
         self.visual_timer.start()
         self._sidebar.set_active("home")
-        logger.warning("New UI ready: %s", self.metrics.summary())
+        self._update_spectrum_needed()
+        logger.info("New UI ready: %s", self.metrics.summary())
 
     def _wire_pages(self) -> None:
+        # (R3-C3) La ventana SOLO usa las señales y métodos públicos de las
+        # páginas: cero accesos a widgets internos ajenos.
         home = self._pages["home"]
-        home._start_button.clicked.connect(self.toggle_audio)
-        home._preset_combo.currentTextChanged.connect(self._on_preset_selected)
-        home._ab_button.clicked.connect(self.toggle_ab)
-        home._volume_slider.valueChanged.connect(self._on_volume_slider)
+        home.start_requested.connect(self.toggle_audio)
+        home.preset_selected.connect(self._on_preset_selected)
+        home.ab_toggled.connect(self.toggle_ab)
+        home.volume_edited.connect(self._on_volume_slider)
         audio_page = self._pages["audio"]
-        audio_page._input_combo.currentTextChanged.connect(self._route_guard)
-        audio_page._output_combo.currentTextChanged.connect(self._route_guard)
-        audio_page._refresh_btn.clicked.connect(self._start_discovery)
-        self._pages["presets"]._save_btn.clicked.connect(self._save_custom_preset)
+        audio_page.input_selected.connect(self._route_guard)
+        audio_page.output_selected.connect(self._route_guard)
+        audio_page.refresh_requested.connect(self._start_discovery)
+        audio_page.latency_selected.connect(self._on_latency_pref_changed)
+        self._pages["presets"].save_requested.connect(self._save_custom_preset)
         self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
-        self._pages["settings"]._autostart_check.toggled.connect(self._toggle_autostart)
-        self._pages["settings"]._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        self._pages["settings"]._lang_combo.currentTextChanged.connect(self._on_language_changed)
+        settings = self._pages["settings"]
+        settings.autostart_toggled.connect(self._toggle_autostart)
+        settings.theme_selected.connect(self._on_theme_changed)
+        settings.language_selected.connect(self._on_language_changed)
+        # (C1) los tres checkboxes de comportamiento ya SÍ gobiernan la app.
+        settings.tray_pref_changed.connect(self._on_tray_pref_changed)
+        settings.autostart_audio_pref_changed.connect(self._on_autostart_audio_changed)
+        settings.notifications_pref_changed.connect(self._on_notifications_changed)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
         """Aplica el idioma EN CALIENTE recargando toda la interfaz."""
         code = "en" if text.strip().lower().startswith("engl") else "es"
         self._apply_language(code)
+
+    # ---------- preferencias de comportamiento (C1) ----------
+
+    def _on_tray_pref_changed(self, on: bool) -> None:
+        self.minimize_to_tray = bool(on)
+        self._save_config()
+
+    def _on_autostart_audio_changed(self, on: bool) -> None:
+        self.autostart_audio = bool(on)
+        self._save_config()
+
+    def _on_notifications_changed(self, on: bool) -> None:
+        self.notifications_enabled = bool(on)
+        self._save_config()
+
+    def _sync_behavior_checks(self) -> None:
+        """Refleja las preferencias de comportamiento en la página Config.
+
+        Se llama tras aplicar config y tras reconstruir páginas: los widgets
+        nuevos nacen con los defaults de la clase, no con los del usuario."""
+        settings = self._pages.get("settings")
+        if settings is None:
+            return
+        settings.set_behavior(self.minimize_to_tray, self.autostart_audio, self.notifications_enabled)
+
+    def _notify_tray(self, body: str) -> None:
+        """Notificación de bandeja respetando la preferencia del usuario."""
+        if self.tray is None or not self.notifications_enabled:
+            return
+        with contextlib.suppress(Exception):
+            self.tray.showMessage(
+                WINDOW_TITLE,
+                body,
+                QSystemTrayIcon.MessageIcon.Information,
+                2500,
+            )
 
     def _apply_language(self, code: str) -> None:
         """Aplica el idioma EN CALIENTE reconstruyendo solo las paginas.
@@ -334,6 +427,18 @@ class NewMainWindow(QMainWindow):
         self._rebuild_tray_menu()
         self._status_bar.retranslate(self._t)
 
+    def _on_latency_pref_changed(self, index: int) -> None:
+        """Guarda la preferencia de latencia (40/60/100 ms). Se aplica en el
+        próximo arranque del audio: cambiarla en caliente requeriría vaciar el
+        ring (glitch seguro)."""
+        ms = int(self._pages["audio"]._latency_combo.itemData(index) or 60)
+        self.state.latency_pref = ms
+        self._save_config()
+        if self.running:
+            self._status_bar.set_status_text(self._t("Latencia %d ms: se aplicara al reiniciar el audio.") % ms, WARN)
+        else:
+            self._status_bar.set_status_text(self._t("Latencia objetivo: %d ms") % ms, OK)
+
     def _on_theme_changed(self, index: int) -> None:
         """Cambia dark/white por indice reconstruyendo SOLO las paginas.
 
@@ -347,6 +452,8 @@ class NewMainWindow(QMainWindow):
         self._save_config()
         self.setStyleSheet(Theme.stylesheet())
         self._rebuild_pages()
+        # (B4) aquí había un SEGUNDO bloque idéntico aplicado tras el guard:
+        # código muerto desde la fusión gml5-v150, nunca llegaba a ejecutar.
 
     def _rebuild_pages(self) -> None:
         """Recrea las 6 paginas preservando motor, audio y seleccion."""
@@ -355,9 +462,9 @@ class NewMainWindow(QMainWindow):
             "home",
         )
         audio_old = self._pages.get("audio")
-        cur_src = audio_old._input_combo.currentText() if audio_old else ""
-        cur_out = audio_old._output_combo.currentText() if audio_old else ""
-        cur_preset = self._pages["home"]._preset_combo.currentText()
+        cur_src = audio_old.selected_source() if audio_old else ""
+        cur_out = audio_old.selected_output() if audio_old else ""
+        cur_preset = self._pages["home"].preset_text()
         for page in self._pages.values():
             self._stack.removeWidget(page)
             page.deleteLater()
@@ -378,23 +485,28 @@ class NewMainWindow(QMainWindow):
         # Repoblar el combo de preset sin disparar _on_preset_selected
         # (machacaria los valores manuales del usuario).
         home = self._pages["home"]
-        home._preset_combo.blockSignals(True)
-        self._refresh_preset_list(cur_preset or None)
-        home._preset_combo.blockSignals(False)
+        home.set_preset_items(list(self._all_presets()))  # repoblar sin disparar _on_preset_selected
+        if cur_preset:
+            home.set_preset(cur_preset)
         self._sync_ui_from_state()
         self._route_guard()
-        home._set_running(self.running)
+        home.set_running(self.running)
         settings = self._pages["settings"]
-        settings._autostart_check.blockSignals(True)
-        settings._autostart_check.setChecked(self._autostart_enabled())
-        settings._autostart_check.blockSignals(False)
-        settings._lang_combo.blockSignals(True)
-        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
-        settings._lang_combo.blockSignals(False)
-        settings._theme_combo.blockSignals(True)
-        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
-        settings._theme_combo.blockSignals(False)
+        settings.set_autostart_checked(_autostart_enabled())
+        settings.set_language_text("English" if self.language == "en" else "Espanol")
+        settings.set_theme_index(1 if Theme.mode == "light" else 0)
+        self._sync_behavior_checks()
         self._navigate_to(current_page)
+        self._update_spectrum_needed()
+
+    def _update_spectrum_needed(self) -> None:
+        """(R3-B2) FFT del spectrum solo cuando alguien la mira.
+
+        Visible = ventana al frente Y página Home en primer plano Y app no
+        cerrándose. Se llama en cada cambio de visibilidad o de página."""
+        home = self._pages.get("home")
+        needed = not self._closing and self.isVisible() and home is not None and self._stack.currentWidget() is home
+        self._spectrum_worker.set_needed(needed)
 
     def _navigate_to(self, page_id: str) -> None:
         page = self._pages.get(page_id)
@@ -403,6 +515,7 @@ class NewMainWindow(QMainWindow):
         if self._stack.currentWidget() is page:
             return
         self._stack.setCurrentWidget(page)
+        self._update_spectrum_needed()
         # Transicion de entrada: fade corto ease-out. El efecto se retira al
         # terminar para no penalizar el repintado del spectrum/meters.
         effect = QGraphicsOpacityEffect(page)
@@ -415,25 +528,17 @@ class NewMainWindow(QMainWindow):
         anim.finished.connect(lambda: page.setGraphicsEffect(None))
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _ensure_pa(self):
-        """Instancia PyAudio unica para toda la vida de la app."""
-        if self.pa is None:
-            self.pa = _pa().PyAudio()
-        return self.pa
-
     def _start_discovery(self) -> None:
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
             return
         audio_page = self._pages.get("audio")
         if audio_page is None:
             return
-        if audio_page._input_combo.count():
-            self._keep_src = audio_page._input_combo.currentText()
-        if audio_page._output_combo.count():
-            self._keep_out = audio_page._output_combo.currentText()
-        audio_page._input_combo.setEnabled(False)
-        audio_page._output_combo.setEnabled(False)
-        audio_page._refresh_btn.setEnabled(False)
+        if audio_page.has_source_items():
+            self._keep_src = audio_page.selected_source()
+        if audio_page.has_output_items():
+            self._keep_out = audio_page.selected_output()
+        audio_page.set_devices_enabled(False)
         self._status_bar.set_status_text(self._t("Detectando dispositivos..."), WARN)
         thread = QThread(self)
         worker = DeviceDiscoveryWorker()
@@ -459,9 +564,7 @@ class NewMainWindow(QMainWindow):
         audio_page.set_loopbacks([d["name"] for d in self.loopbacks])
         audio_page.set_speakers([d["name"] for d in self.speakers])
         self._restore_device_selection()
-        audio_page._input_combo.setEnabled(True)
-        audio_page._output_combo.setEnabled(True)
-        audio_page._refresh_btn.setEnabled(True)
+        audio_page.set_devices_enabled(True)
         if error:
             self._status_bar.set_status_text(self._t("No se pudieron detectar dispositivos: %s") % error, DANGER)
         else:
@@ -469,8 +572,8 @@ class NewMainWindow(QMainWindow):
             self._route_guard()
             self._status_bar.set_status_text(self._t("Dispositivos listos."), OK)
             # Auto-arranque: el audio queda activo al abrir (como la UI
-            # original). Solo si el ruteo es válido y no está ya corriendo.
-            if self.go and not self.running:
+            # original) SOLO si el usuario no lo desactivó en Config (C1).
+            if self.autostart_audio and self.go and not self.running:
                 QTimer.singleShot(0, self.toggle_audio)
         self.metrics.mark("devices_ready")
 
@@ -479,9 +582,9 @@ class NewMainWindow(QMainWindow):
         src_names = [d["name"] for d in self.loopbacks]
         out_names = [d["name"] for d in self.speakers]
         if self._keep_src in src_names:
-            audio_page._input_combo.setCurrentText(self._keep_src)
+            audio_page.set_input(self._keep_src)
         if self._keep_out in out_names:
-            audio_page._output_combo.setCurrentText(self._keep_out)
+            audio_page.set_output(self._keep_out)
         self._keep_src = ""
         self._keep_out = ""
 
@@ -491,44 +594,37 @@ class NewMainWindow(QMainWindow):
 
     def _auto_select(self) -> None:
         audio_page = self._pages["audio"]
-        if self.loopbacks and not audio_page._input_combo.currentText():
+        if self.loopbacks and not audio_page.selected_source():
             idx = 0
             for i, d in enumerate(self.loopbacks):
                 if any(k in d["name"].lower() for k in CABLE_KEYWORDS):
                     idx = i
                     break
-            audio_page._input_combo.setCurrentIndex(idx)
-        if self.speakers and not audio_page._output_combo.currentText():
-            audio_page._output_combo.setCurrentIndex(0)
-
-    @staticmethod
-    def _norm(name):
-        return "".join(name.lower().split())
+            audio_page.select_source_index(idx)
+        if self.speakers and not audio_page.selected_output():
+            audio_page.select_output_index(0)
 
     def _route_guard(self, *_args) -> None:
         audio_page = self._pages["audio"]
-        src_name = audio_page._input_combo.currentText() or ""
-        out_name = audio_page._output_combo.currentText() or ""
-        if not src_name or not out_name:
-            self.go = False
-            audio_page.set_route_warning(self._t("Selecciona una fuente y una salida."), WARN)
-            return
-        same = self._norm(src_name) == self._norm(out_name)
-        out_is_virtual = any(k in out_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
-        src_is_virtual = any(k in src_name.lower() for k in VIRTUAL_CABLE_KEYWORDS)
-        if same:
-            self.go = False
-            audio_page.set_route_warning(self._t("ECO: capturas y reproduces el mismo dispositivo."), DANGER)
-            return
-        if out_is_virtual:
-            self.go = False
-            audio_page.set_route_warning(self._t("La salida es virtual. Usa salida fisica."), DANGER)
-            return
-        self.go = True
-        if src_is_virtual:
-            audio_page.set_route_warning("Ruteo correcto: cable virtual -> salida fisica.", OK)
+        src_name = audio_page.selected_source() or ""
+        out_name = audio_page.selected_output() or ""
+        # (R3-C1) La VALIDACIÓN vive en AudioController.evaluate_route (pura,
+        # testeable sin Qt); aquí solo se traduce la clave y se colorea.
+        go, key = AudioController.evaluate_route(src_name, out_name)
+        self.controller.go = go
+        if key == "ROUTE_MISSING":
+            text, color = self._t("Selecciona una fuente y una salida."), WARN
+        elif key == "ROUTE_ECO":
+            text, color = self._t("ECO: capturas y reproduces el mismo dispositivo."), DANGER
+        elif key == "ROUTE_VIRTUAL_OUT":
+            text, color = self._t("La salida es virtual. Usa salida fisica."), DANGER
+        elif key == "ROUTE_OK_VIRTUAL":
+            # _t(): las claves ya estaban en el diccionario pero no se
+            # traducían (B2) — en inglés se veía el texto español.
+            text, color = self._t("Ruteo correcto: cable virtual -> salida fisica."), OK
         else:
-            audio_page.set_route_warning("Info: capturas un parlante fisico.", Theme.TEXT_DIM)
+            text, color = self._t("Info: capturas un parlante fisico."), Theme.TEXT_DIM
+        audio_page.set_route_warning(text, color)
 
     def _all_presets(self):
         presets = dict(PRESETS)
@@ -537,10 +633,10 @@ class NewMainWindow(QMainWindow):
 
     def _refresh_preset_list(self, keep=None) -> None:
         home = self._pages["home"]
-        current = keep or home._preset_combo.currentText()
-        names = list(self._all_presets().keys())
-        home.set_preset_items(names)
-        if current in self._all_presets():
+        all_presets = self._all_presets()  # (D2) una sola construcción del dict
+        current = keep or home.preset_text()
+        home.set_preset_items(list(all_presets))
+        if current in all_presets:
             home.set_preset(current)
         # La pagina Presets muestra ambas listas (antes quedaba vacia).
         presets_page = self._pages["presets"]
@@ -556,19 +652,31 @@ class NewMainWindow(QMainWindow):
         self._status_bar.set_status_text(self._t("Preset eliminado: %s") % name, WARN)
 
     def _on_preset_selected(self, name: str) -> None:
-        if not name or name not in self._all_presets():
+        raw = self._all_presets().get(name)
+        # (R3-C2) La validación de presets vive en ConfigManager.
+        preset = self._config.sanitize_preset(raw) if raw is not None else None
+        if preset is None:
             return
-        vol, bass, treble, gains = self._all_presets()[name]
-        self.enhancer.volume = float(vol)
-        self.enhancer.bass = float(bass)
-        self.enhancer.treble = float(treble)
-        self.enhancer.eq_gains = [float(g) for g in gains]
+        vol, bass, treble, gains = preset
+        # Cambio EN BLOQUE via instantánea inmutable: el DSP ve un conjunto
+        # coherente de parámetros, nunca una mezcla a medias (H5/H6).
+        self.enhancer.apply_params(
+            EnhancerParams(
+                volume=vol,
+                bass=bass,
+                treble=treble,
+                eq_gains=tuple(gains),
+                limiter=bool(self.enhancer.limiter),
+                compressor=bool(self.enhancer.compressor),
+                blend=float(self.enhancer.blend),
+            )
+        )
         self._sync_ui_from_state()
         self.state.preset_name = name
 
     def _save_custom_preset(self) -> None:
         presets_page = self._pages["presets"]
-        name = presets_page._name_entry.text().strip()
+        name = presets_page.name_text()
         if not name:
             self._status_bar.set_status_text(self._t("Escribe un nombre para el preset."), WARN)
             return
@@ -578,7 +686,7 @@ class NewMainWindow(QMainWindow):
             float(self.enhancer.treble),
             [float(g) for g in self.enhancer.eq_gains],
         )
-        presets_page._name_entry.clear()
+        presets_page.clear_name_entry()
         self._refresh_preset_list(name)
         self._save_config()
 
@@ -612,8 +720,8 @@ class NewMainWindow(QMainWindow):
         audio_page = self._pages.get("audio")
         if audio_page is None:
             return  # recarga de interfaz en curso
-        src_text = audio_page._input_combo.currentText()
-        out_text = audio_page._output_combo.currentText()
+        src_text = audio_page.selected_source()
+        out_text = audio_page.selected_output()
         source = next((d for d in self.loopbacks if d["name"] == src_text), None)
         output = next((d for d in self.speakers if d["name"] == out_text), None)
         if not self.go or source is None or output is None:
@@ -621,32 +729,24 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("Revisa el ruteo."), DANGER)
             return
         try:
-            self._start_audio(source, output)
+            # (R3-C1) Negociación de tasa, reset de estado DSP y prefill viven
+            # en el controlador; esta ventana solo pinta su señal 'started'.
+            self.controller.start(source, output, drift_target_ms=self.state.latency_pref)
         except Exception as exc:
             logger.exception("Failed to start")
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
-    def _start_audio(self, source, output) -> None:
-        logger.warning("Auto/manual start: %s -> %s", source["name"], output["name"])
-        self._ensure_pa()
-        rate = int(output.get("defaultSampleRate", 48000))
-        if rate < 8000 or rate > 384000:
-            rate = 48000
-        if rate != self.enhancer.sample_rate:
-            self.enhancer.sample_rate = rate
-            self.enhancer._spec_meta = None
-        self.engine.configure_ring(rate)
-        self.engine.start_capture(self.pa, source["index"], rate)
-        self.running = True
+    # ---------- slots de señales del AudioController ----------
+
+    def _on_audio_started(self, src_name: str, out_name: str, rate: int) -> None:
+        """Captura abierta: reflejar el estado ACTIVO en la interfaz."""
         self._spectrum_worker.set_active(True)
-        self._active_names = (source["name"], output["name"])
-        self._prefill_deadline = time.time() + 0.5
-        self._open_output_args = (output["index"], rate)
+        self._active_names = (src_name, out_name)
         self.state.processing = True
-        self.state.input_device = source["name"]
-        self.state.output_device = output["name"]
+        self.state.input_device = src_name
+        self.state.output_device = out_name
         self._status_bar.set_processing(True)
-        self._status_bar.set_route(source["name"], output["name"])
+        self._status_bar.set_route(src_name, out_name)
         self._status_bar.set_sample_rate(rate)
         self._header_status.setText("ACTIVE")
         self._header_status.setStyleSheet(
@@ -654,100 +754,103 @@ class NewMainWindow(QMainWindow):
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
         )
         self._status_bar.set_status_text(self._t("Activando salida..."), WARN)
-        QTimer.singleShot(10, self._poll_prefill)
 
-    def _poll_prefill(self) -> None:
-        if not self.running:
-            return
-        if self.engine.fill() >= self.engine.nframes // 2 or time.time() > self._prefill_deadline:
-            self._open_output()
-        else:
-            QTimer.singleShot(10, self._poll_prefill)
+    def _on_output_ready(self, latency: float) -> None:
+        """Salida abierta tras el prefill: punto de operación estable."""
+        self._status_bar.set_latency(latency)
+        self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
+        self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
+        self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)
 
-    def _open_output(self) -> None:
-        if self._open_output_args is None:
-            return
-        out_index, rate = self._open_output_args
-        self._open_output_args = None
-        try:
-            self.engine.open_output(out_index, rate)
-            latency = (self.engine.nframes / rate) * 1000
-            logger.warning("Audio activo: ring buffer a %d Hz, latencia %.1f ms", rate, latency)
-            self._status_bar.set_latency(latency)
-            self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
-            self._pages["audio"].set_info(rate=rate, buffer=1024, latency=latency, status="Processing")
-        except Exception as exc:
-            self.engine.stop()
-            self.running = False
-            self._spectrum_worker.set_active(False)
-            self.state.processing = False
-            self._status_bar.set_processing(False)
-            self._header_status.setText("")
-            self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
+    def _on_start_failed(self, message: str) -> None:
+        """La salida falló (el controlador ya liberó la captura)."""
+        self._spectrum_worker.set_active(False)
+        self.state.processing = False
+        self._status_bar.set_processing(False)
+        self._header_status.setText("")
+        self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % message, DANGER)
 
-    def _stop_audio(self) -> None:
-        logger.warning("Audio detenido por el usuario")
-        self.engine.stop()
-        self.running = False
+    def _on_audio_stopped(self) -> None:
+        """Parada limpia solicitada por el usuario."""
         self._spectrum_worker.set_active(False)
         self.state.processing = False
         self._status_bar.set_processing(False)
         self._header_status.setText("")
         self._status_bar.set_status_text(self._t("Procesamiento detenido"), WARN)
         self._pages["audio"].set_info(status="Detenido")
+        self._notify_tray(self._t("Procesamiento detenido"))
+
+    def _stop_audio(self) -> None:
+        """Parada limpia: el controlador emite 'stopped' y la UI reacciona."""
+        self.controller.stop()
 
     def _receive_spectrum(self, values) -> None:
         self._latest_spectrum = values
 
     def _refresh_visuals(self) -> None:
-        peak = max(0.0, float(self.enhancer.level_peak))
-        self.state.input_level = peak
-        self.state.output_level = peak
+        # Medidores honestos: la ENTRADA es RMS (energía percibida del material
+        # capturado) y la SALIDA es pico post-DSP (lo que realmente puede
+        # acercarse al techo). Antes ambos mostraban el mismo valor.
+        self.state.input_level = float(self.enhancer.level_rms)
+        self.state.output_level = float(self.enhancer.level_peak)
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None
+        # Métricas del motor ~1 Hz (el timer corre a 33 ms): contadores vivos
+        # de underruns/huecos/deriva en la barra de estado.
+        self._metrics_tick = (self._metrics_tick + 1) % 30
+        if self._metrics_tick == 0:
+            if self.running:
+                s = self.engine.stats_snapshot()
+                text = "unders %d | huecos %d | deriva %d fr" % (
+                    s["output_underruns"],
+                    s["gap_blocks"],
+                    s["drift_adjust_frames"],
+                )
+            else:
+                text = ""
+            self._status_bar.set_metrics(text)
 
     def _apply_config(self) -> None:
-        config = load_config()
-        if not config:
-            self._refresh_preset_list(DEFAULT_PRESET)
-            return
-        self._keep_src = str(config.get("source", "") or "")
-        self._keep_out = str(config.get("output", "") or "")
-        custom = config.get("custom_presets")
-        if isinstance(custom, dict):
-            self.custom_presets = {}
-            for name, value in custom.items():
-                if isinstance(value, (list, tuple)) and len(value) == 4:
-                    self.custom_presets[str(name)] = tuple(value)
-        self.enhancer.volume = float(config.get("volume", 1.0))
-        self.enhancer.bass = float(config.get("bass", 0.0))
-        self.enhancer.treble = float(config.get("treble", 0.0))
-        gains = config.get("eq_gains")
-        if isinstance(gains, list) and len(gains) == len(self.enhancer.eq_gains):
-            self.enhancer.eq_gains = [float(g) for g in gains]
-        self.enhancer.limiter = bool(config.get("limiter", True))
-        self.enhancer.compressor = bool(config.get("compressor", True))
-        self._refresh_preset_list(config.get("preset", DEFAULT_PRESET))
+        # (R3-C2) ConfigManager devuelve SIEMPRE el diccionario completo y
+        # saneado: coerción, defaults y validación de presets viven allí.
+        cfg = self._config.load()
+        self._keep_src = cfg["source"]
+        self._keep_out = cfg["output"]
+        self.custom_presets = dict(cfg["custom_presets"])
+        self.enhancer.apply_params(
+            EnhancerParams(
+                volume=cfg["volume"],
+                bass=cfg["bass"],
+                treble=cfg["treble"],
+                eq_gains=tuple(cfg["eq_gains"]) if cfg["eq_gains"] is not None else tuple(self.enhancer.eq_gains),
+                limiter=cfg["limiter"],
+                compressor=cfg["compressor"],
+                blend=float(self.enhancer.blend),
+            )
+        )
+        # Preferencia de latencia persistida (40/60/100 ms), ya validada.
+        self.state.latency_pref = cfg["latency_pref"]
+        self._pages["audio"].set_latency_pref(self.state.latency_pref)
+        # (C1) preferencias de comportamiento, antes checkboxes decorativos.
+        self.minimize_to_tray = cfg["minimize_to_tray"]
+        self.autostart_audio = cfg["autostart_audio"]
+        self.notifications_enabled = cfg["notifications"]
+        self._refresh_preset_list(cfg["preset"])
         self._sync_ui_from_state()
+        self._sync_behavior_checks()
         settings = self._pages["settings"]
-        settings._autostart_check.blockSignals(True)
-        settings._autostart_check.setChecked(self._autostart_enabled())
-        settings._autostart_check.blockSignals(False)
-        settings._lang_combo.blockSignals(True)
-        settings._lang_combo.setCurrentText("English" if self.language == "en" else "Espanol")
-        settings._lang_combo.blockSignals(False)
-        settings._theme_combo.blockSignals(True)
-        settings._theme_combo.setCurrentIndex(1 if Theme.mode == "light" else 0)
-        settings._theme_combo.blockSignals(False)
+        settings.set_autostart_checked(_autostart_enabled())
+        settings.set_language_text("English" if self.language == "en" else "Espanol")
+        settings.set_theme_index(1 if Theme.mode == "light" else 0)
 
     def _save_config(self) -> None:
         audio_page = self._pages["audio"]
         home = self._pages["home"]
         config = {
-            "source": audio_page._input_combo.currentText(),
-            "output": audio_page._output_combo.currentText(),
-            "preset": home._preset_combo.currentText() or DEFAULT_PRESET,
+            "source": audio_page.selected_source(),
+            "output": audio_page.selected_output(),
+            "preset": home.preset_text() or DEFAULT_PRESET,
             "language": self.language,
             "volume": float(self.enhancer.volume),
             "bass": float(self.enhancer.bass),
@@ -756,44 +859,19 @@ class NewMainWindow(QMainWindow):
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
             "theme": Theme.mode,
+            "latency_pref": int(self.state.latency_pref),
+            "minimize_to_tray": bool(self.minimize_to_tray),
+            "autostart_audio": bool(self.autostart_audio),
+            "notifications": bool(self.notifications_enabled),
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
-        if not save_config(config):
+        if not self._config.save(config):
             logger.warning("Failed to save config")
 
-    def _autostart_enabled(self) -> bool:
-        try:
-            import winreg
-
-            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_READ)
-            try:
-                val, _ = winreg.QueryValueEx(key, AUTOSTART_KEY)
-                return bool(val)
-            finally:
-                winreg.CloseKey(key)
-        except Exception:
-            return False
-
-    def _set_auto_start(self, enable: bool) -> bool:
-        try:
-            import winreg
-
-            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE)
-            if enable:
-                target = """ + sys.executable + "" "" + os.path.abspath(sys.argv[0]) + """
-                winreg.SetValueEx(key, AUTOSTART_KEY, 0, winreg.REG_SZ, target)
-            else:
-                with contextlib.suppress(FileNotFoundError):
-                    winreg.DeleteValue(key, AUTOSTART_KEY)
-            winreg.CloseKey(key)
-            return True
-        except Exception:
-            return False
-
     def _toggle_autostart(self, enabled: bool) -> None:
-        if self._set_auto_start(enabled):
+        # La lógica winreg vive en audio_enhancer.autostart (SRP): antes el
+        # comando se escribía corrupto al registro (comillas perdidas).
+        if _set_auto_start(enabled):
             self._status_bar.set_status_text(self._t("Inicio con Windows: activado"), OK)
         else:
             self._status_bar.set_status_text(self._t("Inicio con Windows: fallo"), DANGER)
@@ -812,6 +890,15 @@ class NewMainWindow(QMainWindow):
             self.showNormal()
             self.raise_()
             self.activateWindow()
+        self._update_spectrum_needed()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._update_spectrum_needed()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._update_spectrum_needed()
 
     def _quit_from_tray(self) -> None:
         self._shutdown()
@@ -831,14 +918,14 @@ class NewMainWindow(QMainWindow):
         if self._discovery_thread and self._discovery_thread.isRunning():
             self._discovery_thread.quit()
             self._discovery_thread.wait(1500)
-        with contextlib.suppress(Exception):
-            if self.pa:
-                self.pa.terminate()
+        self.controller.terminate_pa()
         if self.tray:
             self.tray.hide()
 
     def closeEvent(self, event) -> None:
-        if self.tray and self.tray.isVisible():
+        # (C1) el checkbox "Minimizar a bandeja al cerrar" ahora decide:
+        # desmarcado, cerrar la ventana sale de verdad.
+        if self.tray and self.tray.isVisible() and self.minimize_to_tray:
             self._save_config()
             self.hide()
             self._status_bar.set_status_text(self._t("Procesando en segundo plano."), WARN)

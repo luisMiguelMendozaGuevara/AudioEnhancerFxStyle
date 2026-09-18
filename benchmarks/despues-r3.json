@@ -1,0 +1,40 @@
+{
+  "bypass": {
+    "p50_us": 13.3,
+    "p95_us": 17.6,
+    "max_us": 59.3,
+    "alloc_b_per_block": 35.9
+  },
+  "eq_only": {
+    "p50_us": 151.7,
+    "p95_us": 164.8,
+    "max_us": 211.7,
+    "alloc_b_per_block": 53.5
+  },
+  "full": {
+    "p50_us": 158.3,
+    "p95_us": 172.5,
+    "max_us": 224.1,
+    "alloc_b_per_block": 53.5
+  },
+  "full_hot": {
+    "p50_us": 1518.9,
+    "p95_us": 1656.4,
+    "max_us": 2659.8,
+    "alloc_b_per_block": 165.1
+  },
+  "spectrum": {
+    "p50_us": 27.8,
+    "p95_us": 35.8,
+    "max_us": 399.2
+  },
+  "_meta": {
+    "chunk": 1024,
+    "sample_rate": 48000,
+    "block_ms": 21.33,
+    "warmup_blocks": 30,
+    "measure_blocks": 400,
+    "python": "3.12.14",
+    "numpy": "2.1.3"
+  }
+}

@@ -1,11 +1,11 @@
 """Capa de interfaz gráfica.
 
-UI activa: ``ui.new.NewMainWindow`` (rediseño con navegación por páginas y
-sistema de temas dark/white). La UI anterior (``QtMainWindow``) se conserva
-como ruta de rollback; no recibe nuevas funciones.
+UI activa y única: ``ui.new.NewMainWindow`` (navegación por páginas,
+sistema de temas dark/white). La UI Qt heredada (``QtMainWindow``) fue
+purgada: era código muerto desde la migración (commit aa239e7) y solo
+sumaba superficie de mantenimiento.
 """
 
 from .new import NewMainWindow
-from .qt_main_window import QtMainWindow
 
-__all__ = ["NewMainWindow", "QtMainWindow"]
+__all__ = ["NewMainWindow"]

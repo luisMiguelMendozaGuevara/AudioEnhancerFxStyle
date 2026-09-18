@@ -100,3 +100,34 @@ def test_dsp_processes_with_eq_active(qapp):
     for _ in range(10):
         y = enhancer.process(block)
     assert np.abs(y).mean() > np.abs(block).mean()
+
+
+def test_dedupe_de_senales_de_nivel(qapp):
+    """R3-B1: los setters de nivel no re-emiten si el delta es sub-umbral.
+
+    Sin dedupe, cada tick del timer (30 Hz) disparaba dos emits + repaint
+    aunque los medidores pintaran lo mismo."""
+    from audio_enhancer.ui.new.audio_state import AudioState
+
+    state = AudioState()
+    recibidos = {"in": 0, "out": 0}
+    state.input_level_changed.connect(lambda _v: recibidos.__setitem__("in", recibidos["in"] + 1))
+    state.output_level_changed.connect(lambda _v: recibidos.__setitem__("out", recibidos["out"] + 1))
+
+    state.input_level = 0.5
+    state.output_level = 0.5
+    assert recibidos == {"in": 1, "out": 1}
+
+    # Sub-umbral (RMS 0.001 / pico 0.002): no emite.
+    state.input_level = 0.5005
+    state.output_level = 0.501
+    assert recibidos == {"in": 1, "out": 1}
+
+    # Sobre umbral: emite. Los umbrales son DISTINTOS por métrica.
+    state.input_level = 0.5005 + 0.002  # delta 0.002 >= 0.001 (RMS)
+    state.output_level = 0.501 + 0.002  # delta 0.002 >= 0.002 (pico)
+    assert recibidos == {"in": 2, "out": 2}
+
+    # El mismo delta no alcanza para el pico si está justo por debajo.
+    state.output_level = 0.503 + 0.0019
+    assert recibidos["out"] == 2

@@ -1,9 +1,8 @@
-"""Lanzador experimental de la UI rediseñada (NewMainWindow).
+"""Lanzador alternativo de la UI (NewMainWindow).
 
-La UI activa del proyecto (main.py) sigue usando ``ui.qt_main_window``; esta
-entrada permite probar el rediseño de ``audio_enhancer/ui/new`` sin tocar la
-UI activa. No usa candado de instancia única a propósito: así puede ejecutarse
-en paralelo con la app publicada para comparar.
+Equivalente a ``python -m audio_enhancer.main`` pero sin candado de
+instancia única ni precarga de scipy: útil para desarrollo y para ejecutar
+dos instancias en paralelo mientras se compara configuraciones.
 
 Uso:  python run_new_ui.py
 """

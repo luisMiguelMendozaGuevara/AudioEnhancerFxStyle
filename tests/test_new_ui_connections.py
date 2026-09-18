@@ -25,18 +25,25 @@ def qapp():
 
 
 @pytest.fixture(scope="module")
-def window(qapp):
+def window(qapp, tmp_path_factory):
+    # Aislar de la config real (R3-C2): la ventana ahora lee vía
+    # ConfigManager, que resuelve CONFIG_PATH del módulo en cada operación;
+    # basta redirigir esa ruta a un tmp para no tocar el config del usuario.
+    import audio_enhancer.config_manager as cfg_manager_mod
     from audio_enhancer.ui.new import main_window as mw
 
-    # Aislar de la config real: los tests de idioma no deben contaminar
-    # el config.json del usuario ni el arranque de otras ventanas.
-    orig_load, orig_save = mw.load_config, mw.save_config
-    mw.load_config = lambda: {}
-    mw.save_config = lambda cfg: True
+    tmp_cfg = tmp_path_factory.mktemp("ui-config") / "config.json"
+    orig_path = cfg_manager_mod.CONFIG_PATH
+    # Idioma FIJADO en español (B3): los tests no pueden depender del
+    # locale del host.
+    orig_detect = mw.detect_system_language
+    cfg_manager_mod.CONFIG_PATH = str(tmp_cfg)
+    mw.detect_system_language = lambda: "es"
     w = mw.NewMainWindow()
     w.build_content()
     yield w
-    mw.load_config, mw.save_config = orig_load, orig_save
+    cfg_manager_mod.CONFIG_PATH = orig_path
+    mw.detect_system_language = orig_detect
     w._closing = True
     w.engine.stop()
     w._spectrum_worker.stop()
@@ -156,3 +163,97 @@ def test_language_persisted_in_config(window):
     assert window.language == "en"
     window._on_language_changed("Espanol")
     assert window.language == "es"
+
+
+# ---------- R2: checkboxes de comportamiento (C1) y config robusta (C2) ----------
+
+
+def test_checkboxs_de_comportamiento_gobiernan_la_app(window):
+    """Los tres checkboxes de Config dejaron de ser decorativos."""
+    window._pages["settings"]._tray_check.setChecked(False)
+    assert window.minimize_to_tray is False
+    window._pages["settings"]._autostart_audio_check.setChecked(False)
+    assert window.autostart_audio is False
+    window._pages["settings"]._notifications_check.setChecked(False)
+    assert window.notifications_enabled is False
+    # Restaurar: el default del producto es todo activado
+    window._pages["settings"]._tray_check.setChecked(True)
+    window._pages["settings"]._autostart_audio_check.setChecked(True)
+    window._pages["settings"]._notifications_check.setChecked(True)
+
+
+def test_config_con_tipos_raros_no_tumba_el_arranque(window):
+    """(C2/R3-C2) config.json editado a mano con tipos incorrectos -> defaults.
+
+    La basura se escribe en la ruta AISLADA del fixture (CONFIG_PATH del
+    módulo config_manager, redirigido a tmp) y ConfigManager la sanea."""
+    import json
+    from pathlib import Path
+
+    import audio_enhancer.config_manager as cfg_manager_mod
+
+    basura = {
+        "volume": "alto",
+        "bass": None,
+        "treble": [1, 2],
+        "eq_gains": ["a", 2, 3],
+        "latency_pref": "rapida",
+        "limiter": "sí",
+        "custom_presets": {
+            "malo": [1.0, 2.0, 3.0, [0.0] * 10],  # 10 ganancias: longitud incorrecta
+            "malo2": "no soy un preset",
+            "bueno": [1.5, 4.0, -2.0, [1.0] * 9],
+        },
+    }
+    ruta = Path(cfg_manager_mod.CONFIG_PATH)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(basura), encoding="utf-8")
+    try:
+        window._apply_config()  # no debe lanzar
+    finally:
+        ruta.unlink(missing_ok=True)
+    # Valores no coercibles -> defaults intactos
+    assert window.enhancer.volume == pytest.approx(1.0)
+    assert window.enhancer.bass == pytest.approx(0.0)
+    assert window.enhancer.limiter is True  # bool estricto: "sí" no es bool
+    assert window.state.latency_pref == 60
+    # Presets: el malformado se descarta, el correcto sobrevive saneado
+    assert "malo" not in window.custom_presets
+    assert "malo2" not in window.custom_presets
+    vol, bass, treble, gains = window.custom_presets["bueno"]
+    assert vol == pytest.approx(1.5) and gains == [pytest.approx(1.0)] * 9
+
+
+def test_preset_de_longitud_incorrecta_es_rechazado(window):
+    """(C2) seleccionar un preset con 10 ganancias no desalinea el DSP."""
+    window.custom_presets["roto"] = (1.0, 0.0, 0.0, [2.0] * 10)
+    window._on_preset_selected("roto")
+    assert len(window.enhancer.eq_gains) == 9  # el DSP queda intacto
+    del window.custom_presets["roto"]
+
+
+def test_preferences_de_comportamiento_sobreviven_al_rebuild(window):
+    """(C1) tras reconstruir páginas los checkboxes reflejan la preferencia."""
+    window.minimize_to_tray = False
+    window.notifications_enabled = False
+    window._rebuild_pages()
+    settings = window._pages["settings"]
+    assert settings._tray_check.isChecked() is False
+    assert settings._notifications_check.isChecked() is False
+    assert settings._autostart_audio_check.isChecked() is True  # default
+    window.minimize_to_tray = True
+    window.notifications_enabled = True
+
+
+def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
+    """R3-B2: la FFT solo corre si la ventana es visible, la página activa es
+    Home y la app no se está cerrando (offscreen: isVisible() es False)."""
+    window._closing = False
+    window._update_spectrum_needed()
+    assert not window._spectrum_worker.needed.is_set()  # ventana nunca mostrada
+
+    # Simular condiciones de "alguien mira": visible + Home activa.
+    window._spectrum_worker.needed.set()
+    assert window._spectrum_worker.needed.is_set()
+    window._spectrum_worker.set_needed(False)
+    assert not window._spectrum_worker.needed.is_set()

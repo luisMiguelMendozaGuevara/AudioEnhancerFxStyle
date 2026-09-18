@@ -34,3 +34,19 @@ def test_preserva_caracteres_unicode(tmp_path):
     save_config({"preset": "Noche (vol. baja)"}, str(p))
     raw = json.loads(p.read_text(encoding="utf-8"))
     assert raw["preset"] == "Noche (vol. baja)"
+
+
+def test_guardado_atomico_no_deja_tmp_ni_corrupta(tmp_path):
+    """R3-B3: el guardado escribe a .tmp + fsync + os.replace.
+
+    Tras un guardado correcto no queda residuo .tmp; el contenido del
+    archivo siempre es un JSON completo (nunca una escritura a medias)."""
+    p = tmp_path / "config.json"
+    assert save_config({"volume": 0.5}, str(p)) is True
+    assert not list(tmp_path.glob("*.tmp"))  # el .tmp fue renombrado, no copiado
+    assert json.loads(p.read_text(encoding="utf-8")) == {"volume": 0.5}
+
+    # Segundo guardado sobre el mismo archivo: replace atómico, sin mezcla.
+    assert save_config({"volume": 0.9, "eq": [0] * 9}, str(p)) is True
+    assert load_config(str(p)) == {"volume": 0.9, "eq": [0] * 9}
+    assert not list(tmp_path.glob("*.tmp"))

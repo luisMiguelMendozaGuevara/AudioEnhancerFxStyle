@@ -35,7 +35,7 @@ def _preload_scipy() -> None:
 def main() -> int:
     setup_logging()
     logger = logging.getLogger("audio_enhancer.main")
-    logger.warning("Arranque de %s", APP_NAME)
+    logger.info("Arranque de %s", APP_NAME)
     if acquire_single_instance() is None:
         return 0  # ya hay otra instancia corriendo
     app = QApplication.instance() or QApplication([])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -11,18 +11,37 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ....constants import LATENCY_CHOICES_MS
 from ..audio_state import AudioState
 from ..theme.colors import Theme
 
 
 class AudioPage(QWidget):
-    """Pagina de dispositivos y ruteo de audio."""
+    """Pagina de dispositivos y ruteo de audio.
+
+    API pública (R3-C3): señales input_selected/output_selected/
+    refresh_requested/latency_selected hacia la ventana; lecturas y
+    selecciones por métodos públicos (selected_source, select_output,
+    set_devices_enabled...)."""
+
+    input_selected = Signal(str)
+    output_selected = Signal(str)
+    refresh_requested = Signal()
+    latency_selected = Signal(int)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._t = t or (lambda text: text)
         self._build()
+        # (R3-C3) Cableado de la propia página: la ventana no toca combos.
+        self._input_combo.currentTextChanged.connect(self.input_selected.emit)
+        self._output_combo.currentTextChanged.connect(self.output_selected.emit)
+        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        self._latency_combo.currentIndexChanged.connect(self._on_latency_index)
+
+    def _on_latency_index(self, index: int) -> None:
+        self.latency_selected.emit(int(self._latency_combo.itemData(index) or 60))
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -106,6 +125,21 @@ class AudioPage(QWidget):
         self._refresh_btn.setMinimumHeight(38)
         rl.addWidget(self._refresh_btn)
 
+        # Latency preference
+        # LATENCIA (fuente en español): antes la clave era "LATENCY" y el
+        # diccionario estaba invertido — la UI española mostraba inglés.
+        lbl_lat = QLabel(self._t("LATENCIA"))
+        lbl_lat.setStyleSheet(
+            f"color: {Theme.TEXT_SECONDARY}; font-size: {Theme.FONT_SIZE_SM}px; "
+            f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
+        )
+        rl.addWidget(lbl_lat)
+        self._latency_combo = QComboBox()
+        for ms in LATENCY_CHOICES_MS:
+            self._latency_combo.addItem(f"{ms} ms", ms)
+        self._latency_combo.setCurrentIndex(1)  # 60 ms por defecto
+        rl.addWidget(self._latency_combo)
+
         layout.addWidget(route_card)
 
         # Info card
@@ -122,7 +156,14 @@ class AudioPage(QWidget):
         il.addWidget(lbl2)
 
         self._info_labels = {}
-        for key, text in [("rate", "Sample Rate"), ("buffer", "Buffer"), ("latency", "Latency"), ("status", "Status")]:
+        # Etiquetas técnicas con FUENTE en español (el diccionario traduce
+        # es->en): antes usaban claves inglesas y quedaban invertidas.
+        for key, text in [
+            ("rate", "Tasa de muestreo"),
+            ("buffer", "Buffer"),
+            ("latency", "Latencia"),
+            ("status", "Estado"),
+        ]:
             row = QHBoxLayout()
             k = QLabel(self._t(text))
             k.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent;")
@@ -164,6 +205,40 @@ class AudioPage(QWidget):
 
     def set_output(self, name: str) -> None:
         self._output_combo.setCurrentText(name)
+
+    # ---------- API pública de lectura/selección (R3-C3) ----------
+
+    def selected_source(self) -> str:
+        """Fuente seleccionada (texto del combo de entrada)."""
+        return self._input_combo.currentText()
+
+    def selected_output(self) -> str:
+        """Salida seleccionada (texto del combo de salida)."""
+        return self._output_combo.currentText()
+
+    def has_source_items(self) -> bool:
+        return self._input_combo.count() > 0
+
+    def has_output_items(self) -> bool:
+        return self._output_combo.count() > 0
+
+    def select_source_index(self, index: int) -> None:
+        self._input_combo.setCurrentIndex(index)
+
+    def select_output_index(self, index: int) -> None:
+        self._output_combo.setCurrentIndex(index)
+
+    def set_devices_enabled(self, enabled: bool) -> None:
+        """Habilita/deshabilita selectores y botón de refresco (descubrimiento)."""
+        self._input_combo.setEnabled(enabled)
+        self._output_combo.setEnabled(enabled)
+        self._refresh_btn.setEnabled(enabled)
+
+    def set_latency_pref(self, ms: int) -> None:
+        idx = list(LATENCY_CHOICES_MS).index(ms) if ms in LATENCY_CHOICES_MS else 1
+        self._latency_combo.blockSignals(True)
+        self._latency_combo.setCurrentIndex(idx)
+        self._latency_combo.blockSignals(False)
 
     def set_route_warning(self, text: str, color: str) -> None:
         self._route_label.setText(text)

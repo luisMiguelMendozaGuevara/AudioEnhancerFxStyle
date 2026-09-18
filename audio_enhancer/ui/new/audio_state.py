@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
+from ...constants import LATENCY_CHOICES_MS
+
+# Umbrales de dedupe por métrica (R3-B1): los medidores se refrescan a ~30
+# Hz y cada emit termina en widget.update() (repaint). Re-emitir el mismo
+# valor — o ruido sub-píxel — paga CPU sin cambio visible. Cada métrica
+# tiene su sensibilidad: el RMS de entrada es una señal ya suavizada
+# (tau~85 ms) y basta un umbral fino; el pico de salida oscila más y usa
+# uno algo mayor. Ambos quedan por debajo de la resolución de 1 px del
+# widget (~0,002-0,008 de FS según ancho), así el ojo no nota el recorte.
+_LEVEL_EPS_RMS = 0.001
+_LEVEL_EPS_PEAK = 0.002
+
 
 class AudioState(QObject):
     """Estado centralizado de la aplicacion.
@@ -17,7 +29,6 @@ class AudioState(QObject):
     output_device_changed = Signal(str)
     input_level_changed = Signal(float)
     output_level_changed = Signal(float)
-    peak_level_changed = Signal(float)
     latency_changed = Signal(float)
     sample_rate_changed = Signal(int)
     spectrum_changed = Signal(object)
@@ -29,6 +40,7 @@ class AudioState(QObject):
     eq_changed = Signal(object)
     limiter_changed = Signal(bool)
     compressor_changed = Signal(bool)
+    latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
     def __init__(self, parent=None):
@@ -40,7 +52,6 @@ class AudioState(QObject):
         # Niveles
         self._input_level: float = 0.0
         self._output_level: float = 0.0
-        self._peak_level: float = 0.0
         # Tecnico
         self._latency_ms: float = 0.0
         self._sample_rate: int = 48000
@@ -57,9 +68,8 @@ class AudioState(QObject):
         self._eq_gains: list[float] = [0.0] * 9
         self._limiter: bool = True
         self._compressor: bool = True
-        # Estado de ruta
-        self._route_ok: bool = False
-        self._route_warning: str = ""
+        # Preferencia de latencia (ms) elegida en la página Audio.
+        self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
 
     # --- Properties ---
 
@@ -99,8 +109,9 @@ class AudioState(QObject):
 
     @input_level.setter
     def input_level(self, value: float) -> None:
-        self._input_level = value
-        self.input_level_changed.emit(value)
+        if abs(value - self._input_level) >= _LEVEL_EPS_RMS:
+            self._input_level = value
+            self.input_level_changed.emit(value)
 
     @property
     def output_level(self) -> float:
@@ -108,17 +119,9 @@ class AudioState(QObject):
 
     @output_level.setter
     def output_level(self, value: float) -> None:
-        self._output_level = value
-        self.output_level_changed.emit(value)
-
-    @property
-    def peak_level(self) -> float:
-        return self._peak_level
-
-    @peak_level.setter
-    def peak_level(self, value: float) -> None:
-        self._peak_level = value
-        self.peak_level_changed.emit(value)
+        if abs(value - self._output_level) >= _LEVEL_EPS_PEAK:
+            self._output_level = value
+            self.output_level_changed.emit(value)
 
     @property
     def latency_ms(self) -> float:
@@ -224,20 +227,23 @@ class AudioState(QObject):
             self.compressor_changed.emit(value)
 
     @property
-    def route_ok(self) -> bool:
-        return self._route_ok
+    def latency_pref(self) -> int:
+        return self._latency_pref
 
-    @route_ok.setter
-    def route_ok(self, value: bool) -> None:
-        self._route_ok = value
+    @latency_pref.setter
+    def latency_pref(self, value: int) -> None:
+        value = int(value)
+        if value not in LATENCY_CHOICES_MS:
+            value = LATENCY_CHOICES_MS[1]
+        if self._latency_pref != value:
+            self._latency_pref = value
+            self.latency_pref_changed.emit(value)
 
-    @property
-    def route_warning(self) -> str:
-        return self._route_warning
-
-    @route_warning.setter
-    def route_warning(self, value: str) -> None:
-        self._route_warning = value
+    # (C5) route_ok/route_warning eliminados: nadie los leía ni escribía —
+    # el aviso de ruteo lo pinta AudioPage.set_route_warning directamente.
+    # (R3-A) update_levels_from_enhancer eliminado: nadie lo llamaba —
+    # el camino vivo es main_window._refresh_visuals, que escribe
+    # input_level/output_level directamente cada tick del timer.
 
     def sync_from_enhancer(self, enhancer) -> None:
         """Lee todo el estado del Enhancer y emite senales."""
@@ -250,7 +256,11 @@ class AudioState(QObject):
         self.ab_enabled = float(enhancer.blend) > 0.5
 
     def update_levels_from_enhancer(self, enhancer) -> None:
-        """Actualiza niveles y espectro desde el Enhancer (llamada periodica)."""
-        self.input_level = float(enhancer.level_peak)
+        """Actualiza niveles y espectro desde el Enhancer (llamada periodica).
+
+        Medidores honestos: entrada=RMS (energia del material capturado),
+        salida=pico post-DSP. Antes los tres medidores mostraban el mismo
+        valor de pico duplicado."""
+        self.input_level = float(enhancer.level_rms)
         self.output_level = float(enhancer.level_peak)
         self.peak_level = float(enhancer.level_peak)
