@@ -18,7 +18,11 @@ LOG_FILE = os.path.join(
 
 
 def setup_logging() -> None:
-    """Logging a archivo rotativo (256 KB x 2 backups) nivel WARNING."""
+    """Logging a archivo rotativo (256 KB x 2 backups) nivel INFO.
+
+    INFO (no WARNING): el R3 reclasifico arranque/parada/metricas como info;
+    con el nivel en WARNING esos mensajes se perdian y el log quedaba mudo.
+    El tamano esta acotado por la rotacion, asi que INFO es seguro."""
     log_dir = os.path.dirname(LOG_FILE)
     os.makedirs(log_dir, exist_ok=True)
     root = logging.getLogger()
@@ -27,7 +31,7 @@ def setup_logging() -> None:
     fh = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=256 * 1024, backupCount=2, encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(fh)
-    root.setLevel(logging.WARNING)
+    root.setLevel(logging.INFO)
 
 
 def _bring_existing_to_front() -> bool:
