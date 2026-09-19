@@ -40,10 +40,10 @@ jobs:
         # necesitan. El paquete no se instala: conftest añade la raiz al path.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "numpy>=1.26" "scipy>=1.11" "PySide6>=6.7,<7" "pytest>=8.0"
+          python -m pip install "numpy>=1.26" "scipy>=1.11" "PySide6>=6.7,<7" "pytest>=8.0" "pytest-cov>=5.0"
 
       - name: Compile Python source
         run: python -m compileall -q AudioEnhancer_FxStyle.py audio_enhancer tests
 
-      - name: Run tests
-        run: python -m pytest tests/ -q
+      - name: Run tests (con cobertura)
+        run: python -m pytest tests/ -q --cov=audio_enhancer --cov-report=term-missing

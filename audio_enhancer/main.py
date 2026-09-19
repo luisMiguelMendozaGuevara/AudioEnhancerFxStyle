@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import cast
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
@@ -43,7 +44,7 @@ def main() -> int:
     # 150%, ...) sin redondear a 1x/2x. Sin esto, en muchas laptops el layout
     # se ve borroso o desproporcionado. Debe fijarse ANTES de crear la app.
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    app = QApplication.instance() or QApplication([])
+    app = cast(QApplication, QApplication.instance() or QApplication([]))
     # Ocultar a la bandeja no debe terminar la aplicación.
     app.setQuitOnLastWindowClosed(False)
     window = NewMainWindow()

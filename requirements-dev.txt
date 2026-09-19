@@ -1,7 +1,10 @@
-# Dependencias de DESARROLLO (tests, lint, build).
+# Dependencias de DESARROLLO (tests, lint, tipos, build).
 # Fuente de verdad: pyproject.toml [project.optional-dependencies].dev.
 # Instalar:  pip install -r requirements-dev.txt
+# Con versiones exactas probadas:  pip install -r requirements-dev.txt -c constraints.txt
 -r requirements.txt
 pytest>=8.0
+pytest-cov>=5.0
+mypy>=1.10
 ruff>=0.6
 pyinstaller>=6.0

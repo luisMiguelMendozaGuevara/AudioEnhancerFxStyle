@@ -135,15 +135,15 @@ class EffectsPage(QWidget):
 
         self._limiter_card = EffectCard(self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True)
         self._limiter_card._slider.setEnabled(False)
-        self._limiter_card._toggle.setChecked(True)
-        if self._limiter_card._toggle:
+        if self._limiter_card._toggle is not None:
+            self._limiter_card._toggle.setChecked(True)
             self._limiter_card._toggle.toggled.connect(self._on_limiter_toggle)
         layout.addWidget(self._limiter_card)
 
         self._compressor_card = EffectCard(self._t("Compresor RMS"), 0.0, 1.0, 1.0, "", has_toggle=True)
         self._compressor_card._slider.setEnabled(False)
-        self._compressor_card._toggle.setChecked(True)
-        if self._compressor_card._toggle:
+        if self._compressor_card._toggle is not None:
+            self._compressor_card._toggle.setChecked(True)
             self._compressor_card._toggle.toggled.connect(self._on_compressor_toggle)
         layout.addWidget(self._compressor_card)
 
@@ -160,19 +160,23 @@ class EffectsPage(QWidget):
         self._state.treble = v
 
     def _on_bass_toggle(self, on) -> None:
-        self._bass_card._toggle.setText("ON" if on else "OFF")
+        if self._bass_card._toggle is not None:
+            self._bass_card._toggle.setText("ON" if on else "OFF")
         self._state.bass = self._bass_card.value() if on else 0.0
 
     def _on_treble_toggle(self, on) -> None:
-        self._treble_card._toggle.setText("ON" if on else "OFF")
+        if self._treble_card._toggle is not None:
+            self._treble_card._toggle.setText("ON" if on else "OFF")
         self._state.treble = self._treble_card.value() if on else 0.0
 
     def _on_limiter_toggle(self, on) -> None:
-        self._limiter_card._toggle.setText("ON" if on else "OFF")
+        if self._limiter_card._toggle is not None:
+            self._limiter_card._toggle.setText("ON" if on else "OFF")
         self._state.limiter = on
 
     def _on_compressor_toggle(self, on) -> None:
-        self._compressor_card._toggle.setText("ON" if on else "OFF")
+        if self._compressor_card._toggle is not None:
+            self._compressor_card._toggle.setText("ON" if on else "OFF")
         self._state.compressor = on
 
     def set_bass(self, v) -> None:

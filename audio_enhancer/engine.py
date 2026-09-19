@@ -10,6 +10,7 @@ orquestado desde el hilo de la UI.
 import logging
 import threading
 from functools import lru_cache
+from typing import Any
 
 import numpy as np
 
@@ -67,10 +68,10 @@ class AudioEngine:
     def __init__(self, enhancer) -> None:
         self.enhancer = enhancer
         self.lock = threading.Lock()
-        self.pa = None
-        self._pa_mod = None  # módulo pyaudiowpatch (para paFloat32/paContinue)
-        self.stream = None  # captura (input)
-        self.out_stream = None  # salida (output)
+        self.pa: Any = None
+        self._pa_mod: Any = None  # módulo pyaudiowpatch (para paFloat32/paContinue)
+        self.stream: Any = None  # captura (input)
+        self.out_stream: Any = None  # salida (output)
         # Estado del ring
         self.ring: np.ndarray | None = None
         self.rhead: int = 0  # posición de escritura (frames)
@@ -222,6 +223,8 @@ class AudioEngine:
     def _put(self, data) -> None:
         n = len(data)
         nframes = self.nframes
+        ring = self.ring
+        assert ring is not None  # configure_ring() lo crea antes de arrancar streams
         with self.lock:
             avail = self.rhead - self.whead
             if avail + n > nframes:
@@ -231,18 +234,18 @@ class AudioEngine:
                 self._stats["dropped_frames"] += drop  # métrica en vivo
                 idx = self.whead % nframes
                 if idx + drop <= nframes:
-                    self.ring[idx : idx + drop] = 0.0
+                    ring[idx : idx + drop] = 0.0
                 else:
                     a = nframes - idx
-                    self.ring[idx:] = 0.0
-                    self.ring[: drop - a] = 0.0
+                    ring[idx:] = 0.0
+                    ring[: drop - a] = 0.0
             idx = self.rhead % nframes
             if idx + n <= nframes:
-                self.ring[idx : idx + n] = data
+                ring[idx : idx + n] = data
             else:
                 a = nframes - idx
-                self.ring[idx:] = data[:a]
-                self.ring[: n - a] = data[a:]
+                ring[idx:] = data[:a]
+                ring[: n - a] = data[a:]
             self.rhead += n
 
     def _read(self, n):
@@ -253,14 +256,16 @@ class AudioEngine:
         fundidos de entrada/salida para que no haya chasquidos.
         """
         nframes = self.nframes
+        ring = self.ring
+        assert ring is not None  # configure_ring() lo crea antes de arrancar streams
         avail = self.rhead - self.whead
         if avail >= n:
             idx = self.whead % nframes
             if idx + n <= nframes:
-                data = self.ring[idx : idx + n].copy()
+                data = ring[idx : idx + n].copy()
             else:
                 a = nframes - idx
-                data = np.concatenate([self.ring[idx:], self.ring[: n - a]])
+                data = np.concatenate([ring[idx:], ring[: n - a]])
             self.whead += n
             # Solo se aplica fade-in al salir de un hueco. Mantener el estado
             # explícito evita perderlo en huecos consecutivos.
@@ -278,10 +283,10 @@ class AudioEngine:
         if m > 0:
             idx = self.whead % nframes
             if idx + m <= nframes:
-                real = self.ring[idx : idx + m].copy()
+                real = ring[idx : idx + m].copy()
             else:
                 a = nframes - idx
-                real = np.concatenate([self.ring[idx:], self.ring[: m - a]])
+                real = np.concatenate([ring[idx:], ring[: m - a]])
             self.whead += m
             out[:m] = real
             f = min(self._fade, m)

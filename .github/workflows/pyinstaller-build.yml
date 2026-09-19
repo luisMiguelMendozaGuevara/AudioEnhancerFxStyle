@@ -25,7 +25,8 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+        # -c constraints.txt: versiones EXACTAS probadas -> build reproducible.
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]" -c constraints.txt
 
       - name: Build executable
         shell: cmd

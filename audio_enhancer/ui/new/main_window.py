@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+from typing import Any
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -186,9 +187,9 @@ class NewMainWindow(QMainWindow):
         state.limiter_changed.connect(lambda on: setattr(self.enhancer, "limiter", bool(on)))
         state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
-        self.custom_presets = {}
-        self.loopbacks = []
-        self.speakers = []
+        self.custom_presets: dict[str, Any] = {}
+        self.loopbacks: list[dict[str, Any]] = []
+        self.speakers: list[dict[str, Any]] = []
         # Preferencias de comportamiento (página Config): antes los tres
         # checkboxes eran decorativos — se pintaban y no afectaban a nada (C1).
         self.minimize_to_tray = True
@@ -200,10 +201,10 @@ class NewMainWindow(QMainWindow):
         self._keep_src = ""
         self._keep_out = ""
         self._latest_spectrum = None
-        self._discovery_thread = None
-        self._discovery_worker = None
+        self._discovery_thread: Any = None
+        self._discovery_worker: Any = None
         self._spectrum_worker = SpectrumWorker(self.enhancer, self)
-        self.tray = None
+        self.tray: Any = None
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(Theme.DEFAULT_WIDTH, Theme.DEFAULT_HEIGHT)
         self.setMinimumSize(Theme.MIN_WIDTH, Theme.MIN_HEIGHT)
@@ -281,7 +282,7 @@ class NewMainWindow(QMainWindow):
         right_layout.addWidget(sep2)
 
         self._stack = QStackedWidget()
-        self._pages = {}
+        self._pages: dict[str, Any] = {}
         self._create_pages()
         for page in self._pages.values():
             self._stack.addWidget(page)

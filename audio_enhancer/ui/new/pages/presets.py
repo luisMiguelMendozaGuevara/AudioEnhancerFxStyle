@@ -146,8 +146,11 @@ class PresetsPage(QWidget):
     def set_included_presets(self, names: list[str]) -> None:
         while self._included_layout.count():
             item = self._included_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is None:
+                break
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         for name in names:
             row = QHBoxLayout()
             lbl = QLabel(name)
@@ -159,15 +162,21 @@ class PresetsPage(QWidget):
     def set_custom_presets(self, names: list[str]) -> None:
         while self._custom_layout.count():
             item = self._custom_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            if item.layout():
+            if item is None:
+                break
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            sub = item.layout()
+            if sub is not None:
                 # Clean up sub-layout items
-                sub = item.layout()
                 while sub.count():
                     si = sub.takeAt(0)
-                    if si.widget():
-                        si.widget().deleteLater()
+                    if si is None:
+                        break
+                    sw = si.widget()
+                    if sw is not None:
+                        sw.deleteLater()
         for name in names:
             row = QHBoxLayout()
             lbl = QLabel(name)

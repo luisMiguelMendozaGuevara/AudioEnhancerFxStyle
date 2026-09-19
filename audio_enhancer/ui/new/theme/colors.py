@@ -150,6 +150,56 @@ class Theme:
 
     mode = "dark"
 
+    # ---------- Paleta (la inyecta set_mode desde _PALETTES) ----------
+    # Anotadas explícitamente: se asignan con setattr() en set_mode, así que
+    # sin estas anotaciones el analizador estático no ve los atributos.
+    BACKGROUND: str
+    SURFACE: str
+    SURFACE_ELEVATED: str
+    SURFACE_HOVER: str
+    BORDER: str
+    BORDER_SOLID: str
+    BORDER_STRONG: str
+    BORDER_FOCUS: str
+    TEXT: str
+    TEXT_SECONDARY: str
+    TEXT_MUTED: str
+    TEXT_DIM: str
+    TEXT_ON_ACCENT: str
+    ACCENT: str
+    ACCENT_HOVER: str
+    ACCENT_PRESSED: str
+    ACCENT_SUBTLE: str
+    SUCCESS: str
+    SUCCESS_BG: str
+    WARNING: str
+    WARNING_BG: str
+    DANGER: str
+    DANGER_BG: str
+    INFO: str
+    INFO_BG: str
+    CONTROL_BG: str
+    CONTROL_BORDER: str
+    SPECTRUM_BG: str
+    SPECTRUM_BAR_LOW: str
+    SPECTRUM_BAR_MID: str
+    SPECTRUM_BAR_HIGH: str
+    SPECTRUM_BAR_PEAK: str
+    SPECTRUM_GRID: str
+    SPECTRUM_LABEL: str
+    METER_BG: str
+    METER_LOW: str
+    METER_MID: str
+    METER_HIGH: str
+    METER_PEAK: str
+    METER_CLIP: str
+    EQ_CURVE: str
+    EQ_GRID: str
+    EQ_BAND_DOT: str
+    EQ_BAND_DOT_HOVER: str
+    EQ_FILL: str
+    SIDEBAR_BG: str
+
     # ---------- Espaciado ----------
     SPACING_XS = 4
     SPACING_SM = 8

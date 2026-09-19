@@ -129,6 +129,12 @@ pip install -r requirements.txt
 python AudioEnhancer_FxStyle.py
 ```
 
+Para un entorno **reproducible** (versiones exactas probadas), añade el lockfile:
+
+```bat
+pip install -r requirements-dev.txt -c constraints.txt
+```
+
 You can also use `AudioEnhancer_instalar_seguro.bat`, which creates the virtual environment and installs dependencies for you.
 
 ## Recommended Audio Route

@@ -31,6 +31,11 @@ class HomePage(QWidget):
     ab_toggled = Signal()
     volume_edited = Signal(int)  # valor crudo del slider (0-200)
 
+    # Medidores creados en _build_meters_card mediante setattr(attr, ...):
+    # anotados aquí para el analizador estático.
+    _input_meter: LevelMeterWidget
+    _output_meter: LevelMeterWidget
+
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
