@@ -21,6 +21,20 @@ from .constants import CONFIG_PATH, DEFAULT_PRESET, LATENCY_CHOICES_MS
 
 logger = logging.getLogger("audio_enhancer.config_manager")
 
+# Rangos de la UI (única fuente de verdad de lo que el usuario puede pedir).
+# Se ACOTAN al cargar: un config.json editado a mano no puede colar un boost
+# desmedido al DSP (p. ej. volume=10, bass=50), que sonaría a estática/
+# saturación. Coinciden con los sliders: volumen 0..2x, bass/treble 0..+12 dB,
+# bandas EQ -12..+12 dB.
+VOLUME_MIN, VOLUME_MAX = 0.0, 2.0
+BASS_MIN, BASS_MAX = 0.0, 12.0
+TREBLE_MIN, TREBLE_MAX = 0.0, 12.0
+EQ_GAIN_MIN, EQ_GAIN_MAX = -12.0, 12.0
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
 
 class ConfigManager:
     """Esquema del config.json + coerción segura + defaults."""
@@ -64,7 +78,12 @@ class ConfigManager:
         ):
             return None
         try:
-            return (float(value[0]), float(value[1]), float(value[2]), [float(g) for g in value[3]])
+            return (
+                _clamp(float(value[0]), VOLUME_MIN, VOLUME_MAX),
+                _clamp(float(value[1]), BASS_MIN, BASS_MAX),
+                _clamp(float(value[2]), TREBLE_MIN, TREBLE_MAX),
+                [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in value[3]],
+            )
         except (TypeError, ValueError):
             return None
 
@@ -97,7 +116,7 @@ class ConfigManager:
         candidate = raw.get("eq_gains")
         if isinstance(candidate, list) and len(candidate) == self._eq_count:
             try:
-                eq_gains = [float(g) for g in candidate]
+                eq_gains = [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in candidate]
             except (TypeError, ValueError):
                 eq_gains = None
 
@@ -131,9 +150,9 @@ class ConfigManager:
             "preset": str(raw.get("preset", "") or "") or DEFAULT_PRESET,
             "language": language,
             "theme": theme,
-            "volume": self.as_float(raw.get("volume"), 1.0),
-            "bass": self.as_float(raw.get("bass"), 0.0),
-            "treble": self.as_float(raw.get("treble"), 0.0),
+            "volume": _clamp(self.as_float(raw.get("volume"), 1.0), VOLUME_MIN, VOLUME_MAX),
+            "bass": _clamp(self.as_float(raw.get("bass"), 0.0), BASS_MIN, BASS_MAX),
+            "treble": _clamp(self.as_float(raw.get("treble"), 0.0), TREBLE_MIN, TREBLE_MAX),
             "eq_gains": eq_gains,
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),

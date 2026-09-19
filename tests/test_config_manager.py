@@ -31,14 +31,43 @@ def test_as_bool_estricto():
 
 def test_sanitize_preset_valido_e_invalido():
     mgr = ConfigManager(eq_band_count=9)
-    ok = mgr.sanitize_preset([0.8, 2.0, -1.0, [0] * 9])
-    assert ok == (0.8, 2.0, -1.0, [0.0] * 9)
+    ok = mgr.sanitize_preset([0.8, 2.0, 1.0, [0] * 9])
+    assert ok == (0.8, 2.0, 1.0, [0.0] * 9)
     # Longitud de ganancias equivocada: fuera.
-    assert mgr.sanitize_preset([0.8, 2.0, -1.0, [0] * 8]) is None
+    assert mgr.sanitize_preset([0.8, 2.0, 1.0, [0] * 8]) is None
     # Tipos basura: fuera.
     assert mgr.sanitize_preset(" preset ") is None
-    assert mgr.sanitize_preset([0.8, 2.0, -1.0, "nueve"]) is None
-    assert mgr.sanitize_preset([0.8, 2.0, -1.0, ["a"] * 9]) is None
+    assert mgr.sanitize_preset([0.8, 2.0, 1.0, "nueve"]) is None
+    assert mgr.sanitize_preset([0.8, 2.0, 1.0, ["a"] * 9]) is None
+
+
+def test_load_acota_valores_al_rango_de_la_ui(tmp_path):
+    """Un config editado a mano no puede colar boosts desmedidos al DSP.
+
+    Regresion: volume/bass/treble/eq_gains se cargaban sin acotar; un
+    'volume': 10 o 'bass': 50 llegaba tal cual al DSP (saturaba/estatica)."""
+    import json
+
+    p = tmp_path / "extremos.json"
+    p.write_text(
+        json.dumps(
+            {
+                "volume": 10.0,
+                "bass": 50.0,
+                "treble": -3.0,
+                "eq_gains": [99, -99, 0, 0, 0, 0, 0, 0, 0],
+                "custom_presets": {"bestia": [9.0, 99.0, -9.0, [50] * 9]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    mgr = ConfigManager(eq_band_count=9, path=str(p))
+    cfg = mgr.load()
+    assert cfg["volume"] == 2.0  # tope del slider
+    assert cfg["bass"] == 12.0  # tope del slider
+    assert cfg["treble"] == 0.0  # el slider no baja de 0
+    assert cfg["eq_gains"][0] == 12.0 and cfg["eq_gains"][1] == -12.0
+    assert cfg["custom_presets"]["bestia"] == (2.0, 12.0, 0.0, [12.0] * 9)
 
 
 def test_load_defaults_sin_archivo(tmp_path):
