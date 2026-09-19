@@ -11,7 +11,10 @@ permissions:
 
 jobs:
   ruff:
-    runs-on: ubuntu-latest
+    # Windows: mypy necesita winreg/ctypes.windll (codigo Windows-only);
+    # en Ubuntu esos modulos no existen y el chequeo de tipos da falsos
+    # positivos. Ruff en si es multiplataforma.
+    runs-on: windows-latest
 
     steps:
       - name: Check out repository

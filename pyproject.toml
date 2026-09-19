@@ -3,7 +3,8 @@ name = "audio-enhancer-fxstyle"
 version = "1.5.2"
 description = "Real-time system audio enhancer for Windows (WASAPI loopback DSP)"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -39,6 +40,11 @@ ignore = ["UP031"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Layout plano: sin esto, setuptools ve dos paquetes de nivel superior
+# (assets/ y audio_enhancer/) y aborta con "Multiple top-level packages".
+[tool.setuptools.packages.find]
+include = ["audio_enhancer*"]
 
 [tool.mypy]
 python_version = "3.11"
