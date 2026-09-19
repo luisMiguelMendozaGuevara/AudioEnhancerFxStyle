@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import threading
 from typing import Any
 
@@ -44,6 +45,7 @@ from ...constants import (
     WINDOW_TITLE,
     resource_path,
 )
+from ...device_utils import is_bluetooth_name, pick_default_output
 from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
 from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, translate
@@ -209,7 +211,7 @@ class NewMainWindow(QMainWindow):
         self.tray: Any = None
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(Theme.DEFAULT_WIDTH, Theme.DEFAULT_HEIGHT)
-        self.setMinimumSize(Theme.MIN_WIDTH, Theme.MIN_HEIGHT)
+        self._apply_adaptive_min_size()
         self.setWindowIcon(QIcon(resource_path("app.ico")))
         self.setStyleSheet(Theme.stylesheet())
         self._build_shell()
@@ -309,6 +311,23 @@ class NewMainWindow(QMainWindow):
         self._pages["presets"] = PresetsPage(self.state, self._t)
         self._pages["settings"] = SettingsPage(self.state, self._t)
 
+    def _apply_adaptive_min_size(self) -> None:
+        """Tamaño mínimo según la pantalla: 900x600 va justo en 1280x720.
+
+        Se acota al área disponible menos un margen (barras de tareas y
+        decoración) sin bajar de un suelo usable. Si no hay pantalla
+        disponible (tests offscreen), se usa el mínimo nominal."""
+        min_w, min_h = Theme.MIN_WIDTH, Theme.MIN_HEIGHT
+        try:
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                min_w = min(min_w, max(760, avail.width() - 80))
+                min_h = min(min_h, max(500, avail.height() - 80))
+        except Exception:
+            logger.debug("No se pudo calcular el tamaño mínimo según pantalla", exc_info=True)
+        self.setMinimumSize(min_w, min_h)
+
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(QIcon(resource_path("app.ico")), self)
         self._rebuild_tray_menu()
@@ -372,6 +391,7 @@ class NewMainWindow(QMainWindow):
         settings.tray_pref_changed.connect(self._on_tray_pref_changed)
         settings.autostart_audio_pref_changed.connect(self._on_autostart_audio_changed)
         settings.notifications_pref_changed.connect(self._on_notifications_changed)
+        settings.diagnostics_requested.connect(self._export_diagnostics)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
@@ -392,6 +412,67 @@ class NewMainWindow(QMainWindow):
     def _on_notifications_changed(self, on: bool) -> None:
         self.notifications_enabled = bool(on)
         self._save_config()
+
+    def _export_diagnostics(self) -> None:
+        """Escribe un informe (versión, SO, config, dispositivos, métricas y
+        cola del log) para soporte. No toca audio."""
+        import platform
+
+        from ...constants import APP_VERSION
+        from ...single_instance import LOG_FILE
+
+        so = platform.system() + " " + platform.release() + " (" + platform.machine() + ")"
+        fx = (
+            "volume="
+            + str(self.enhancer.volume)
+            + " bass="
+            + str(self.enhancer.bass)
+            + " treble="
+            + str(self.enhancer.treble)
+        )
+        sw = (
+            "limiter="
+            + str(self.enhancer.limiter)
+            + " compressor="
+            + str(self.enhancer.compressor)
+            + " true_peak="
+            + str(self.enhancer.true_peak)
+        )
+        lines = [
+            "Audio Enhancer FxStyle " + APP_VERSION,
+            "Python " + platform.python_version() + " | " + so,
+            "",
+            "== Config ==",
+            "source=" + repr(self._keep_src) + " output=" + repr(self._keep_out),
+            fx,
+            sw,
+            "latency_pref=" + str(self.state.latency_pref) + " theme=" + Theme.mode + " language=" + self.language,
+            "eq_gains=" + str([round(float(g), 2) for g in self.enhancer.eq_gains]),
+            "",
+            "== Dispositivos (loopbacks) ==",
+        ]
+        lines += ["- " + str(d.get("name")) + " @ " + str(d.get("defaultSampleRate")) + " Hz" for d in self.loopbacks]
+        lines.append("== Dispositivos (salidas) ==")
+        lines += ["- " + str(d.get("name")) + " @ " + str(d.get("defaultSampleRate")) + " Hz" for d in self.speakers]
+        lines += ["", "== Motor ==", "running=" + str(self.running)]
+        if self.running:
+            lines.append("stats=" + str(self.engine.stats_snapshot()))
+        lines += ["", "== Log (cola) =="]
+        try:
+            with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
+                lines += [ln.rstrip(chr(10)) for ln in f.readlines()[-120:]]
+        except Exception:
+            lines.append("(no se pudo leer el log)")
+        dest = os.path.join(os.path.dirname(LOG_FILE), "diagnostico.txt")
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    print(ln, file=f)
+        except Exception:
+            logger.exception("No se pudo exportar el diagnostico")
+            self._status_bar.set_status_text(self._t("No se pudo guardar el diagnóstico."), DANGER)
+            return
+        self._status_bar.set_status_text(self._t("Diagnóstico guardado en %s") % dest, OK)
 
     def _sync_behavior_checks(self) -> None:
         """Refleja las preferencias de comportamiento en la página Config.
@@ -576,6 +657,7 @@ class NewMainWindow(QMainWindow):
             self._auto_select()
             self._route_guard()
             self._status_bar.set_status_text(self._t("Dispositivos listos."), OK)
+            self._maybe_warn_bluetooth()
             # Auto-arranque: el audio queda activo al abrir (como la UI
             # original) SOLO si el usuario no lo desactivó en Config (C1).
             if self.autostart_audio and self.go and not self.running:
@@ -607,7 +689,16 @@ class NewMainWindow(QMainWindow):
                     break
             audio_page.select_source_index(idx)
         if self.speakers and not audio_page.selected_output():
-            audio_page.select_output_index(0)
+            # Elige la salida más probable como principal (parlantes/auriculares)
+            # en vez de ciegamente la primera (podía ser HDMI/SPDIF).
+            audio_page.select_output_index(pick_default_output([d["name"] for d in self.speakers]))
+
+    def _maybe_warn_bluetooth(self) -> None:
+        """Aviso si la salida elegida es Bluetooth: su reloj es inestable y
+        añade latencia; 100 ms suele ser más estable que 60 ms."""
+        out = self._pages["audio"].selected_output() or ""
+        if is_bluetooth_name(out) and self.state.latency_pref < 100:
+            self._status_bar.set_status_text(self._t("Salida Bluetooth: usa 100 ms si oyes cortes."), WARN)
 
     def _route_guard(self, *_args) -> None:
         audio_page = self._pages["audio"]

@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -29,6 +30,7 @@ class SettingsPage(QWidget):
     tray_pref_changed = Signal(bool)
     autostart_audio_pref_changed = Signal(bool)
     notifications_pref_changed = Signal(bool)
+    diagnostics_requested = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -42,6 +44,7 @@ class SettingsPage(QWidget):
         self._tray_check.toggled.connect(self.tray_pref_changed.emit)
         self._autostart_audio_check.toggled.connect(self.autostart_audio_pref_changed.emit)
         self._notifications_check.toggled.connect(self.notifications_pref_changed.emit)
+        self._diag_btn.clicked.connect(self.diagnostics_requested.emit)
 
     def _card(self) -> QFrame:
         card = QFrame()
@@ -140,6 +143,22 @@ class SettingsPage(QWidget):
         )
         bl.addWidget(self._notifications_check)
         layout.addWidget(beh_card)
+
+        # Diagnóstico: exporta log + config + dispositivos para soporte.
+        diag_card = self._card()
+        dl = QVBoxLayout(diag_card)
+        dl.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
+        dl.setSpacing(Theme.SPACING_SM)
+        section4 = QLabel(self._t("DIAGNÓSTICO"))
+        section4.setStyleSheet(
+            f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
+            f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
+        )
+        dl.addWidget(section4)
+        self._diag_btn = QPushButton(self._t("Exportar diagnóstico"))
+        self._diag_btn.setMinimumHeight(34)
+        dl.addWidget(self._diag_btn)
+        layout.addWidget(diag_card)
 
         layout.addStretch()
         scroll.setWidget(container)

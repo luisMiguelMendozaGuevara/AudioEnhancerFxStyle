@@ -97,6 +97,22 @@ def test_true_peak_toggle_reaches_dsp(window):
     assert window.enhancer.true_peak is True
 
 
+def test_exportar_diagnostico_escribe_archivo(window, tmp_path, monkeypatch):
+    """C4: el diagnóstico se escribe sin tocar el audio."""
+    from audio_enhancer import single_instance
+
+    log = tmp_path / "audio_enhancer.log"
+    log.write_text("linea de log\n", encoding="utf-8")
+    monkeypatch.setattr(single_instance, "LOG_FILE", str(log))
+    window._export_diagnostics()
+    dest = tmp_path / "diagnostico.txt"
+    assert dest.exists()
+    contenido = dest.read_text(encoding="utf-8")
+    assert "Audio Enhancer FxStyle" in contenido
+    assert "== Config ==" in contenido
+    assert "linea de log" in contenido
+
+
 def test_ab_button_reaches_dsp(window):
     window.toggle_ab()
     assert window.enhancer.blend == pytest.approx(0.0)
