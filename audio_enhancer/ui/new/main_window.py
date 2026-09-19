@@ -176,6 +176,7 @@ class NewMainWindow(QMainWindow):
         self.controller.output_ready.connect(self._on_output_ready)
         self.controller.start_failed.connect(self._on_start_failed)
         self.controller.stopped.connect(self._on_audio_stopped)
+        self.controller.stream_lost.connect(self._on_stream_lost)
         self.state = AudioState(self)
         # Estado -> DSP: los controles de las paginas escriben en AudioState;
         # sin este puente los sliders no afectan al audio (solo a la UI).
@@ -789,6 +790,18 @@ class NewMainWindow(QMainWindow):
     def _stop_audio(self) -> None:
         """Parada limpia: el controlador emite 'stopped' y la UI reacciona."""
         self.controller.stop()
+
+    def _on_stream_lost(self, reason: str) -> None:
+        """Un dispositivo se desconectó o el driver falló en caliente.
+
+        El controlador ya detuvo el audio (emitió 'stopped' antes). Aquí se
+        avisa al usuario y se refresca la lista de dispositivos para que el
+        ruteo apunte a uno válido."""
+        self._status_bar.set_status_text(
+            self._t("Se perdió el dispositivo de %s. Revisa el ruteo.") % self._t(reason), DANGER
+        )
+        self._notify_tray(self._t("Se perdió el dispositivo de %s.") % self._t(reason))
+        self._start_discovery()
 
     def _receive_spectrum(self, values) -> None:
         self._latest_spectrum = values

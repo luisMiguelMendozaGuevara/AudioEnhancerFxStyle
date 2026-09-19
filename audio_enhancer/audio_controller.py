@@ -45,6 +45,9 @@ class AudioController(QObject):
     start_failed = Signal(str)
     # El usuario (o un fallo) detuvo el audio
     stopped = Signal()
+    # Un stream dejó de estar activo (dispositivo desconectado, error de
+    # driver): la ventana avisa y refresca la lista de dispositivos.
+    stream_lost = Signal(str)
 
     def __init__(self, enhancer, parent=None) -> None:
         super().__init__(parent)
@@ -58,6 +61,12 @@ class AudioController(QObject):
         self._prefill_timer = QTimer(self)
         self._prefill_timer.setInterval(10)
         self._prefill_timer.timeout.connect(self._poll_prefill)
+        # Watchdog de streams: cada 2 s comprueba que captura y salida siguen
+        # activos. Si un USB/Bluetooth se desconecta o el driver falla, el
+        # callback deja de llegar y antes la app quedaba en silencio sin avisar.
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(2000)
+        self._watchdog.timeout.connect(self._on_watchdog)
 
     # ---------- ruteo (puro: sin estado, sin Qt, testeable en seco) ----------
 
@@ -124,6 +133,7 @@ class AudioController(QObject):
         self._open_output_args = (output["index"], rate)
         self.started.emit(source["name"], output["name"], rate)
         self._prefill_timer.start()
+        self._watchdog.start()
 
     def _poll_prefill(self) -> None:
         if not self.running:
@@ -163,9 +173,38 @@ class AudioController(QObject):
         """Detiene y cierra ambos streams (idempotente)."""
         logger.info("Audio detenido por el usuario")
         self._prefill_timer.stop()
+        self._watchdog.stop()
         self._open_output_args = None
         self.engine.stop()
         was_running = self.running
         self.running = False
         if was_running:
             self.stopped.emit()
+
+    # ---------- watchdog de streams (dispositivo desconectado / driver) ----------
+
+    def check_streams(self) -> str | None:
+        """Motivo si un stream dejó de estar activo, o None si todo sigue vivo.
+
+        Puro respecto a Qt (solo lee ``is_active()`` de los streams): se puede
+        testear con un engine falso. Devuelve "captura"/"salida"."""
+        if not self.running:
+            return None
+        for label, stream in (("captura", self.engine.stream), ("salida", self.engine.out_stream)):
+            if stream is None:
+                continue
+            try:
+                active = bool(stream.is_active())
+            except Exception:
+                active = False  # stream muerto tras desconectar el dispositivo
+            if not active:
+                return label
+        return None
+
+    def _on_watchdog(self) -> None:
+        reason = self.check_streams()
+        if reason is None:
+            return
+        logger.warning("Stream de %s detenido inesperadamente; se detiene el audio", reason)
+        self.stop()
+        self.stream_lost.emit(reason)
