@@ -108,6 +108,32 @@ class AudioController(QObject):
                 logger.debug("PyAudio.terminate falló en el apagado", exc_info=True)
             self.pa = None
 
+    # ---------- negociación de tasa ----------
+
+    @staticmethod
+    def negotiate_rate(source: dict, output: dict) -> int:
+        """Tasa común de captura y salida, robusta ante datos raros.
+
+        Regla (código H5): manda la FUENTE (loopback); si su tasa falta o es
+        absurda, se usa la de la SALIDA; si tampoco, 48000. Captura y salida
+        SIEMPRE abren a la MISMA tasa: el control de deriva solo corrige ±8
+        frames/bloque, no una diferencia de tasa completa (p. ej. 44.1k vs 48k).
+
+        Un dispositivo WASAPI en modo compartido remuestrea a su tasa nativa,
+        así que abrir a la tasa de la fuente es válido aunque el hardware use
+        otra."""
+
+        def _valid(raw) -> int | None:
+            try:
+                r = int(raw)
+            except (TypeError, ValueError):
+                return None
+            return r if 8000 <= r <= 384000 else None
+
+        src = _valid(source.get("defaultSampleRate")) if source else None
+        out = _valid(output.get("defaultSampleRate")) if output else None
+        return src or out or 48000
+
     def start(self, source: dict, output: dict, drift_target_ms: int) -> None:
         """Arranca captura (loopback) y deja armado el prefill de la salida.
 
@@ -116,9 +142,7 @@ class AudioController(QObject):
         la captura a la tasa del output desincronizaba relojes)."""
         logger.info("Auto/manual start: %s -> %s", source["name"], output["name"])
         self.ensure_pa()
-        rate = int(source.get("defaultSampleRate", 48000) or 48000)
-        if rate < 8000 or rate > 384000:
-            rate = 48000
+        rate = self.negotiate_rate(source, output)
         if rate != self.enhancer.sample_rate:
             # Cambio de tasa: los estados zi de biquads y compresor (y las
             # rampas) son historial de OTRA tasa; continuar con ellos inyecta

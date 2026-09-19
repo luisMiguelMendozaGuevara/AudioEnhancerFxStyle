@@ -124,3 +124,22 @@ def test_watchdog_detiene_y_emite_stream_lost():
     assert perdidos == ["captura"]
     assert detenidos == [True]
     assert ctrl.running is False
+
+
+# ---------- negociación de tasa (C6) ----------
+
+
+def test_negotiate_rate_manda_la_fuente():
+    assert AudioController.negotiate_rate({"defaultSampleRate": 44100}, {"defaultSampleRate": 48000}) == 44100
+
+
+def test_negotiate_rate_fuente_invalida_usa_salida():
+    assert AudioController.negotiate_rate({}, {"defaultSampleRate": 96000}) == 96000
+    assert AudioController.negotiate_rate({"defaultSampleRate": "x"}, {"defaultSampleRate": 88200}) == 88200
+    assert AudioController.negotiate_rate({"defaultSampleRate": 1000}, {"defaultSampleRate": 48000}) == 48000
+
+
+def test_negotiate_rate_sin_datos_usa_48000():
+    assert AudioController.negotiate_rate({}, {}) == 48000
+    assert AudioController.negotiate_rate(None, None) == 48000
+    assert AudioController.negotiate_rate({"defaultSampleRate": 999999}, {"defaultSampleRate": -5}) == 48000
