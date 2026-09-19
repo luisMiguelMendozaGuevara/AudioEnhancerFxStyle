@@ -21,7 +21,10 @@ logger = logging.getLogger("audio_enhancer.config")
 def load_config(path: str = CONFIG_PATH) -> dict[str, Any]:
     """Carga la configuración. Devuelve {} si no existe o está dañada."""
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig: tolera el BOM UTF-8 que añaden Notepad/PowerShell/VS al
+        # guardar. Con "utf-8" a secas, json.load lanza JSONDecodeError por el
+        # BOM y la config entera se descartaba (el usuario perdía sus ajustes).
+        with open(path, encoding="utf-8-sig") as f:
             cfg = json.load(f)
     except FileNotFoundError:
         return {}  # primera ejecución: estado normal, sin ruido en el log
