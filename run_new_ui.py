@@ -9,13 +9,16 @@ Uso:  python run_new_ui.py
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
 from audio_enhancer.ui.new.main_window import NewMainWindow
 
 
 def main() -> int:
+    # Mismo escalado DPI que el arranque normal (ver audio_enhancer/main.py).
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication([])
     # Ocultar a la bandeja no debe terminar la aplicación.
     app.setQuitOnLastWindowClosed(False)
