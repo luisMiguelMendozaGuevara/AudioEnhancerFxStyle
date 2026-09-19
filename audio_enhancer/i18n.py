@@ -33,6 +33,7 @@ TRANSLATIONS = {
     "Treble Boost (dB)": "Treble Boost (dB)",
     "Limitador suave": "Soft limiter",
     "Compresor RMS": "RMS compressor",
+    "True-peak (x4)": "True-peak (x4)",
     "Nivel:": "Level:",
     "Ecualizador (9 bandas)": "Equalizer (9 bands)",
     "Analizador de espectro": "Spectrum analyzer",

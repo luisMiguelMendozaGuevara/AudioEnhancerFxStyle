@@ -126,3 +126,19 @@ def test_load_presets_validos_pasran(tmp_path):
 def test_migrate_es_punto_de_extensión(tmp_path):
     """Hoy la migración es identidad; existe como punto único de extensión."""
     assert ConfigManager._migrate({"a": 1}) == {"a": 1}
+
+
+def test_true_peak_default_y_explicito(tmp_path):
+    """true_peak: ON por defecto; un false explícito se respeta."""
+    import json
+
+    sin = ConfigManager(eq_band_count=9, path=str(tmp_path / "no.json"))
+    assert sin.load()["true_peak"] is True
+
+    p = tmp_path / "tp.json"
+    p.write_text(json.dumps({"true_peak": False}), encoding="utf-8")
+    con = ConfigManager(eq_band_count=9, path=str(p))
+    assert con.load()["true_peak"] is False
+    # valor no-bool -> default
+    p.write_text(json.dumps({"true_peak": "no"}), encoding="utf-8")
+    assert ConfigManager(eq_band_count=9, path=str(p)).load()["true_peak"] is True

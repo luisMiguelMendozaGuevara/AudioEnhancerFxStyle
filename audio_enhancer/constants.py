@@ -4,8 +4,11 @@ Este modulo no depende de tkinter, numpy ni scipy: cualquier capa puede
 importarlo sin arrastrar dependencias pesadas.
 """
 
+import logging
 import os
 import sys
+
+logger = logging.getLogger("audio_enhancer.constants")
 
 APP_NAME = "Audio Enhancer FxStyle"
 APP_VERSION = "1.5.2"
@@ -43,6 +46,9 @@ def resource_path(name):
         p = os.path.join(d, name)
         if os.path.exists(p):
             return p
+    # No encontrado: se registra (antes se devolvía el nombre pelado en
+    # silencio y el fallo aparecía luego como icono/imagen vacía sin pista).
+    logger.warning("Asset no encontrado: %s (buscado en %s)", name, dirs)
     return name
 
 

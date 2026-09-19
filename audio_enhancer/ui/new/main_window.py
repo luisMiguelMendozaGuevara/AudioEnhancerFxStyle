@@ -186,6 +186,7 @@ class NewMainWindow(QMainWindow):
         state.eq_changed.connect(lambda g: setattr(self.enhancer, "eq_gains", [float(x) for x in g]))
         state.limiter_changed.connect(lambda on: setattr(self.enhancer, "limiter", bool(on)))
         state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
+        state.true_peak_changed.connect(lambda on: setattr(self.enhancer, "true_peak", bool(on)))
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
         self.custom_presets: dict[str, Any] = {}
         self.loopbacks: list[dict[str, Any]] = []
@@ -671,6 +672,7 @@ class NewMainWindow(QMainWindow):
                 eq_gains=tuple(gains),
                 limiter=bool(self.enhancer.limiter),
                 compressor=bool(self.enhancer.compressor),
+                true_peak=bool(self.enhancer.true_peak),
                 blend=float(self.enhancer.blend),
             )
         )
@@ -701,6 +703,7 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_treble(self.enhancer.treble)
         self._pages["effects"].set_limiter(self.enhancer.limiter)
         self._pages["effects"].set_compressor(self.enhancer.compressor)
+        self._pages["effects"].set_true_peak(self.enhancer.true_peak)
         home.set_ab(self.enhancer.blend > 0.5)
         # Consistencia: AudioState alineado con el DSP (los set_* de las
         # paginas usan blockSignals y no escriben en el estado).
@@ -829,6 +832,7 @@ class NewMainWindow(QMainWindow):
                 eq_gains=tuple(cfg["eq_gains"]) if cfg["eq_gains"] is not None else tuple(self.enhancer.eq_gains),
                 limiter=cfg["limiter"],
                 compressor=cfg["compressor"],
+                true_peak=cfg["true_peak"],
                 blend=float(self.enhancer.blend),
             )
         )
@@ -861,6 +865,7 @@ class NewMainWindow(QMainWindow):
             "eq_gains": [float(g) for g in self.enhancer.eq_gains],
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
+            "true_peak": bool(self.enhancer.true_peak),
             "theme": Theme.mode,
             "latency_pref": int(self.state.latency_pref),
             "minimize_to_tray": bool(self.minimize_to_tray),

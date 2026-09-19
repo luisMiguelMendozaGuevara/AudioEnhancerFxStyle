@@ -40,6 +40,7 @@ class AudioState(QObject):
     eq_changed = Signal(object)
     limiter_changed = Signal(bool)
     compressor_changed = Signal(bool)
+    true_peak_changed = Signal(bool)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -68,6 +69,9 @@ class AudioState(QObject):
         self._eq_gains: list[float] = [0.0] * 9
         self._limiter: bool = True
         self._compressor: bool = True
+        # True-peak: limitador con sobremuestreo x4 (caza picos inter-muestra).
+        # CPU-intensivo: configurable para laptops flojas.
+        self._true_peak: bool = True
         # Preferencia de latencia (ms) elegida en la página Audio.
         self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
 
@@ -227,6 +231,16 @@ class AudioState(QObject):
             self.compressor_changed.emit(value)
 
     @property
+    def true_peak(self) -> bool:
+        return self._true_peak
+
+    @true_peak.setter
+    def true_peak(self, value: bool) -> None:
+        if self._true_peak != value:
+            self._true_peak = value
+            self.true_peak_changed.emit(value)
+
+    @property
     def latency_pref(self) -> int:
         return self._latency_pref
 
@@ -253,14 +267,5 @@ class AudioState(QObject):
         self.eq_gains = [float(g) for g in enhancer.eq_gains]
         self.limiter = bool(enhancer.limiter)
         self.compressor = bool(enhancer.compressor)
+        self.true_peak = bool(enhancer.true_peak)
         self.ab_enabled = float(enhancer.blend) > 0.5
-
-    def update_levels_from_enhancer(self, enhancer) -> None:
-        """Actualiza niveles y espectro desde el Enhancer (llamada periodica).
-
-        Medidores honestos: entrada=RMS (energia del material capturado),
-        salida=pico post-DSP. Antes los tres medidores mostraban el mismo
-        valor de pico duplicado."""
-        self.input_level = float(enhancer.level_rms)
-        self.output_level = float(enhancer.level_peak)
-        self.peak_level = float(enhancer.level_peak)

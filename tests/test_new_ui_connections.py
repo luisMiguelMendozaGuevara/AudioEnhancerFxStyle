@@ -89,6 +89,14 @@ def test_compressor_toggle_reaches_dsp(window):
     assert window.enhancer.compressor is True
 
 
+def test_true_peak_toggle_reaches_dsp(window):
+    toggle = window._pages["effects"]._true_peak_card._toggle
+    toggle.setChecked(False)
+    assert window.enhancer.true_peak is False
+    toggle.setChecked(True)
+    assert window.enhancer.true_peak is True
+
+
 def test_ab_button_reaches_dsp(window):
     window.toggle_ab()
     assert window.enhancer.blend == pytest.approx(0.0)

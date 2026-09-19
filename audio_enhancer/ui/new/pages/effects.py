@@ -95,7 +95,7 @@ class EffectCard(QFrame):
 
 
 class EffectsPage(QWidget):
-    """Pagina de efectos: Bass, Treble, Compressor, Limiter."""
+    """Pagina de efectos: Bass, Treble, Compressor, Limiter, True-peak."""
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -147,6 +147,15 @@ class EffectsPage(QWidget):
             self._compressor_card._toggle.toggled.connect(self._on_compressor_toggle)
         layout.addWidget(self._compressor_card)
 
+        # True-peak: limita picos inter-muestra con sobremuestreo x4. Es lo más
+        # caro del DSP; se puede apagar en equipos lentos.
+        self._true_peak_card = EffectCard(self._t("True-peak (x4)"), 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._true_peak_card._slider.setEnabled(False)
+        if self._true_peak_card._toggle is not None:
+            self._true_peak_card._toggle.setChecked(True)
+            self._true_peak_card._toggle.toggled.connect(self._on_true_peak_toggle)
+        layout.addWidget(self._true_peak_card)
+
         layout.addStretch()
         scroll.setWidget(container)
         outer = QVBoxLayout(self)
@@ -179,6 +188,11 @@ class EffectsPage(QWidget):
             self._compressor_card._toggle.setText("ON" if on else "OFF")
         self._state.compressor = on
 
+    def _on_true_peak_toggle(self, on) -> None:
+        if self._true_peak_card._toggle is not None:
+            self._true_peak_card._toggle.setText("ON" if on else "OFF")
+        self._state.true_peak = on
+
     def set_bass(self, v) -> None:
         self._bass_card.set_value(v)
 
@@ -190,3 +204,6 @@ class EffectsPage(QWidget):
 
     def set_compressor(self, on) -> None:
         self._compressor_card.set_enabled(on)
+
+    def set_true_peak(self, on) -> None:
+        self._true_peak_card.set_enabled(on)

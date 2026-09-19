@@ -506,6 +506,19 @@ def test_eq_q_escalar_sigue_funcionando():
     assert e.eq_q == 3.0
 
 
+def test_true_peak_configurable_por_params():
+    """EnhancerParams incluye true_peak y apply_params/snapshot lo respetan."""
+    from audio_enhancer.dsp import EnhancerParams
+
+    e = Enhancer()
+    assert e.true_peak is True  # default
+    e.apply_params(EnhancerParams(true_peak=False))
+    assert e.true_peak is False
+    assert e.snapshot_params().true_peak is False
+    e.apply_params(EnhancerParams(true_peak=True))
+    assert e.true_peak is True
+
+
 def test_espectro_64_barras_validas():
     x = _stereo(0.5, 440.0)
     e = Enhancer()

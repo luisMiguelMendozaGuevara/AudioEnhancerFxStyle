@@ -156,6 +156,7 @@ class ConfigManager:
             "eq_gains": eq_gains,
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),
+            "true_peak": self.as_bool(raw.get("true_peak"), True),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),
             "autostart_audio": self.as_bool(raw.get("autostart_audio"), True),

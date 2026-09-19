@@ -88,6 +88,7 @@ class EnhancerParams:
     eq_gains: tuple[float, ...] = ()
     limiter: bool = True
     compressor: bool = True
+    true_peak: bool = True
     blend: float = 1.0
 
 
@@ -247,6 +248,7 @@ class Enhancer:
         self.eq_gains = [float(g) for g in params.eq_gains]
         self.limiter = bool(params.limiter)
         self.compressor = bool(params.compressor)
+        self.true_peak = bool(params.true_peak)
         self.blend = float(params.blend)
 
     def snapshot_params(self) -> "EnhancerParams":
@@ -258,6 +260,7 @@ class Enhancer:
             eq_gains=tuple(self._eq_gains),
             limiter=bool(self.limiter),
             compressor=bool(self.compressor),
+            true_peak=bool(self.true_peak),
             blend=float(self.blend),
         )
 
