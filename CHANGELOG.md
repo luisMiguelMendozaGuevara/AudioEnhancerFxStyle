@@ -4,6 +4,42 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.3] - 2026-09-20
+
+Corrige los **microcortes** ("pausas") y hace configurables todas las
+protecciones. Dos artefactos de release: instalador y portable.
+
+### Corregido
+- **Microcortes por pico del DSP**: `scipy.signal.resample_poly` re-diseñaba el
+  filtro FIR (Kaiser) en CADA llamada → picos de 20-30 ms/bloque. Ahora el FIR
+  se construye una sola vez y se aplica con `upfirdn` (bit a bit idéntico).
+  Pico de `full_hot` **23081 → 3787 µs (−84 %)** y `max` dentro del presupuesto
+  del bloque (gate del banco de pruebas: `[OK]`).
+- **Latencia que no cambiaba**: la señal emitía los **ms** pero el handler los
+  trataba como índice (`itemData(100)` → None → 60). Ahora cambia de verdad y
+  se aplica **en caliente** (sin reiniciar el audio).
+- **Botones recortados en español**: "Restablecer todo" (EQ) y otros usaban
+  ancho fijo; ahora crecen con el texto.
+- **Doble clic en Iniciar**: el botón se bloquea durante el prefill (~0.5 s),
+  antes un 2º clic detenía el audio recién iniciado.
+- **Contraste del tema oscuro**: `TEXT_DIM` 3.0:1 → 4.6:1 (WCAG AA).
+- **Autostart empaquetado**: el comando ya no registra la ruta del exe dos veces.
+- **Importar/Exportar presets** (botones decorativos): conectados a JSON, con
+  saneo reutilizable de `ConfigManager`.
+
+### Añadido
+- **Todas las protecciones son configurables** (página Efectos): Limitador,
+  Compresor, True-peak, **Techo de seguridad** y **Recorte final (±1.0)**.
+  En Config: **watchdog** ("Detener el audio si se pierde el dispositivo").
+- **Tooltips explicativos** por efecto (ES/EN).
+- **Medidores estéreo L/R** en Inicio.
+- **Dos artefactos**: instalador (onedir + Inno Setup) y portable (onefile).
+- Nota: las mejoras llegan a `main`; el instalador/portable se compilan en CI.
+
+### Diagnóstico
+- Métricas de huecos separadas por causa (`descartes`/`overflows`/`fill`), que
+  permiten ver si un corte viene del DSP o de la captura.
+
 ## [1.5.2] - 2026-09-19
 
 Ronda de mejoras de motor (auditoría DSP, fases 0–3) + rondas R2/R3 de
@@ -71,3 +107,4 @@ calidad y rendimiento, integradas sobre la UI PySide6.
 [1.1.0]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.1.0
 [1.0.1]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.0.1
 [1.0.0]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.0.0
+[1.5.3]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.5.3
