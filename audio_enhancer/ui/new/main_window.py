@@ -863,8 +863,10 @@ class NewMainWindow(QMainWindow):
         self.state.sync_from_enhancer(self.enhancer)
 
     def _on_volume_slider(self, raw: int) -> None:
+        # El label del slider es responsabilidad de HomePage (_on_volume_moved,
+        # que emite volume_edited): tocar el privado aquí era redundante y
+        # rompía el contrato R3-C3.
         self.enhancer.volume = raw / 100.0
-        self._pages["home"]._volume_label.setText(f"{raw / 100.0:.2f}x")
 
     def toggle_ab(self) -> None:
         self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0
@@ -1091,9 +1093,8 @@ class NewMainWindow(QMainWindow):
             self._status_bar.set_status_text(self._t("Inicio con Windows: activado"), OK)
         else:
             self._status_bar.set_status_text(self._t("Inicio con Windows: fallo"), DANGER)
-            self._pages["settings"]._autostart_check.blockSignals(True)
-            self._pages["settings"]._autostart_check.setChecked(not enabled)
-            self._pages["settings"]._autostart_check.blockSignals(False)
+            # Revertir el checkbox por su API pública (R3-C3).
+            self._pages["settings"].set_autostart_checked(not enabled)
 
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
