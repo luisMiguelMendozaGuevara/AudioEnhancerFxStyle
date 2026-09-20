@@ -82,6 +82,7 @@ class AudioEngine:
         self.fadein_frames: int = 0
         self.in_gap: bool = False
         self.nframes: int = 0
+        self.rate: int = 0  # tasa configurada (para recalcular la consigna)
         self._fade: int = 1
         # Control de deriva alrededor del punto medio del ring
         # (los valores se ajustan en configure_ring; aqui quedan los por
@@ -128,6 +129,7 @@ class AudioEngine:
         mitad. ``None`` usa DRIFT_TARGET_MS."""
         nframes = int(rate * RING_SECONDS)
         self.nframes = nframes
+        self.rate = int(rate)
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
         self.write_pos = 0
         self.read_pos = 0
@@ -147,6 +149,18 @@ class AudioEngine:
         target = int(rate * drift_target_ms / 1000.0)
         self._drift_target = max(CHUNK, min(target, upper))
         self._drift_accum = 0.0
+
+    def set_drift_target_ms(self, drift_target_ms: float) -> None:
+        """Cambia la latencia objetivo EN CALIENTE (sin vaciar el ring).
+
+        El control de deriva mueve el llenado hacia la nueva consigna a como
+        mucho ``_max_drift_frames`` por bloque, así que el cambio es gradual
+        (~1 s) y sin glitch: no hace falta reconstruir el ring."""
+        if self.nframes <= 0 or self.rate <= 0:
+            return
+        upper = max(CHUNK, self.nframes - 4 * CHUNK)
+        target = int(self.rate * drift_target_ms / 1000.0)
+        self._drift_target = max(CHUNK, min(target, upper))
 
     def _open_capture_stream(self, pa, in_idx: int, rate: int, channels: int):
         return pa.open(

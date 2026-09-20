@@ -645,6 +645,28 @@ def test_medidores_por_canal_l_r():
     assert e.level_rms == pytest.approx(max(e.level_rms_l, e.level_rms_r))
 
 
+def test_techo_seguridad_desactivable():
+    """Con el techo de seguridad apagado (opt-out) no hay limitador
+    transparente: la señal por encima del techo se recorta duro a ±1.0."""
+    t = np.arange(N) / FS
+    x = np.stack([(1.2 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)] * 2, axis=1)
+
+    off = Enhancer()
+    off.compressor = False
+    off.limiter = False
+    off.safety_ceiling_enabled = False
+    warm(off, x)
+    y_off = off.process(x.copy())
+    assert float(np.abs(y_off).max()) == pytest.approx(1.0, abs=1e-3)  # recorte duro
+
+    on = Enhancer()
+    on.compressor = False
+    on.limiter = False
+    warm(on, x)
+    y_on = on.process(x.copy())
+    assert float(np.abs(y_on).max()) <= on.safety_ceiling + 1e-3  # techo transparente
+
+
 def test_medidores_reset_limpia_canales():
     e = Enhancer()
     e.level_peak_l = e.level_peak_r = e.level_rms_l = e.level_rms_r = 0.7

@@ -165,6 +165,8 @@ class ConfigManager:
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),
             "true_peak": self.as_bool(raw.get("true_peak"), True),
+            "safety_ceiling": self.as_bool(raw.get("safety_ceiling"), True),
+            "watchdog": self.as_bool(raw.get("watchdog"), True),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),
             "autostart_audio": self.as_bool(raw.get("autostart_audio"), True),

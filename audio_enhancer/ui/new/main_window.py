@@ -192,6 +192,7 @@ class NewMainWindow(QMainWindow):
         state.limiter_changed.connect(lambda on: setattr(self.enhancer, "limiter", bool(on)))
         state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
         state.true_peak_changed.connect(lambda on: setattr(self.enhancer, "true_peak", bool(on)))
+        state.safety_ceiling_changed.connect(lambda on: setattr(self.enhancer, "safety_ceiling_enabled", bool(on)))
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
         self.custom_presets: dict[str, Any] = {}
         self.loopbacks: list[dict[str, Any]] = []
@@ -201,6 +202,7 @@ class NewMainWindow(QMainWindow):
         self.minimize_to_tray = True
         self.autostart_audio = True
         self.notifications_enabled = True
+        self.watchdog_enabled = True
         self._closing = False
         self._active_names = ("", "")
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
@@ -399,6 +401,7 @@ class NewMainWindow(QMainWindow):
         settings.tray_pref_changed.connect(self._on_tray_pref_changed)
         settings.autostart_audio_pref_changed.connect(self._on_autostart_audio_changed)
         settings.notifications_pref_changed.connect(self._on_notifications_changed)
+        settings.watchdog_pref_changed.connect(self._on_watchdog_changed)
         settings.diagnostics_requested.connect(self._export_diagnostics)
         self._refresh_preset_list()
 
@@ -419,6 +422,12 @@ class NewMainWindow(QMainWindow):
 
     def _on_notifications_changed(self, on: bool) -> None:
         self.notifications_enabled = bool(on)
+        self._save_config()
+
+    def _on_watchdog_changed(self, on: bool) -> None:
+        """Activa/desactiva el watchdog en caliente (sin reiniciar el audio)."""
+        self.watchdog_enabled = bool(on)
+        self.controller.set_watchdog_enabled(self.watchdog_enabled)
         self._save_config()
 
     def _export_diagnostics(self) -> None:
@@ -478,7 +487,9 @@ class NewMainWindow(QMainWindow):
         settings = self._pages.get("settings")
         if settings is None:
             return
-        settings.set_behavior(self.minimize_to_tray, self.autostart_audio, self.notifications_enabled)
+        settings.set_behavior(
+            self.minimize_to_tray, self.autostart_audio, self.notifications_enabled, self.watchdog_enabled
+        )
 
     def _notify_tray(self, body: str) -> None:
         """Notificación de bandeja respetando la preferencia del usuario."""
@@ -507,15 +518,24 @@ class NewMainWindow(QMainWindow):
         self._rebuild_tray_menu()
         self._status_bar.retranslate(self._t)
 
-    def _on_latency_pref_changed(self, index: int) -> None:
-        """Guarda la preferencia de latencia (40/60/100 ms). Se aplica en el
-        próximo arranque del audio: cambiarla en caliente requeriría vaciar el
-        ring (glitch seguro)."""
-        ms = int(self._pages["audio"]._latency_combo.itemData(index) or 60)
+    def _on_latency_pref_changed(self, ms: int) -> None:
+        """Cambia la latencia objetivo (40/60/100 ms).
+
+        ``ms`` es el VALOR (la señal latency_selected emite los ms, no el
+        índice). Antes el handler lo trataba como índice: ``itemData(100)``
+        devolvía None y caía a 60, así que la latencia NUNCA cambiaba.
+        Con el audio activo se aplica en caliente: solo se mueve la consigna de
+        llenado del ring y el control de deriva converge en ~1 s (sin glitch)."""
+        ms = int(ms or 60)
         self.state.latency_pref = ms
         self._save_config()
         if self.running:
-            self._status_bar.set_status_text(self._t("Latencia %d ms: se aplicara al reiniciar el audio.") % ms, WARN)
+            latency = self.controller.set_latency(ms)
+            self._status_bar.set_latency(latency)
+            self._pages["audio"].set_info(
+                rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing"
+            )
+            self._status_bar.set_status_text(self._t("Latencia objetivo: %d ms") % ms, OK)
         else:
             self._status_bar.set_status_text(self._t("Latencia objetivo: %d ms") % ms, OK)
 
@@ -832,6 +852,7 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_limiter(self.enhancer.limiter)
         self._pages["effects"].set_compressor(self.enhancer.compressor)
         self._pages["effects"].set_true_peak(self.enhancer.true_peak)
+        self._pages["effects"].set_safety_ceiling(self.enhancer.safety_ceiling_enabled)
         home.set_ab(self.enhancer.blend > 0.5)
         # Consistencia: AudioState alineado con el DSP (los set_* de las
         # paginas usan blockSignals y no escriben en el estado).
@@ -986,6 +1007,11 @@ class NewMainWindow(QMainWindow):
                 blend=float(self.enhancer.blend),
             )
         )
+        # Techo de seguridad y watchdog: se aplican directo (no van en
+        # EnhancerParams ni en el estado de audio).
+        self.enhancer.safety_ceiling_enabled = bool(cfg["safety_ceiling"])
+        self.watchdog_enabled = bool(cfg["watchdog"])
+        self.controller.set_watchdog_enabled(self.watchdog_enabled)
         # Preferencia de latencia persistida (40/60/100 ms), ya validada.
         self.state.latency_pref = cfg["latency_pref"]
         self._pages["audio"].set_latency_pref(self.state.latency_pref)
@@ -1016,11 +1042,13 @@ class NewMainWindow(QMainWindow):
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
             "true_peak": bool(self.enhancer.true_peak),
+            "safety_ceiling": bool(self.enhancer.safety_ceiling_enabled),
             "theme": Theme.mode,
             "latency_pref": int(self.state.latency_pref),
             "minimize_to_tray": bool(self.minimize_to_tray),
             "autostart_audio": bool(self.autostart_audio),
             "notifications": bool(self.notifications_enabled),
+            "watchdog": bool(self.watchdog_enabled),
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
         if not self._config.save(config):

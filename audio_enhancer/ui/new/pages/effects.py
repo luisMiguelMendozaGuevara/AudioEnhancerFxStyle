@@ -171,6 +171,24 @@ class EffectsPage(QWidget):
             self._true_peak_card._toggle.toggled.connect(self._on_true_peak_toggle)
         layout.addWidget(self._true_peak_card)
 
+        # Techo de seguridad: con el limitador apagado evita el recorte duro
+        # (reutiliza el limitador como limitador transparente a 0.99). Apagarlo
+        # deja el único tope en el recorte a ±1.0.
+        self._safety_card = EffectCard(
+            self._t("Techo de seguridad"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("safety_ceiling"),
+        )
+        self._safety_card._slider.setEnabled(False)
+        if self._safety_card._toggle is not None:
+            self._safety_card._toggle.setChecked(True)
+            self._safety_card._toggle.toggled.connect(self._on_safety_ceiling_toggle)
+        layout.addWidget(self._safety_card)
+
         layout.addStretch()
         scroll.setWidget(container)
         outer = QVBoxLayout(self)
@@ -208,6 +226,11 @@ class EffectsPage(QWidget):
             self._true_peak_card._toggle.setText("ON" if on else "OFF")
         self._state.true_peak = on
 
+    def _on_safety_ceiling_toggle(self, on) -> None:
+        if self._safety_card._toggle is not None:
+            self._safety_card._toggle.setText("ON" if on else "OFF")
+        self._state.safety_ceiling = on
+
     def set_bass(self, v) -> None:
         self._bass_card.set_value(v)
 
@@ -222,3 +245,6 @@ class EffectsPage(QWidget):
 
     def set_true_peak(self, on) -> None:
         self._true_peak_card.set_enabled(on)
+
+    def set_safety_ceiling(self, on) -> None:
+        self._safety_card.set_enabled(on)

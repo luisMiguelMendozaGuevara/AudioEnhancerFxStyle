@@ -30,6 +30,7 @@ class SettingsPage(QWidget):
     tray_pref_changed = Signal(bool)
     autostart_audio_pref_changed = Signal(bool)
     notifications_pref_changed = Signal(bool)
+    watchdog_pref_changed = Signal(bool)
     diagnostics_requested = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
@@ -44,6 +45,7 @@ class SettingsPage(QWidget):
         self._tray_check.toggled.connect(self.tray_pref_changed.emit)
         self._autostart_audio_check.toggled.connect(self.autostart_audio_pref_changed.emit)
         self._notifications_check.toggled.connect(self.notifications_pref_changed.emit)
+        self._watchdog_check.toggled.connect(self.watchdog_pref_changed.emit)
         self._diag_btn.clicked.connect(self.diagnostics_requested.emit)
 
     def _card(self) -> QFrame:
@@ -142,6 +144,13 @@ class SettingsPage(QWidget):
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )
         bl.addWidget(self._notifications_check)
+
+        self._watchdog_check = QCheckBox(self._t("Detener el audio si se pierde el dispositivo"))
+        self._watchdog_check.setChecked(True)
+        self._watchdog_check.setStyleSheet(
+            f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
+        )
+        bl.addWidget(self._watchdog_check)
         layout.addWidget(beh_card)
 
         # Diagnóstico: exporta log + config + dispositivos para soporte.
@@ -183,13 +192,14 @@ class SettingsPage(QWidget):
         self._theme_combo.setCurrentIndex(index)
         self._theme_combo.blockSignals(False)
 
-    def set_behavior(self, tray: bool, autostart_audio: bool, notifications: bool) -> None:
+    def set_behavior(self, tray: bool, autostart_audio: bool, notifications: bool, watchdog: bool = True) -> None:
         """Refleja las preferencias de comportamiento tras aplicar config o
         reconstruir páginas (los widgets nuevos nacen con defaults)."""
         for check, value in (
             (self._tray_check, tray),
             (self._autostart_audio_check, autostart_audio),
             (self._notifications_check, notifications),
+            (self._watchdog_check, watchdog),
         ):
             check.blockSignals(True)
             check.setChecked(value)

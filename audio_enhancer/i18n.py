@@ -34,6 +34,8 @@ TRANSLATIONS = {
     "Limitador suave": "Soft limiter",
     "Compresor RMS": "RMS compressor",
     "True-peak (x4)": "True-peak (x4)",
+    "Techo de seguridad": "Safety ceiling",
+    "Detener el audio si se pierde el dispositivo": "Stop audio if the device is lost",
     "Nivel:": "Level:",
     "Ecualizador (9 bandas)": "Equalizer (9 bands)",
     "Analizador de espectro": "Spectrum analyzer",
@@ -227,6 +229,9 @@ EXPLAIN = {
     "detecta y limita los que caen ENTRE dos muestras (los que suelen "
     "distorsionar al subir volumen). Es la etapa más costosa del "
     "procesado; se puede apagar en equipos lentos.",
+    "safety_ceiling": "Techo de seguridad: con el limitador apagado, evita el "
+    "recorte duro (la 'estática') reduciendo suavemente los picos por encima "
+    "de -0.1 dBFS. Apágalo solo si prefieres el sonido recortado sin procesar.",
 }
 
 EXPLAIN_EN = {
@@ -246,6 +251,9 @@ EXPLAIN_EN = {
     "and limits peaks that fall BETWEEN samples (the ones that distort "
     "when you raise volume). It is the heaviest stage; turn it off on "
     "slower machines.",
+    "safety_ceiling": "Safety ceiling: with the limiter off, it prevents hard "
+    "clipping (the 'static') by smoothly reducing peaks above -0.1 dBFS. Turn "
+    "it off only if you prefer the raw clipped sound.",
 }
 
 EQ_EXPLAIN = {

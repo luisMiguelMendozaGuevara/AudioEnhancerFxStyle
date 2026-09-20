@@ -58,6 +58,22 @@ def test_sanitize_presets_filtra_invalidos():
     assert mgr.sanitize_presets([1, 2, 3]) == {}
 
 
+def test_watchdog_y_techo_seguridad_defaults_y_coercion(tmp_path):
+    """Opciones nuevas (watchdog y techo de seguridad): default True y coerción
+    estricta (un valor no-bool cae al default)."""
+    import json
+
+    p = tmp_path / "c.json"
+    mgr = ConfigManager(eq_band_count=9, path=str(p))
+    cfg = mgr.load()
+    assert cfg["watchdog"] is True and cfg["safety_ceiling"] is True
+
+    p.write_text(json.dumps({"watchdog": False, "safety_ceiling": "no"}), encoding="utf-8")
+    cfg2 = mgr.load()
+    assert cfg2["watchdog"] is False
+    assert cfg2["safety_ceiling"] is True  # "no" no es bool -> default
+
+
 def test_load_acota_valores_al_rango_de_la_ui(tmp_path):
     """Un config editado a mano no puede colar boosts desmedidos al DSP.
 

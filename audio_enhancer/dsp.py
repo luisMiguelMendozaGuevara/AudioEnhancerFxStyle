@@ -140,6 +140,9 @@ class Enhancer:
         # y deja el np.clip final como guardia digital que en la práctica ya
         # no llega a actuar. Ajustable por quien quiera más margen.
         self.safety_ceiling: float = 0.99
+        # Interruptor del techo de seguridad (página Efectos). Apagado, el
+        # único tope es el recorte duro a ±1.0 al final de process().
+        self.safety_ceiling_enabled: bool = True
         # True-peak: envolvente medida sobre la señal 4x sobremuestreada
         # (detecta picos inter-muestra invisibles al pico por muestra; típico
         # con contenido cerca de Nyquist).
@@ -477,7 +480,7 @@ class Enhancer:
             # su techo. Guarda SIN alocar (max/min son reducciones puras, sin
             # array temporal; el caso común bajo el techo cuesta dos pasadas).
             peak = max(float(y.max()), -float(y.min()))
-            if peak > self.safety_ceiling:
+            if self.safety_ceiling_enabled and peak > self.safety_ceiling:
                 y = self._limit(y, thr=self.safety_ceiling)
         return np.clip(y, -1.0, 1.0).astype(np.float32)
 

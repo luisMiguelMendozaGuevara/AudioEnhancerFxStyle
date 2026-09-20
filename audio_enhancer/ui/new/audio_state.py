@@ -44,6 +44,7 @@ class AudioState(QObject):
     limiter_changed = Signal(bool)
     compressor_changed = Signal(bool)
     true_peak_changed = Signal(bool)
+    safety_ceiling_changed = Signal(bool)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -77,6 +78,7 @@ class AudioState(QObject):
         # True-peak: limitador con sobremuestreo x4 (caza picos inter-muestra).
         # CPU-intensivo: configurable para laptops flojas.
         self._true_peak: bool = True
+        self._safety_ceiling: bool = True
         # Preferencia de latencia (ms) elegida en la página Audio.
         self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
 
@@ -274,6 +276,16 @@ class AudioState(QObject):
             self.true_peak_changed.emit(value)
 
     @property
+    def safety_ceiling(self) -> bool:
+        return self._safety_ceiling
+
+    @safety_ceiling.setter
+    def safety_ceiling(self, value: bool) -> None:
+        if self._safety_ceiling != value:
+            self._safety_ceiling = value
+            self.safety_ceiling_changed.emit(value)
+
+    @property
     def latency_pref(self) -> int:
         return self._latency_pref
 
@@ -301,4 +313,5 @@ class AudioState(QObject):
         self.limiter = bool(enhancer.limiter)
         self.compressor = bool(enhancer.compressor)
         self.true_peak = bool(enhancer.true_peak)
+        self.safety_ceiling = bool(enhancer.safety_ceiling_enabled)
         self.ab_enabled = float(enhancer.blend) > 0.5

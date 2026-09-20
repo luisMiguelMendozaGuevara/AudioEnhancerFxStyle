@@ -321,6 +321,41 @@ def test_toggle_audio_deshabilita_el_boton_durante_el_prefill(window, monkeypatc
     assert home._start_button.isEnabled() is True
 
 
+# ---------- Opciones nuevas: techo de seguridad, watchdog y latencia viva ----------
+
+
+def test_techo_seguridad_toggle_llega_al_dsp(window):
+    toggle = window._pages["effects"]._safety_card._toggle
+    toggle.setChecked(False)
+    assert window.enhancer.safety_ceiling_enabled is False
+    toggle.setChecked(True)
+    assert window.enhancer.safety_ceiling_enabled is True
+
+
+def test_watchdog_check_llega_al_controlador(window):
+    check = window._pages["settings"]._watchdog_check
+    check.setChecked(False)
+    assert window.watchdog_enabled is False
+    assert window.controller.watchdog_enabled is False
+    check.setChecked(True)
+    assert window.controller.watchdog_enabled is True
+
+
+def test_cambiar_latencia_en_caliente_actualiza(window, monkeypatch):
+    """Con el audio activo, cambiar la latencia se aplica en caliente y el
+    valor mostrado se actualiza (antes exigía reiniciar)."""
+    llamadas: list[int] = []
+    monkeypatch.setattr(window.controller, "set_latency", lambda ms: llamadas.append(ms) or 121.3)
+    window.controller.running = True
+    try:
+        combo = window._pages["audio"]._latency_combo
+        combo.setCurrentIndex(combo.findData(100))
+    finally:
+        window.controller.running = False
+    assert llamadas == [100]
+    assert window.state.latency_pref == 100
+
+
 # ---------- Medidores estéreo (L/R) ----------
 
 

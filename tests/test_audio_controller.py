@@ -10,6 +10,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
+
 from audio_enhancer.audio_controller import AudioController
 
 
@@ -110,6 +112,30 @@ def test_check_streams_no_inspecciona_si_no_corre():
     ctrl.engine.stream = _FakeStream(False)
     ctrl.running = False
     assert ctrl.check_streams() is None
+
+
+def test_watchdog_desactivado_no_detiene_el_audio():
+    """El watchdog es configurable: apagado, un stream caído ya no detiene el
+    audio ni emite stream_lost."""
+    ctrl = _ctrl_running()
+    ctrl.engine.stream = _FakeStream(False)  # captura caída
+    ctrl.engine.out_stream = _FakeStream(True)
+    ctrl.set_watchdog_enabled(False)
+    assert ctrl.watchdog_enabled is False
+    perdidos: list[str] = []
+    ctrl.stream_lost.connect(perdidos.append)
+    ctrl._on_watchdog()
+    assert perdidos == []
+    assert ctrl.running is True
+
+
+def test_set_latency_mueve_la_consigna_y_devuelve_ms():
+    ctrl = _ctrl_running()
+    ctrl.engine.configure_ring(48000, drift_target_ms=60)
+    latency = ctrl.set_latency(100)
+    assert ctrl.engine.drift_target == int(48000 * 0.100)
+    # Latencia reportada = consigna + un bloque de salida.
+    assert latency == pytest.approx(((ctrl.engine.drift_target + 1024) / 48000) * 1000.0)
 
 
 def test_watchdog_detiene_y_emite_stream_lost():

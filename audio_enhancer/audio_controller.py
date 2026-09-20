@@ -67,6 +67,9 @@ class AudioController(QObject):
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(2000)
         self._watchdog.timeout.connect(self._on_watchdog)
+        # Interruptor del watchdog (página Config): apagado, un dispositivo
+        # desconectado ya no detiene el audio automáticamente.
+        self.watchdog_enabled = True
 
     # ---------- ruteo (puro: sin estado, sin Qt, testeable en seco) ----------
 
@@ -157,7 +160,8 @@ class AudioController(QObject):
         self._open_output_args = (output["index"], rate)
         self.started.emit(source["name"], output["name"], rate)
         self._prefill_timer.start()
-        self._watchdog.start()
+        if self.watchdog_enabled:
+            self._watchdog.start()
 
     def _poll_prefill(self) -> None:
         if not self.running:
@@ -193,6 +197,25 @@ class AudioController(QObject):
             self.running = False
             self.start_failed.emit(str(exc))
 
+    def set_watchdog_enabled(self, enabled: bool) -> None:
+        """Activa/desactiva el watchdog en caliente (sin reiniciar el audio)."""
+        self.watchdog_enabled = bool(enabled)
+        if not self.running:
+            return
+        if self.watchdog_enabled:
+            self._watchdog.start()
+        else:
+            self._watchdog.stop()
+
+    def set_latency(self, drift_target_ms: int) -> float:
+        """Cambia la latencia objetivo en caliente y devuelve la nueva (ms).
+
+        Solo mueve la consigna de llenado del ring; el control de deriva
+        converge gradualmente sin glitch."""
+        self.engine.set_drift_target_ms(drift_target_ms)
+        rate = self.engine.rate or self.enhancer.sample_rate
+        return ((self.engine.drift_target + CHUNK) / rate) * 1000.0
+
     def stop(self) -> None:
         """Detiene y cierra ambos streams (idempotente)."""
         logger.info("Audio detenido por el usuario")
@@ -226,6 +249,8 @@ class AudioController(QObject):
         return None
 
     def _on_watchdog(self) -> None:
+        if not self.watchdog_enabled:
+            return
         reason = self.check_streams()
         if reason is None:
             return

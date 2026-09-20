@@ -199,6 +199,17 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
         assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
 
 
+def test_set_drift_target_ms_en_caliente(engine):
+    """La latencia objetivo se puede mover en caliente (sin reconstruir el
+    ring): el control de deriva converge a la nueva consigna."""
+    engine.configure_ring(48000, drift_target_ms=60)
+    assert engine.drift_target == int(48000 * 0.060)
+    engine.set_drift_target_ms(100)
+    assert engine.drift_target == int(48000 * 0.100)
+    engine.set_drift_target_ms(40)
+    assert engine.drift_target == int(48000 * 0.040)
+
+
 def test_deriva_corrige_limitando_a_frames_maximos(engine):
     engine.configure_ring(48000)
     engine.write_pos = engine._drift_target + 200  # salida rezagada (mucha deriva)
