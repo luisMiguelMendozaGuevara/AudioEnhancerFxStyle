@@ -207,6 +207,8 @@ class NewMainWindow(QMainWindow):
         self._closing = False
         self._active_names = ("", "")
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
+        self._stats_log_tick = 0  # log de diagnóstico ~10 s
+        self._last_captured = 0
         self._keep_src = ""
         self._keep_out = ""
         self._latest_spectrum = None
@@ -989,6 +991,30 @@ class NewMainWindow(QMainWindow):
             else:
                 text = ""
             self._status_bar.set_metrics(text)
+        # Diagnóstico de cortes: cada ~10 s (300 ticks de 33 ms) se registra el
+        # avance de la captura y los contadores. Si `capturados` no avanza, el
+        # loopback (p. ej. el cable virtual) dejó de entregar audio; si suben
+        # `huecos`/`unders`, el ring se quedó sin datos (corte audible).
+        if self.running:
+            self._stats_log_tick += 1
+            if self._stats_log_tick >= 300:
+                self._stats_log_tick = 0
+                s = self.engine.stats_snapshot()
+                captured = int(s["captured_frames"])
+                delta = captured - self._last_captured
+                self._last_captured = captured
+                logger.info(
+                    "metricas: unders=%d huecos=%d deriva=%d descartes=%d overflows=%d capturados_10s=%d",
+                    s["output_underruns"],
+                    s["gap_blocks"],
+                    s["drift_adjust_frames"],
+                    s["dropped_frames"],
+                    s["input_overflows"],
+                    delta,
+                )
+        else:
+            self._stats_log_tick = 0
+            self._last_captured = 0
 
     def _apply_config(self) -> None:
         # (R3-C2) ConfigManager devuelve SIEMPRE el diccionario completo y
