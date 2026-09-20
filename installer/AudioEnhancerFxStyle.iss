@@ -7,8 +7,10 @@
 ; El instalador es POR USUARIO (PrivilegesRequired=lowest): no pide UAC y
 ; encaja con la config en %APPDATA%\AudioEnhancerFxStyle.
 
+; La version se toma de audio_enhancer/constants.py (APP_VERSION) por el
+; workflow (ISCC /DAppVersion=...); este default es solo para builds locales.
 #ifndef AppVersion
-  #define AppVersion "1.5.2"
+  #define AppVersion "1.5.3"
 #endif
 
 #define AppName "Audio Enhancer FxStyle"

@@ -40,7 +40,13 @@ jobs:
         run: python -m PyInstaller --clean --noconfirm AudioEnhancerFxStyle.spec
 
       - name: Build installer (Inno Setup)
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\AudioEnhancerFxStyle.iss'
+        shell: pwsh
+        # La versión sale de constants.py (fuente única): el instalador queda
+        # nombrado Setup-<APP_VERSION>.exe, sin depender de un default manual.
+        run: |
+          $version = (Select-String -Path audio_enhancer/constants.py -Pattern 'APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          Write-Host "Installer version: $version"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\AudioEnhancerFxStyle.iss
 
       - name: Build portable executable (onefile, via spec)
         run: python -m PyInstaller --clean --noconfirm AudioEnhancerFxStyle-onefile.spec

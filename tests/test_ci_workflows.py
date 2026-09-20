@@ -79,6 +79,23 @@ def test_build_produce_instalador_y_portable():
     assert text.count("AudioEnhancerFxStyle-Setup-") >= 1
 
 
+def test_iss_version_alineada_con_constants():
+    """El default del instalador (.iss) debe coincidir con APP_VERSION; el CI
+    además pasa /DAppVersion desde constants.py, así que un desajuste del
+    default local es lo único que este test puede cazar."""
+    import re
+
+    from audio_enhancer.constants import APP_VERSION
+
+    root = WORKFLOWS.parent.parent
+    iss = (root / "installer" / "AudioEnhancerFxStyle.iss").read_text(encoding="utf-8")
+    m = re.search(r'#define AppVersion "([^"]+)"', iss)
+    assert m, "el .iss no define AppVersion"
+    assert m.group(1) == APP_VERSION, f".iss={m.group(1)} != APP_VERSION={APP_VERSION}"
+    # El workflow debe pasar la versión explícitamente (no confiar en el default).
+    assert "/DAppVersion=" in _read("pyinstaller-build.yml")
+
+
 def test_readme_documenta_ambos_artefactos():
     root = WORKFLOWS.parent.parent
     readme = (root / "README.md").read_text(encoding="utf-8")
