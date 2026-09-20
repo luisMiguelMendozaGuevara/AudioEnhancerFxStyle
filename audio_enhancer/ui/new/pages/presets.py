@@ -24,6 +24,8 @@ class PresetsPage(QWidget):
 
     delete_requested = Signal(str)
     save_requested = Signal(str)
+    import_requested = Signal()
+    export_requested = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -31,6 +33,8 @@ class PresetsPage(QWidget):
         self._t = t or (lambda text: text)
         self._build()
         self._save_btn.clicked.connect(self._emit_save)
+        self._import_btn.clicked.connect(self.import_requested.emit)
+        self._export_btn.clicked.connect(self.export_requested.emit)
 
     def _emit_save(self) -> None:
         self.save_requested.emit(self.name_text())

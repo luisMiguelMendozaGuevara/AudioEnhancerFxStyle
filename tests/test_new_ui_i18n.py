@@ -134,3 +134,26 @@ def test_ruta_con_cable_virtual_traducida(window):
     audio_page._output_combo.blockSignals(False)
     window._route_guard()
     assert audio_page._route_label.text() == "Ruteo correcto: cable virtual -> salida fisica."
+
+
+def test_efectos_tienen_tooltip_explicativo(window):
+    """Cada tarjeta de Efectos explica qué hace al pasar el mouse."""
+    window._apply_language("es")
+    effects = window._pages["effects"]
+    for card in (
+        effects._bass_card,
+        effects._treble_card,
+        effects._limiter_card,
+        effects._compressor_card,
+        effects._true_peak_card,
+    ):
+        assert card.toolTip().strip()
+
+
+def test_efectos_tooltip_cambia_con_el_idioma(window):
+    window._apply_language("es")
+    es = window._pages["effects"]._bass_card.toolTip()
+    window._apply_language("en")
+    en = window._pages["effects"]._bass_card.toolTip()
+    assert es and en and es != en
+    window._apply_language("es")

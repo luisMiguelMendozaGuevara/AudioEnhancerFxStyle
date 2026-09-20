@@ -16,6 +16,7 @@ from audio_enhancer.i18n import (
     PRESETS,
     TRANSLATIONS,
     detect_system_language,
+    explain,
     translate,
 )
 
@@ -144,9 +145,21 @@ def test_preset_plano_esta_plano():
 # ---------- textos de ayuda ----------
 
 
-@pytest.mark.parametrize("clave", ["volumen", "bass", "treble", "eq", "limiter", "compressor"])
+@pytest.mark.parametrize("clave", ["volumen", "bass", "treble", "eq", "limiter", "compressor", "true_peak"])
 def test_explain_cubre_todos_los_controles(clave):
     assert clave in EXPLAIN and clave in EXPLAIN_EN
+
+
+def test_explain_devuelve_el_idioma_activo():
+    # La clave es un identificador del control, no el texto de la etiqueta.
+    assert explain("bass", "es") == EXPLAIN["bass"]
+    assert explain("bass", "en") == EXPLAIN_EN["bass"]
+    assert explain("bass", "es") != explain("bass", "en")
+
+
+def test_explain_clave_desconocida_devuelve_vacio():
+    assert explain("no_existe", "es") == ""
+    assert explain("no_existe", "en") == ""
 
 
 def test_eq_explain_cubre_las_bandas():

@@ -19,12 +19,16 @@ from ..theme.colors import Theme
 class EffectCard(QFrame):
     """Tarjeta de un efecto individual."""
 
-    def __init__(self, title, min_val, max_val, default, unit="dB", has_toggle=True, parent=None) -> None:
+    def __init__(self, title, min_val, max_val, default, unit="dB", has_toggle=True, tooltip="", parent=None) -> None:
         super().__init__(parent)
         self._unit = unit
         self._scale = 100
         # objectName "card": el QSS global lo estiliza y sigue el tema activo.
         self.setObjectName("card")
+        # El tooltip se pone en la tarjeta: Qt lo muestra al pasar el mouse por
+        # cualquier hijo sin tooltip propio (título, slider, valor).
+        if tooltip:
+            self.setToolTip(tooltip)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         layout.setSpacing(Theme.SPACING_SM)
@@ -97,10 +101,11 @@ class EffectCard(QFrame):
 class EffectsPage(QWidget):
     """Pagina de efectos: Bass, Treble, Compressor, Limiter, True-peak."""
 
-    def __init__(self, state: AudioState, t=None, parent=None) -> None:
+    def __init__(self, state: AudioState, t=None, explain=None, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._t = t or (lambda text: text)
+        self._explain = explain or (lambda key: "")
         self._build()
 
     def _build(self) -> None:
@@ -121,26 +126,34 @@ class EffectsPage(QWidget):
         )
         layout.addWidget(title)
 
-        self._bass_card = EffectCard(self._t("Refuerzo de graves (dB)"), 0.0, 12.0, 0.0, "dB")
+        self._bass_card = EffectCard(
+            self._t("Refuerzo de graves (dB)"), 0.0, 12.0, 0.0, "dB", tooltip=self._explain("bass")
+        )
         self._bass_card._slider.valueChanged.connect(lambda v: self._on_bass(v / 100))
         if self._bass_card._toggle:
             self._bass_card._toggle.toggled.connect(self._on_bass_toggle)
         layout.addWidget(self._bass_card)
 
-        self._treble_card = EffectCard(self._t("Refuerzo de agudos (dB)"), 0.0, 12.0, 0.0, "dB")
+        self._treble_card = EffectCard(
+            self._t("Refuerzo de agudos (dB)"), 0.0, 12.0, 0.0, "dB", tooltip=self._explain("treble")
+        )
         self._treble_card._slider.valueChanged.connect(lambda v: self._on_treble(v / 100))
         if self._treble_card._toggle:
             self._treble_card._toggle.toggled.connect(self._on_treble_toggle)
         layout.addWidget(self._treble_card)
 
-        self._limiter_card = EffectCard(self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._limiter_card = EffectCard(
+            self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
+        )
         self._limiter_card._slider.setEnabled(False)
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setChecked(True)
             self._limiter_card._toggle.toggled.connect(self._on_limiter_toggle)
         layout.addWidget(self._limiter_card)
 
-        self._compressor_card = EffectCard(self._t("Compresor RMS"), 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._compressor_card = EffectCard(
+            self._t("Compresor RMS"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("compressor")
+        )
         self._compressor_card._slider.setEnabled(False)
         if self._compressor_card._toggle is not None:
             self._compressor_card._toggle.setChecked(True)
@@ -149,7 +162,9 @@ class EffectsPage(QWidget):
 
         # True-peak: limita picos inter-muestra con sobremuestreo x4. Es lo más
         # caro del DSP; se puede apagar en equipos lentos.
-        self._true_peak_card = EffectCard(self._t("True-peak (x4)"), 0.0, 1.0, 1.0, "", has_toggle=True)
+        self._true_peak_card = EffectCard(
+            self._t("True-peak (x4)"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("true_peak")
+        )
         self._true_peak_card._slider.setEnabled(False)
         if self._true_peak_card._toggle is not None:
             self._true_peak_card._toggle.setChecked(True)

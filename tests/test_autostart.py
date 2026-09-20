@@ -37,6 +37,18 @@ def test_comando_sin_espacios_tambien_cita(monkeypatch):
     assert cmd == f'"python3" "{os.path.abspath("main.py")}"'
 
 
+def test_comando_frozen_no_duplica_la_ruta(monkeypatch):
+    """Empaquetado (PyInstaller): sys.executable y sys.argv[0] son el mismo exe;
+    el comando no debe citar la ruta dos veces."""
+    exe = r"C:\Program Files\AudioEnhancerFxStyle\AudioEnhancerFxStyle.exe"
+    monkeypatch.setattr(sys, "executable", exe, raising=False)
+    monkeypatch.setattr(sys, "argv", [exe], raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cmd = autostart.build_autostart_command()
+    assert cmd == f'"{exe}"'
+    assert cmd.count('"') == 2
+
+
 def test_sin_winreg_degrada_sin_lanzar(monkeypatch):
     """En plataformas sin winreg (Linux/CI) is/set_enabled no lanzan."""
     import builtins

@@ -188,7 +188,7 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
                 engine._out_callback(None, 1024, None, 0)
                 out_t += out_cb
             with engine.lock:
-                f = engine.rhead - engine.whead
+                f = engine.write_pos - engine.read_pos
                 high = max(high, f)
                 low = min(low, f)
         return low, high
@@ -201,10 +201,10 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
 
 def test_deriva_corrige_limitando_a_frames_maximos(engine):
     engine.configure_ring(48000)
-    engine._rhead = engine._drift_target + 200  # salida rezagada (mucha deriva)
-    engine._whead = 0
+    engine.write_pos = engine._drift_target + 200  # salida rezagada (mucha deriva)
+    engine.read_pos = 0
     with engine.lock:
-        n_adj = int(np.trunc((engine._rhead - engine._whead - engine._drift_target) * engine._drift_gain))
+        n_adj = int(np.trunc((engine.write_pos - engine.read_pos - engine._drift_target) * engine._drift_gain))
         n_adj = max(-engine._max_drift_frames, min(engine._max_drift_frames, n_adj))
     assert -engine._max_drift_frames <= n_adj <= engine._max_drift_frames
 

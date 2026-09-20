@@ -32,11 +32,15 @@ _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def build_autostart_command() -> str:
-    """Comando a registrar: ``"python.exe" "script.py"``.
+    """Comando a registrar en el Run key.
 
-    Cada ruta va entrecomillada por separado: sin comillas, ``Program Files``
-    o cualquier carpeta con espacios parte el comando en dos tokens y el
-    Run key ejecuta otra cosa (o nada)."""
+    En un ejecutable empaquetado (PyInstaller) ``sys.executable`` YA es la app
+    y ``sys.argv[0]`` apunta al MISMO exe: citar ambos registraba
+    ``"app.exe" "app.exe"`` (el segundo token se ignora, pero es incorrecto).
+    Congelado basta el ejecutable; en desarrollo se citan intérprete y script
+    por separado (sin comillas, ``Program Files`` parte el comando en tokens)."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
     return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
 
 

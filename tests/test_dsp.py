@@ -506,6 +506,37 @@ def test_eq_q_escalar_sigue_funcionando():
     assert e.eq_q == 3.0
 
 
+def test_true_peak_ventana_o_n_equivale_a_la_deslizante(monkeypatch):
+    """Regresion de rendimiento: la envolvente true-peak usa filtros O(n) de
+    scipy.ndimage (maximum/minimum_filter1d) en vez de la ventana deslizante
+    O(n·ventana). Deben dar EXACTAMENTE lo mismo: el techo del limitador
+    depende de la semantica centrada con bordes replicados."""
+    import audio_enhancer.dsp as dsp
+
+    class _VentanaVieja:
+        @staticmethod
+        def _pad(a, size):
+            half = size // 2
+            return np.concatenate([np.full(half, a[0], dtype=a.dtype), a, np.full(half, a[-1], dtype=a.dtype)])
+
+        def maximum_filter1d(self, a, size, mode):
+            return np.lib.stride_tricks.sliding_window_view(self._pad(a, size), size).max(axis=1)
+
+        def minimum_filter1d(self, a, size, mode):
+            return np.lib.stride_tricks.sliding_window_view(self._pad(a, size), size).min(axis=1)
+
+    e = Enhancer()
+    e.compressor = False
+    e.true_peak = True
+    rng = np.random.default_rng(7)
+    y = np.clip(rng.standard_normal((N, 2)).astype(np.float32) * 0.7, -1.0, 1.0)
+
+    nuevo = e._limit(y.copy())
+    monkeypatch.setattr(dsp, "_ndimage", _VentanaVieja())
+    viejo = e._limit(y.copy())
+    assert np.array_equal(nuevo, viejo)
+
+
 def test_true_peak_configurable_por_params():
     """EnhancerParams incluye true_peak y apply_params/snapshot lo respetan."""
     from audio_enhancer.dsp import EnhancerParams

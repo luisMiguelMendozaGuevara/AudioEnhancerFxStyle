@@ -41,6 +41,23 @@ def test_sanitize_preset_valido_e_invalido():
     assert mgr.sanitize_preset([0.8, 2.0, 1.0, ["a"] * 9]) is None
 
 
+def test_sanitize_presets_filtra_invalidos():
+    """Import/load: un mapa con entradas basura conserva solo las válidas."""
+    mgr = ConfigManager(eq_band_count=9)
+    out = mgr.sanitize_presets(
+        {
+            "bueno": [0.9, 2.0, 1.0, [0] * 9],
+            "corto": [0.9, 2.0, 1.0, [0] * 8],  # ganancias desalineadas
+            "basura": "no soy un preset",
+        }
+    )
+    assert list(out) == ["bueno"]
+    assert out["bueno"] == (0.9, 2.0, 1.0, [0.0] * 9)
+    # No-dict no lanza y devuelve vacío (JSON importado hostil).
+    assert mgr.sanitize_presets(None) == {}
+    assert mgr.sanitize_presets([1, 2, 3]) == {}
+
+
 def test_load_acota_valores_al_rango_de_la_ui(tmp_path):
     """Un config editado a mano no puede colar boosts desmedidos al DSP.
 

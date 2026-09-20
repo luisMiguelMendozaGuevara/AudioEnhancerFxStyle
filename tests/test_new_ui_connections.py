@@ -287,6 +287,53 @@ def test_preferences_de_comportamiento_sobreviven_al_rebuild(window):
     window.notifications_enabled = True
 
 
+# ---------- Importar / Exportar presets (JSON) ----------
+
+
+def test_botones_importar_exportar_emiten_senales(qapp):
+    """PresetsPage expone señales; la ventana las conecta (antes eran botones
+    decorativos sin conectar)."""
+    from audio_enhancer.ui.new.audio_state import AudioState
+    from audio_enhancer.ui.new.pages.presets import PresetsPage
+
+    page = PresetsPage(AudioState())
+    got = []
+    page.import_requested.connect(lambda: got.append("import"))
+    page.export_requested.connect(lambda: got.append("export"))
+    page._import_btn.click()
+    page._export_btn.click()
+    assert got == ["import", "export"]
+
+
+def test_importar_presets_desde_json(window, tmp_path, monkeypatch):
+    import json
+
+    from audio_enhancer.ui.new import main_window as mw
+
+    payload = {"Mi preset": [0.9, 3.0, 2.0, [1.0] * 9], "Invalido": [1.0, 2.0]}
+    src = tmp_path / "presets.json"
+    src.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(mw.QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), "JSON (*.json)"))
+
+    window._import_presets()
+    assert window.custom_presets["Mi preset"] == (0.9, 3.0, 2.0, [1.0] * 9)
+    assert "Invalido" not in window.custom_presets  # descartado por el saneo
+
+
+def test_exportar_presets_a_json(window, tmp_path, monkeypatch):
+    import json
+
+    from audio_enhancer.ui.new import main_window as mw
+
+    window.custom_presets["Exportado"] = (1.0, 1.0, 1.0, [0.0] * 9)
+    dest = tmp_path / "out.json"
+    monkeypatch.setattr(mw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(dest), "JSON (*.json)"))
+
+    window._export_presets()
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert data["Exportado"] == [1.0, 1.0, 1.0, [0.0] * 9]
+
+
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
     """R3-B2: la FFT solo corre si la ventana es visible, la página activa es
     Home y la app no se está cerrando (offscreen: isVisible() es False)."""

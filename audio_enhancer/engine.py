@@ -74,8 +74,11 @@ class AudioEngine:
         self.out_stream: Any = None  # salida (output)
         # Estado del ring
         self.ring: np.ndarray | None = None
-        self.rhead: int = 0  # posición de escritura (frames)
-        self.whead: int = 0  # posición de lectura (frames)
+        # write_pos/read_pos: el productor (callback de captura) escribe en
+        # write_pos y el consumidor (callback de salida) lee en read_pos. Antes
+        # se llamaban rhead/whead, que sugerían lo contrario.
+        self.write_pos: int = 0
+        self.read_pos: int = 0
         self.fadein_frames: int = 0
         self.in_gap: bool = False
         self.nframes: int = 0
@@ -126,8 +129,8 @@ class AudioEngine:
         nframes = int(rate * RING_SECONDS)
         self.nframes = nframes
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
-        self.rhead = 0
-        self.whead = 0
+        self.write_pos = 0
+        self.read_pos = 0
         self.fadein_frames = 0
         self.in_gap = False
         self._interp_tail = None
@@ -186,7 +189,7 @@ class AudioEngine:
     def fill(self) -> int:
         """Frames disponibles en el ring (para pre-cargar la salida)."""
         with self.lock:
-            return self.rhead - self.whead
+            return self.write_pos - self.read_pos
 
     def open_output(self, out_idx: int, rate: int) -> None:
         """Abre y arranca la salida física. Relanza la excepción si falla."""
@@ -226,27 +229,27 @@ class AudioEngine:
         ring = self.ring
         assert ring is not None  # configure_ring() lo crea antes de arrancar streams
         with self.lock:
-            avail = self.rhead - self.whead
+            avail = self.write_pos - self.read_pos
             if avail + n > nframes:
                 # descartar lo más viejo si la salida va más lenta
                 drop = avail + n - nframes
-                self.whead += drop
+                self.read_pos += drop
                 self._stats["dropped_frames"] += drop  # métrica en vivo
-                idx = self.whead % nframes
+                idx = self.read_pos % nframes
                 if idx + drop <= nframes:
                     ring[idx : idx + drop] = 0.0
                 else:
                     a = nframes - idx
                     ring[idx:] = 0.0
                     ring[: drop - a] = 0.0
-            idx = self.rhead % nframes
+            idx = self.write_pos % nframes
             if idx + n <= nframes:
                 ring[idx : idx + n] = data
             else:
                 a = nframes - idx
                 ring[idx:] = data[:a]
                 ring[: n - a] = data[a:]
-            self.rhead += n
+            self.write_pos += n
 
     def _read(self, n):
         """Devuelve n frames para la salida. Llamar con self.lock tomado.
@@ -258,15 +261,15 @@ class AudioEngine:
         nframes = self.nframes
         ring = self.ring
         assert ring is not None  # configure_ring() lo crea antes de arrancar streams
-        avail = self.rhead - self.whead
+        avail = self.write_pos - self.read_pos
         if avail >= n:
-            idx = self.whead % nframes
+            idx = self.read_pos % nframes
             if idx + n <= nframes:
                 data = ring[idx : idx + n].copy()
             else:
                 a = nframes - idx
                 data = np.concatenate([ring[idx:], ring[: n - a]])
-            self.whead += n
+            self.read_pos += n
             # Solo se aplica fade-in al salir de un hueco. Mantener el estado
             # explícito evita perderlo en huecos consecutivos.
             if self.in_gap:
@@ -281,13 +284,13 @@ class AudioEngine:
         m = avail
         out = np.zeros((n, 2), dtype=np.float32)
         if m > 0:
-            idx = self.whead % nframes
+            idx = self.read_pos % nframes
             if idx + m <= nframes:
                 real = ring[idx : idx + m].copy()
             else:
                 a = nframes - idx
                 real = np.concatenate([ring[idx:], ring[: m - a]])
-            self.whead += m
+            self.read_pos += m
             out[:m] = real
             f = min(self._fade, m)
             if f > 0:
@@ -326,7 +329,7 @@ class AudioEngine:
         if self.ring is None or self._pa_mod is None:
             return (None, self._pa_mod.paContinue if self._pa_mod else 0)
         with self.lock:
-            fill = self.rhead - self.whead
+            fill = self.write_pos - self.read_pos
             error = fill - self._drift_target
             if abs(error) <= self._drift_deadband:
                 # El ruido normal del ring no debe provocar resampling.

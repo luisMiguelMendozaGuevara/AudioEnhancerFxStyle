@@ -61,6 +61,14 @@ TRANSLATIONS = {
     "Preset personalizado guardado: %s": "Custom preset saved: %s",
     "Selecciona un preset personalizado para borrarlo.": "Select a custom preset to delete.",
     "Preset personalizado borrado: %s": "Custom preset deleted: %s",
+    "Importar presets": "Import presets",
+    "Exportar presets": "Export presets",
+    "No hay presets personalizados para exportar.": "There are no custom presets to export.",
+    "No se pudieron exportar los presets.": "Could not export presets.",
+    "No se pudieron importar los presets.": "Could not import presets.",
+    "El archivo no contiene presets válidos.": "The file contains no valid presets.",
+    "Presets exportados: %s": "Presets exported: %s",
+    "Presets importados: %d": "Presets imported: %d",
     "Controles restablecidos a plano": "Controls reset to flat",
     "Procesando en segundo plano (icono en bandeja).": "Processing in background (tray icon).",
     "Se abrió la carpeta con el instalador de VB-CABLE.": "Opened the folder with the VB-CABLE installer.",
@@ -215,6 +223,10 @@ EXPLAIN = {
     "dinámica y hace más uniforme el volumen entre voces y música; "
     "no es un aumento de volumen automático y un exceso puede sonar "
     "aplastado.",
+    "true_peak": "True-peak con sobremuestreo x4: además de los picos visibles, "
+    "detecta y limita los que caen ENTRE dos muestras (los que suelen "
+    "distorsionar al subir volumen). Es la etapa más costosa del "
+    "procesado; se puede apagar en equipos lentos.",
 }
 
 EXPLAIN_EN = {
@@ -230,6 +242,10 @@ EXPLAIN_EN = {
     "distortion instead of cutting them abruptly.",
     "compressor": "RMS compressor: measures average loudness and gradually reduces overly "
     "loud sections, making volume more consistent.",
+    "true_peak": "True-peak with x4 oversampling: besides sample peaks, it detects "
+    "and limits peaks that fall BETWEEN samples (the ones that distort "
+    "when you raise volume). It is the heaviest stage; turn it off on "
+    "slower machines.",
 }
 
 EQ_EXPLAIN = {
@@ -302,3 +318,12 @@ def translate(text, language):
     if language == "en":
         return TRANSLATIONS.get(text, text)
     return text
+
+
+def explain(key, language):
+    """Descripción de un control para los tooltips, en el idioma activo.
+
+    A diferencia de ``translate`` (que traduce etiquetas por su texto), aquí la
+    clave es un identificador corto del control: bass, treble, limiter, etc."""
+    table = EXPLAIN_EN if language == "en" else EXPLAIN
+    return table.get(key, "")

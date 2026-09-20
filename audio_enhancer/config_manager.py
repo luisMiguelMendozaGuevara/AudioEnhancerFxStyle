@@ -87,6 +87,20 @@ class ConfigManager:
         except (TypeError, ValueError):
             return None
 
+    def sanitize_presets(self, raw: Any) -> dict[str, tuple[float, float, float, list[float]]]:
+        """Sanea un mapa {nombre: preset}; descarta los inválidos.
+
+        Se usa al cargar el config y al IMPORTAR un JSON de presets: un archivo
+        externo editado a mano no puede colar ganancias de longitud incorrecta
+        (desalinearía el EQ del DSP) ni valores fuera de rango."""
+        out: dict[str, tuple[float, float, float, list[float]]] = {}
+        if isinstance(raw, dict):
+            for name, value in raw.items():
+                preset = self.sanitize_preset(value)
+                if preset is not None:
+                    out[str(name)] = preset
+        return out
+
     # ---------- migración ----------
 
     @staticmethod
@@ -129,13 +143,7 @@ class ConfigManager:
             latency = LATENCY_CHOICES_MS[1]
 
         # Presets personalizados: dict nombre -> tupla saneada.
-        custom: dict[str, tuple[float, float, float, list[float]]] = {}
-        raw_custom = raw.get("custom_presets")
-        if isinstance(raw_custom, dict):
-            for name, value in raw_custom.items():
-                preset = self.sanitize_preset(value)
-                if preset is not None:
-                    custom[str(name)] = preset
+        custom = self.sanitize_presets(raw.get("custom_presets"))
 
         language = raw.get("language")
         if language not in ("es", "en"):

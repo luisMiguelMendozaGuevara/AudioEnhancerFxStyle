@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import threading
@@ -19,6 +20,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -48,7 +50,7 @@ from ...constants import (
 from ...device_utils import is_bluetooth_name, pick_default_output
 from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
 from ...engine import _pa
-from ...i18n import PRESETS, detect_system_language, translate
+from ...i18n import PRESETS, detect_system_language, explain, translate
 from ...startup_metrics import StartupMetrics
 from .audio_state import AudioState
 from .pages.audio import AudioPage
@@ -239,6 +241,10 @@ class NewMainWindow(QMainWindow):
     def _t(self, text):
         return translate(text, self.language)
 
+    def _explain(self, key):
+        """Descripción de un control para tooltips, en el idioma activo."""
+        return explain(key, self.language)
+
     def _build_shell(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -306,7 +312,7 @@ class NewMainWindow(QMainWindow):
         """Crea las 6 paginas con el traductor actual."""
         self._pages["home"] = HomePage(self.state, self._t)
         self._pages["equalizer"] = EqualizerPage(self.state, self._t)
-        self._pages["effects"] = EffectsPage(self.state, self._t)
+        self._pages["effects"] = EffectsPage(self.state, self._t, self._explain)
         self._pages["audio"] = AudioPage(self.state, self._t)
         self._pages["presets"] = PresetsPage(self.state, self._t)
         self._pages["settings"] = SettingsPage(self.state, self._t)
@@ -383,6 +389,8 @@ class NewMainWindow(QMainWindow):
         audio_page.latency_selected.connect(self._on_latency_pref_changed)
         self._pages["presets"].save_requested.connect(self._save_custom_preset)
         self._pages["presets"].delete_requested.connect(self._delete_custom_preset)
+        self._pages["presets"].import_requested.connect(self._import_presets)
+        self._pages["presets"].export_requested.connect(self._export_presets)
         settings = self._pages["settings"]
         settings.autostart_toggled.connect(self._toggle_autostart)
         settings.theme_selected.connect(self._on_theme_changed)
@@ -786,6 +794,46 @@ class NewMainWindow(QMainWindow):
         presets_page.clear_name_entry()
         self._refresh_preset_list(name)
         self._save_config()
+
+    def _export_presets(self) -> None:
+        """Guarda los presets personalizados en un JSON portable."""
+        if not self.custom_presets:
+            self._status_bar.set_status_text(self._t("No hay presets personalizados para exportar."), WARN)
+            return
+        path, _ = QFileDialog.getSaveFileName(self, self._t("Exportar presets"), "presets.json", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({n: list(v) for n, v in self.custom_presets.items()}, f, ensure_ascii=False, indent=2)
+        except OSError:
+            logger.exception("No se pudieron exportar los presets")
+            self._status_bar.set_status_text(self._t("No se pudieron exportar los presets."), DANGER)
+            return
+        self._status_bar.set_status_text(self._t("Presets exportados: %s") % path, OK)
+
+    def _import_presets(self) -> None:
+        """Carga presets desde un JSON externo, los sanea y los añade."""
+        path, _ = QFileDialog.getOpenFileName(self, self._t("Importar presets"), "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            logger.exception("No se pudieron importar los presets")
+            self._status_bar.set_status_text(self._t("No se pudieron importar los presets."), DANGER)
+            return
+        # (R3-C2) El saneo vive en ConfigManager: un JSON editado a mano no
+        # puede colar ganancias de longitud incorrecta ni valores fuera de rango.
+        imported = self._config.sanitize_presets(raw)
+        if not imported:
+            self._status_bar.set_status_text(self._t("El archivo no contiene presets válidos."), WARN)
+            return
+        self.custom_presets.update(imported)
+        self._refresh_preset_list()
+        self._save_config()
+        self._status_bar.set_status_text(self._t("Presets importados: %d") % len(imported), OK)
 
     def _sync_ui_from_state(self) -> None:
         home = self._pages["home"]

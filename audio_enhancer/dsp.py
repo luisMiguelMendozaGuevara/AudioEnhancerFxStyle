@@ -36,6 +36,25 @@ def _scipy_signal():
     return _signal
 
 
+_ndimage = None
+
+
+def _scipy_ndimage():
+    """scipy.ndimage perezoso (mismo motivo que scipy.signal: import caro).
+
+    Se usa en el limitador true-peak: los filtros de máximo/mínimo 1-D son
+    O(n) (van Herk) frente al O(n·ventana) de la ventana deslizante de numpy
+    (ventana de 2·look-ahead+1 = 1153 muestras sobre 4x la señal)."""
+    global _ndimage
+    if _ndimage is None:
+        with _signal_lock:
+            if _ndimage is None:
+                from scipy import ndimage as _nd
+
+                _ndimage = _nd
+    return _ndimage
+
+
 # Histéresis Schmitt de activación de secciones de filtro (en dB): una
 # sección ENTRA cuando |ganancia| >= SECTION_ENTER_DB y SALE cuando
 # |ganancia| < SECTION_EXIT_DB. La banda muerta intermedia evita el parpadeo
@@ -591,9 +610,11 @@ class Enhancer:
             up = np.abs(sig.resample_poly(y, 4, 1, axis=0)).max(axis=1)
             la_up = la * 4
             # Envolvente CENTRADA (±3 ms) sobre la senal sobremuestreada.
-            pad0 = np.concatenate([np.full(la_up, up[0], dtype=up.dtype), up, np.full(la_up, up[-1], dtype=up.dtype)])
-            win_up = np.lib.stride_tricks.sliding_window_view(pad0, 2 * la_up + 1)
-            env_up = win_up.max(axis=1)  # (4n,)
+            # maximum_filter1d(size impar, mode="nearest") replica los bordes
+            # igual que el padding manual, pero en O(n) (van Herk) en vez de
+            # O(n·ventana): la ventana mide 2·la_up+1 = 1153.
+            nd = _scipy_ndimage()
+            env_up = nd.maximum_filter1d(up, size=2 * la_up + 1, mode="nearest")  # (4n,)
             g_up = np.where(env_up > thr, thr / np.maximum(env_up, 1e-9), 1.0)
             # Colapso 4->1 por MINIMO sobre la MISMA ventana: la ganancia por
             # muestra base queda LENTA (constante por regiones). Min-pool de
@@ -601,10 +622,8 @@ class Enhancer:
             # requisito oscila a la tasa del propio audio, modula la senal y
             # genera splatter con picos nuevos. Minimo sobre ±3 ms = ganancia
             # sostenida que cubre el intervalo completo de los picos.
-            pad_g = np.full(la_up, g_up[0], dtype=g_up.dtype)
-            gp = np.concatenate([pad_g, g_up, np.full(la_up, g_up[-1], dtype=g_up.dtype)])
-            win_g = np.lib.stride_tricks.sliding_window_view(gp, 2 * la_up + 1)
-            g = win_g.min(axis=1)[::4][: y.shape[0]]
+            g_slow = nd.minimum_filter1d(g_up, size=2 * la_up + 1, mode="nearest")
+            g = g_slow[::4][: y.shape[0]]
             if g.shape[0] < y.shape[0]:
                 g = np.concatenate([g, np.full(y.shape[0] - g.shape[0], g[-1])])
         else:
