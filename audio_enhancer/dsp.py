@@ -165,9 +165,15 @@ class Enhancer:
         self._section_on: dict[str, bool] = {}
         # A/B crossfade: blend=1 efectos, blend=0 directo
         self.blend: float = 1.0
-        # Medidor
+        # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
+        # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
+        # global); los _l/_r alimentan los medidores estéreo de la UI.
         self.level_rms: float = 0.0
         self.level_peak: float = 0.0
+        self.level_rms_l: float = 0.0
+        self.level_rms_r: float = 0.0
+        self.level_peak_l: float = 0.0
+        self.level_peak_r: float = 0.0
         # Valores suavizados actuales (rampa anti-cremallera)
         self._c_vol: float = 1.0
         self._c_bass: float = 0.0
@@ -212,6 +218,10 @@ class Enhancer:
         self._section_on = {}
         self.level_rms = 0.0
         self.level_peak = 0.0
+        self.level_rms_l = 0.0
+        self.level_rms_r = 0.0
+        self.level_peak_l = 0.0
+        self.level_peak_r = 0.0
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -697,8 +707,25 @@ class Enhancer:
         self.spectrum = out
 
     def _measure_levels(self, y) -> None:
-        """Actualiza el medidor de nivel (RMS y pico suavizados) del bloque."""
-        peak = float(np.max(np.abs(y))) if y.size else 0.0
-        rms = float(np.sqrt(np.mean(y**2))) if y.size else 0.0
-        self.level_peak = self.level_peak * 0.7 + peak * 0.3
-        self.level_rms = self.level_rms * 0.85 + rms * 0.15
+        """Actualiza el medidor de nivel POR CANAL (L/R) y el agregado.
+
+        Antes mezclaba canales (max/mean sobre todo el array): con estéreo
+        real el medidor no distinguía un canal del otro. Ahora se mide cada
+        canal y ``level_peak``/``level_rms`` quedan como el máximo de ambos
+        (mismo valor que daba el cálculo global, por compatibilidad)."""
+        if y.size == 0:
+            peak_l = peak_r = rms_l = rms_r = 0.0
+        elif y.ndim > 1 and y.shape[1] >= 2:
+            peak_l = float(np.max(np.abs(y[:, 0])))
+            peak_r = float(np.max(np.abs(y[:, 1])))
+            rms_l = float(np.sqrt(np.mean(y[:, 0] ** 2)))
+            rms_r = float(np.sqrt(np.mean(y[:, 1] ** 2)))
+        else:  # mono: ambos canales idénticos
+            peak_l = peak_r = float(np.max(np.abs(y)))
+            rms_l = rms_r = float(np.sqrt(np.mean(y**2)))
+        self.level_peak_l = self.level_peak_l * 0.7 + peak_l * 0.3
+        self.level_peak_r = self.level_peak_r * 0.7 + peak_r * 0.3
+        self.level_rms_l = self.level_rms_l * 0.85 + rms_l * 0.15
+        self.level_rms_r = self.level_rms_r * 0.85 + rms_r * 0.15
+        self.level_peak = max(self.level_peak_l, self.level_peak_r)
+        self.level_rms = max(self.level_rms_l, self.level_rms_r)

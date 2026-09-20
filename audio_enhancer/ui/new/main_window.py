@@ -946,6 +946,9 @@ class NewMainWindow(QMainWindow):
         # acercarse al techo). Antes ambos mostraban el mismo valor.
         self.state.input_level = float(self.enhancer.level_rms)
         self.state.output_level = float(self.enhancer.level_peak)
+        # Niveles por canal para los medidores estéreo (L/R).
+        self.state.input_levels = (self.enhancer.level_rms_l, self.enhancer.level_rms_r)
+        self.state.output_levels = (self.enhancer.level_peak_l, self.enhancer.level_peak_r)
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None

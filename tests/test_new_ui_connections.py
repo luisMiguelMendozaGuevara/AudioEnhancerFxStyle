@@ -321,6 +321,28 @@ def test_toggle_audio_deshabilita_el_boton_durante_el_prefill(window, monkeypatc
     assert home._start_button.isEnabled() is True
 
 
+# ---------- Medidores estéreo (L/R) ----------
+
+
+def test_estado_emite_niveles_por_canal(qapp):
+    from audio_enhancer.ui.new.audio_state import AudioState
+
+    st = AudioState()
+    got = []
+    st.input_levels_changed.connect(lambda left, right: got.append((left, right)))
+    st.input_levels = (0.5, 0.2)
+    assert got == [(0.5, 0.2)]
+
+
+def test_medidor_estereo_guarda_los_dos_canales(qapp):
+    from audio_enhancer.ui.new.widgets.level_meter import LevelMeterWidget
+
+    m = LevelMeterWidget(stereo=True)
+    m.set_stereo(0.8, 0.3)
+    assert m._level_l == pytest.approx(0.8)
+    assert m._level_r == pytest.approx(0.3)
+
+
 # ---------- Importar / Exportar presets (JSON) ----------
 
 

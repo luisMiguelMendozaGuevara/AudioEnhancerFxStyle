@@ -125,14 +125,15 @@ class HomePage(QWidget):
                 f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
             )
             row.addWidget(lbl)
-            meter = LevelMeterWidget(orientation="horizontal", show_label=False)
+            meter = LevelMeterWidget(orientation="horizontal", show_label=False, stereo=True)
             setattr(self, attr, meter)
             row.addWidget(meter, 1)
             layout.addLayout(row)
 
         parent.addWidget(card)
-        self._state.input_level_changed.connect(self._on_input_level)
-        self._state.output_level_changed.connect(self._on_output_level)
+        # Medidores estéreo: niveles por canal (L, R).
+        self._state.input_levels_changed.connect(self._on_input_levels)
+        self._state.output_levels_changed.connect(self._on_output_levels)
 
     def _build_controls_card(self, parent: QVBoxLayout) -> None:
         card = self._card()
@@ -236,11 +237,11 @@ class HomePage(QWidget):
     def _on_spectrum_changed(self, data) -> None:
         self._spectrum.set_spectrum(data)
 
-    def _on_input_level(self, level: float) -> None:
-        self._input_meter.set_level(level)
+    def _on_input_levels(self, left: float, right: float) -> None:
+        self._input_meter.set_stereo(left, right)
 
-    def _on_output_level(self, level: float) -> None:
-        self._output_meter.set_level(level)
+    def _on_output_levels(self, left: float, right: float) -> None:
+        self._output_meter.set_stereo(left, right)
 
     def set_preset_items(self, names: list[str]) -> None:
         self._preset_combo.blockSignals(True)

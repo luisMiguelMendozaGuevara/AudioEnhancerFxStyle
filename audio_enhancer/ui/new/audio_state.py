@@ -29,6 +29,9 @@ class AudioState(QObject):
     output_device_changed = Signal(str)
     input_level_changed = Signal(float)
     output_level_changed = Signal(float)
+    # Niveles por canal (L, R) para los medidores estéreo.
+    input_levels_changed = Signal(float, float)
+    output_levels_changed = Signal(float, float)
     latency_changed = Signal(float)
     sample_rate_changed = Signal(int)
     spectrum_changed = Signal(object)
@@ -53,6 +56,8 @@ class AudioState(QObject):
         # Niveles
         self._input_level: float = 0.0
         self._output_level: float = 0.0
+        self._input_levels: tuple[float, float] = (0.0, 0.0)
+        self._output_levels: tuple[float, float] = (0.0, 0.0)
         # Tecnico
         self._latency_ms: float = 0.0
         self._sample_rate: int = 48000
@@ -126,6 +131,34 @@ class AudioState(QObject):
         if abs(value - self._output_level) >= _LEVEL_EPS_PEAK:
             self._output_level = value
             self.output_level_changed.emit(value)
+
+    @property
+    def input_levels(self) -> tuple[float, float]:
+        """Nivel (L, R) de entrada para el medidor estéreo."""
+        return self._input_levels
+
+    @input_levels.setter
+    def input_levels(self, value: tuple[float, float]) -> None:
+        left, right = float(value[0]), float(value[1])
+        if abs(left - self._input_levels[0]) >= _LEVEL_EPS_RMS or abs(right - self._input_levels[1]) >= _LEVEL_EPS_RMS:
+            self._input_levels = (left, right)
+            self.input_levels_changed.emit(left, right)
+
+    @property
+    def output_levels(self) -> tuple[float, float]:
+        """Nivel (L, R) de salida para el medidor estéreo."""
+        return self._output_levels
+
+    @output_levels.setter
+    def output_levels(self, value: tuple[float, float]) -> None:
+        left, right = float(value[0]), float(value[1])
+        changed = (
+            abs(left - self._output_levels[0]) >= _LEVEL_EPS_PEAK
+            or abs(right - self._output_levels[1]) >= _LEVEL_EPS_PEAK
+        )
+        if changed:
+            self._output_levels = (left, right)
+            self.output_levels_changed.emit(left, right)
 
     @property
     def latency_ms(self) -> float:

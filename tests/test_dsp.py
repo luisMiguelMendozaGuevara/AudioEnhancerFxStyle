@@ -626,3 +626,27 @@ def test_eq_target_cache_rampa_inplace_converge():
     for _ in range(80):
         enh.process(silencio)
     assert float(enh._c_eq[0]) == pytest.approx(-3.0, rel=1e-3)
+
+
+def test_medidores_por_canal_l_r():
+    """El medidor mide cada canal por separado (L más fuerte que R); el
+    agregado level_peak/level_rms sigue siendo el MÁXIMO de ambos."""
+    e = Enhancer()
+    e.compressor = False
+    e.limiter = False
+    t = np.arange(N) / FS
+    onda = np.sin(2 * np.pi * 220.0 * t)
+    x = np.stack([(0.5 * onda).astype(np.float32), (0.1 * onda).astype(np.float32)], axis=1)
+    warm(e, x)
+    e.process(x.copy())
+    assert e.level_peak_l > e.level_peak_r
+    assert e.level_rms_l > e.level_rms_r
+    assert e.level_peak == pytest.approx(max(e.level_peak_l, e.level_peak_r))
+    assert e.level_rms == pytest.approx(max(e.level_rms_l, e.level_rms_r))
+
+
+def test_medidores_reset_limpia_canales():
+    e = Enhancer()
+    e.level_peak_l = e.level_peak_r = e.level_rms_l = e.level_rms_r = 0.7
+    e.reset_state()
+    assert (e.level_peak_l, e.level_peak_r, e.level_rms_l, e.level_rms_r) == (0.0, 0.0, 0.0, 0.0)
