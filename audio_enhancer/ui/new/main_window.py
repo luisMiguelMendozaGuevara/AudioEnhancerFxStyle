@@ -209,6 +209,7 @@ class NewMainWindow(QMainWindow):
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
         self._stats_log_tick = 0  # log de diagnóstico ~10 s
         self._last_captured = 0
+        self._last_stats: dict[str, int] = {}
         self._keep_src = ""
         self._keep_out = ""
         self._latest_spectrum = None
@@ -1002,21 +1003,29 @@ class NewMainWindow(QMainWindow):
             if self._stats_log_tick >= 300:
                 self._stats_log_tick = 0
                 s = self.engine.stats_snapshot()
-                captured = int(s["captured_frames"])
-                delta = captured - self._last_captured
-                self._last_captured = captured
+                prev = self._last_stats
+
+                def delta(key: str) -> int:
+                    return int(s[key]) - int(prev.get(key, s[key]))
+
                 logger.info(
-                    "metricas: unders=%d huecos=%d deriva=%d descartes=%d overflows=%d capturados_10s=%d",
-                    s["output_underruns"],
-                    s["gap_blocks"],
-                    s["drift_adjust_frames"],
-                    s["dropped_frames"],
-                    s["input_overflows"],
-                    delta,
+                    "metricas(10s): unders=%d huecos=%d frames_hueco=%d deriva=%d "
+                    "descartes=%d overflows=%d capturados=%d fill=%d/%d",
+                    delta("output_underruns"),
+                    delta("gap_blocks"),
+                    delta("gap_frames"),
+                    delta("drift_adjust_frames"),
+                    delta("dropped_frames"),
+                    delta("input_overflows"),
+                    delta("captured_frames"),
+                    self.engine.fill(),
+                    self.engine.drift_target,
                 )
+                self._last_stats = dict(s)
         else:
             self._stats_log_tick = 0
             self._last_captured = 0
+            self._last_stats = {}
 
     def _apply_config(self) -> None:
         # (R3-C2) ConfigManager devuelve SIEMPRE el diccionario completo y

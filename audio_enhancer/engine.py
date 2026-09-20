@@ -107,6 +107,11 @@ class AudioEngine:
             "drift_adjust_frames": 0,
             "output_underruns": 0,
             "input_overflows": 0,
+            # Frames de SILENCIO insertados por el hueco (subconjunto de los
+            # frame_count de gap_blocks). Separa la causa: si en un intervalo
+            # no hubo descartes ni overflows ni bajada del ring, el hueco no se
+            # debe a un pico del DSP ni a sobrecarga de captura.
+            "gap_frames": 0,
         }
 
     @property
@@ -313,6 +318,7 @@ class AudioEngine:
         self.in_gap = True
         self.fadein_frames = max(self.fadein_frames, self._fade)
         self._stats["gap_blocks"] += 1  # métrica en vivo (lock tomado)
+        self._stats["gap_frames"] += n - m  # frames de silencio insertados
         return out
 
     # ---------- callbacks ----------
