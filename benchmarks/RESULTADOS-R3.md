@@ -66,3 +66,33 @@ privados de páginas**; toda la lógica de ruteo/config tiene tests puros.
 ```bash
 python benchmarks/bench_dsp.py --json resultados.json
 ```
+
+## Decisiones explicitas (no revertir sin re-medir)
+
+Optimizaciones evaluadas y DESCARTADAS con medicion (no volver a proponerlas):
+
+- **SpectrumWorker a 25 Hz (en vez de 30)**: el espectro cuesta 0.82% del
+  bloque (medido: spectrum p50 ~70-100 us vs bloque de 21.33 ms). Bajarlo a
+  25 Hz ahorraria ~0.2% sin beneficio perceptual. No tocar.
+- **Vectorizar `_cubic_hermite`**: la version vectorizada es ~30% MAS LENTA
+  (el fancy-indexing crea temporales (N,2)). Mantener el bucle de 2 canales.
+  Medido: bucle p50=163 us vs vectorizado p50=211 us.
+- **Mascara en el `np.log10` del compresor**: el compresor completo cuesta
+  ~200 us; la mascara anade overhead neto sin ahorro. No aplicar.
+- **Ventanas deslizantes del limitador true-peak**: YA optimizadas a filtros
+  O(n) de scipy.ndimage (maximum/minimum_filter1d). Medido: -44% en el
+  limitador true-peak (4110 -> 2288 us p50) y -25% en full_hot. Equivalencia
+  exacta con test de regresion.
+
+## Gate de rendimiento (bench_dsp.py --check)
+
+`--check` mide el PEOR caso (`max_us`), no el p95: un pico por encima del
+bloque es lo que produce un microcorte real (underrun del ring). Referencia
+con el umbral 100% del bloque (medido en este equipo):
+
+    full_hot  max=23.1 ms (108% del bloque)  <-- UNICO escenario que excede
+
+Es un hallazgo real (no un fallo del gate): el peor caso del DSP con EQ +
+compresor + limitador supera el presupuesto de 21.33 ms y puede provocar
+microcortes. Mitigacion actual: subir la latencia objetivo (40 -> 60/100 ms)
+da mas margen al ring y/o apagar true-peak (la etapa mas cara).

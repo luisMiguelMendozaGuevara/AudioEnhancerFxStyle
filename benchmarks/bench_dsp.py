@@ -205,16 +205,75 @@ def _print_table(results: dict) -> None:
         )
 
 
+def _check_budget(results: dict, max_pct: float = 100.0) -> int:
+    """Falla si algún escenario excede ``max_pct`` del bloque en el PEOR caso.
+
+    Se mide ``max_us`` (no ``p95``): un pico por encima del bloque es lo que
+    provoca un microcorte real (underrun del ring); el p95 lo esconde. El
+    umbral por defecto es 100% del bloque (no excederlo en el peor caso).
+    """
+    budget_us = results["_meta"]["block_ms"] * 1000.0
+    fails = [
+        f"{name}: max={entry['max_us']:.0f}us ({entry['max_us'] / budget_us * 100:.0f}% del bloque)"
+        for name, entry in results.items()
+        if not name.startswith("_") and entry["max_us"] / budget_us * 100.0 > max_pct
+    ]
+    if fails:
+        print(f"\n[FAIL] presupuesto de bloque ({max_pct:.0f}% en el peor caso) excedido:")
+        for f in fails:
+            print(f"  - {f}")
+        return 1
+    print(f"\n[OK] todos los escenarios <= {max_pct:.0f}% del bloque (peor caso)")
+    return 0
+
+
+def _compare_baseline(results: dict, baseline_path: Path, tolerance: float = 0.30) -> int:
+    """Compara contra un baseline JSON: falla si algún ``max_us`` empeora >tolerance.
+
+    Tolerancia por defecto 30%: el hardware de CI no es comparable al local."""
+    if not baseline_path.exists():
+        print(f"\n(aviso) baseline no encontrado: {baseline_path}; se omite la comparación")
+        return 0
+    base = json.loads(baseline_path.read_text(encoding="utf-8"))
+    regressions = []
+    for name, entry in results.items():
+        if name.startswith("_") or name not in base:
+            continue
+        old = base[name].get("max_us", 0)
+        new = entry.get("max_us", 0)
+        if old > 0 and (new - old) / old > tolerance:
+            regressions.append(f"{name}: max {old} -> {new} us (+{(new - old) / old * 100:.0f}%)")
+    if regressions:
+        print(f"\n[FAIL] regresión de rendimiento vs {baseline_path.name}:")
+        for r in regressions:
+            print(f"  - {r}")
+        return 1
+    print(f"\n[OK] sin regresiones > {tolerance * 100:.0f}% vs {baseline_path.name}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", type=str, default="", help="ruta para volcar resultados JSON")
+    parser.add_argument("--check", action="store_true", help="falla si se excede el presupuesto de bloque")
+    parser.add_argument(
+        "--max-pct", type=float, default=100.0, help="%% máximo del bloque en el peor caso (con --check)"
+    )
+    parser.add_argument("--baseline", type=str, default="", help="JSON de baseline para comparar (tolerancia 30%%)")
     args = parser.parse_args()
+
     results = run_benchmarks()
     _print_table(results)
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"\nresultados volcados en {args.json}")
-    return 0
+
+    rc = 0
+    if args.check:
+        rc |= _check_budget(results, max_pct=args.max_pct)
+    if args.baseline:
+        rc |= _compare_baseline(results, Path(args.baseline))
+    return rc
 
 
 if __name__ == "__main__":
