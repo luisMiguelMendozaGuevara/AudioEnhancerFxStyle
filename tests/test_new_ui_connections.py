@@ -336,6 +336,16 @@ def test_techo_seguridad_toggle_llega_al_dsp(window):
     assert toggle.text() == "ON"
 
 
+def test_recorte_final_toggle_llega_al_dsp(window):
+    toggle = window._pages["effects"]._final_clip_card._toggle
+    toggle.setChecked(False)
+    assert window.enhancer.final_clip_enabled is False
+    assert toggle.text() == "OFF"
+    toggle.setChecked(True)
+    assert window.enhancer.final_clip_enabled is True
+    assert toggle.text() == "ON"
+
+
 def test_watchdog_check_llega_al_controlador(window):
     check = window._pages["settings"]._watchdog_check
     check.setChecked(False)

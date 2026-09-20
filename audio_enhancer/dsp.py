@@ -143,6 +143,9 @@ class Enhancer:
         # Interruptor del techo de seguridad (página Efectos). Apagado, el
         # único tope es el recorte duro a ±1.0 al final de process().
         self.safety_ceiling_enabled: bool = True
+        # Recorte duro final a ±1.0 (página Efectos). Apagado, la señal sale
+        # SIN recortar (puede pasar de 1.0): el recorte queda en el driver.
+        self.final_clip_enabled: bool = True
         # True-peak: envolvente medida sobre la señal 4x sobremuestreada
         # (detecta picos inter-muestra invisibles al pico por muestra; típico
         # con contenido cerca de Nyquist).
@@ -385,7 +388,9 @@ class Enhancer:
             return wet[:, 0] if mono else wet
         dry = data.copy()
         y = dry * (1.0 - self._c_blend) + wet * self._c_blend
-        y = np.clip(y, -1.0, 1.0).astype(np.float32)
+        if self.final_clip_enabled:
+            y = np.clip(y, -1.0, 1.0)
+        y = y.astype(np.float32)
         self._measure_levels(y)
         return y[:, 0] if mono else y
 
@@ -482,7 +487,11 @@ class Enhancer:
             peak = max(float(y.max()), -float(y.min()))
             if self.safety_ceiling_enabled and peak > self.safety_ceiling:
                 y = self._limit(y, thr=self.safety_ceiling)
-        return np.clip(y, -1.0, 1.0).astype(np.float32)
+        # Recorte duro final (±1.0), desactivable: apagado, la señal sale tal
+        # cual y el recorte (si lo hay) ocurre en el driver de audio.
+        if self.final_clip_enabled:
+            y = np.clip(y, -1.0, 1.0)
+        return y.astype(np.float32)
 
     def _apply_volume(self, data, block_sec):
         """Aplica el volumen con una rampa exponencial POR MUESTRA (tau ~100 ms).

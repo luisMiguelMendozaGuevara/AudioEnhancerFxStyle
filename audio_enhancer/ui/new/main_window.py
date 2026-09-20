@@ -193,6 +193,7 @@ class NewMainWindow(QMainWindow):
         state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
         state.true_peak_changed.connect(lambda on: setattr(self.enhancer, "true_peak", bool(on)))
         state.safety_ceiling_changed.connect(lambda on: setattr(self.enhancer, "safety_ceiling_enabled", bool(on)))
+        state.final_clip_changed.connect(lambda on: setattr(self.enhancer, "final_clip_enabled", bool(on)))
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
         self.custom_presets: dict[str, Any] = {}
         self.loopbacks: list[dict[str, Any]] = []
@@ -853,6 +854,7 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_compressor(self.enhancer.compressor)
         self._pages["effects"].set_true_peak(self.enhancer.true_peak)
         self._pages["effects"].set_safety_ceiling(self.enhancer.safety_ceiling_enabled)
+        self._pages["effects"].set_final_clip(self.enhancer.final_clip_enabled)
         home.set_ab(self.enhancer.blend > 0.5)
         # Consistencia: AudioState alineado con el DSP (los set_* de las
         # paginas usan blockSignals y no escriben en el estado).
@@ -1010,6 +1012,7 @@ class NewMainWindow(QMainWindow):
         # Techo de seguridad y watchdog: se aplican directo (no van en
         # EnhancerParams ni en el estado de audio).
         self.enhancer.safety_ceiling_enabled = bool(cfg["safety_ceiling"])
+        self.enhancer.final_clip_enabled = bool(cfg["final_clip"])
         self.watchdog_enabled = bool(cfg["watchdog"])
         self.controller.set_watchdog_enabled(self.watchdog_enabled)
         # Preferencia de latencia persistida (40/60/100 ms), ya validada.
@@ -1043,6 +1046,7 @@ class NewMainWindow(QMainWindow):
             "compressor": bool(self.enhancer.compressor),
             "true_peak": bool(self.enhancer.true_peak),
             "safety_ceiling": bool(self.enhancer.safety_ceiling_enabled),
+            "final_clip": bool(self.enhancer.final_clip_enabled),
             "theme": Theme.mode,
             "latency_pref": int(self.state.latency_pref),
             "minimize_to_tray": bool(self.minimize_to_tray),

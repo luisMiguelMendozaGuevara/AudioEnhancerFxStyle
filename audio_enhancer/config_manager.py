@@ -166,6 +166,7 @@ class ConfigManager:
             "compressor": self.as_bool(raw.get("compressor"), True),
             "true_peak": self.as_bool(raw.get("true_peak"), True),
             "safety_ceiling": self.as_bool(raw.get("safety_ceiling"), True),
+            "final_clip": self.as_bool(raw.get("final_clip"), True),
             "watchdog": self.as_bool(raw.get("watchdog"), True),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),

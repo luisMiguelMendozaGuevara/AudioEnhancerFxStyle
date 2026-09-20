@@ -145,7 +145,10 @@ def test_preset_plano_esta_plano():
 # ---------- textos de ayuda ----------
 
 
-@pytest.mark.parametrize("clave", ["volumen", "bass", "treble", "eq", "limiter", "compressor", "true_peak"])
+@pytest.mark.parametrize(
+    "clave",
+    ["volumen", "bass", "treble", "eq", "limiter", "compressor", "true_peak", "safety_ceiling", "final_clip"],
+)
 def test_explain_cubre_todos_los_controles(clave):
     assert clave in EXPLAIN and clave in EXPLAIN_EN
 

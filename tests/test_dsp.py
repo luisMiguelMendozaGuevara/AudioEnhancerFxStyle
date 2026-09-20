@@ -667,6 +667,28 @@ def test_techo_seguridad_desactivable():
     assert float(np.abs(y_on).max()) <= on.safety_ceiling + 1e-3  # techo transparente
 
 
+def test_recorte_final_desactivable():
+    """Con el recorte final apagado la señal sale SIN recortar (>1.0); con él
+    activo nunca pasa de ±1.0."""
+    t = np.arange(N) / FS
+    x = np.stack([(1.5 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)] * 2, axis=1)
+
+    sin = Enhancer()
+    sin.compressor = False
+    sin.limiter = False
+    sin.safety_ceiling_enabled = False
+    sin.final_clip_enabled = False
+    warm(sin, x)
+    assert float(np.abs(sin.process(x.copy())).max()) > 1.0
+
+    con = Enhancer()
+    con.compressor = False
+    con.limiter = False
+    con.safety_ceiling_enabled = False
+    warm(con, x)
+    assert float(np.abs(con.process(x.copy())).max()) <= 1.0
+
+
 def test_medidores_reset_limpia_canales():
     e = Enhancer()
     e.level_peak_l = e.level_peak_r = e.level_rms_l = e.level_rms_r = 0.7

@@ -189,6 +189,23 @@ class EffectsPage(QWidget):
             self._safety_card._toggle.toggled.connect(self._on_safety_ceiling_toggle)
         layout.addWidget(self._safety_card)
 
+        # Recorte duro final (±1.0): guardia digital del último paso. Apagado,
+        # la señal sale sin recortar y el recorte (si lo hay) lo hace el driver.
+        self._final_clip_card = EffectCard(
+            self._t("Recorte final (±1.0)"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("final_clip"),
+        )
+        self._final_clip_card._slider.setEnabled(False)
+        if self._final_clip_card._toggle is not None:
+            self._final_clip_card._toggle.setChecked(True)
+            self._final_clip_card._toggle.toggled.connect(self._on_final_clip_toggle)
+        layout.addWidget(self._final_clip_card)
+
         layout.addStretch()
         scroll.setWidget(container)
         outer = QVBoxLayout(self)
@@ -231,6 +248,11 @@ class EffectsPage(QWidget):
             self._safety_card._toggle.setText("ON" if on else "OFF")
         self._state.safety_ceiling = on
 
+    def _on_final_clip_toggle(self, on) -> None:
+        if self._final_clip_card._toggle is not None:
+            self._final_clip_card._toggle.setText("ON" if on else "OFF")
+        self._state.final_clip = on
+
     def set_bass(self, v) -> None:
         self._bass_card.set_value(v)
 
@@ -248,3 +270,6 @@ class EffectsPage(QWidget):
 
     def set_safety_ceiling(self, on) -> None:
         self._safety_card.set_enabled(on)
+
+    def set_final_clip(self, on) -> None:
+        self._final_clip_card.set_enabled(on)

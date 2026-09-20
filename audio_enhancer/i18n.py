@@ -35,6 +35,7 @@ TRANSLATIONS = {
     "Compresor RMS": "RMS compressor",
     "True-peak (x4)": "True-peak (x4)",
     "Techo de seguridad": "Safety ceiling",
+    "Recorte final (±1.0)": "Final clip (±1.0)",
     "Detener el audio si se pierde el dispositivo": "Stop audio if the device is lost",
     "Nivel:": "Level:",
     "Ecualizador (9 bandas)": "Equalizer (9 bands)",
@@ -232,6 +233,9 @@ EXPLAIN = {
     "safety_ceiling": "Techo de seguridad: con el limitador apagado, evita el "
     "recorte duro (la 'estática') reduciendo suavemente los picos por encima "
     "de -0.1 dBFS. Apágalo solo si prefieres el sonido recortado sin procesar.",
+    "final_clip": "Recorte final (±1.0): última guardia digital; limita la "
+    "señal al rango válido. Apágalo solo para dejar pasar la señal sin "
+    "recortar (el recorte, si lo hay, lo hará el driver de audio).",
 }
 
 EXPLAIN_EN = {
@@ -254,6 +258,9 @@ EXPLAIN_EN = {
     "safety_ceiling": "Safety ceiling: with the limiter off, it prevents hard "
     "clipping (the 'static') by smoothly reducing peaks above -0.1 dBFS. Turn "
     "it off only if you prefer the raw clipped sound.",
+    "final_clip": "Final clip (±1.0): last digital guard; limits the signal to "
+    "the valid range. Turn it off only to let the signal pass unclipped (any "
+    "clipping, if present, will happen in the audio driver).",
 }
 
 EQ_EXPLAIN = {
