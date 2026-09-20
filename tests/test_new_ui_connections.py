@@ -323,6 +323,24 @@ def test_toggle_audio_deshabilita_el_boton_durante_el_prefill(window, monkeypatc
     assert home._start_button.isEnabled() is True
 
 
+# ---------- Contrato R3-C3: la ventana no toca privados de las páginas ----------
+
+
+def test_ventana_no_usa_privados_conocidos_de_paginas():
+    """R3-C3: la ventana solo usa señales y métodos públicos de las páginas.
+
+    Se comprueban los atributos privados que YA existieron como violación
+    (regex acotada, no una genérica propensa a falsos positivos)."""
+    import re
+    from pathlib import Path
+
+    import audio_enhancer.ui.new.main_window as mw
+
+    src = Path(mw.__file__).read_text(encoding="utf-8")
+    for attr in ("_latency_combo", "_volume_label", "_autostart_check", "_name_entry", "_start_button"):
+        assert not re.search(rf'self\._pages\["[a-z]+"\]\.{attr}\b', src), f"acceso privado R3-C3: {attr}"
+
+
 # ---------- Opciones nuevas: techo de seguridad, watchdog y latencia viva ----------
 
 
