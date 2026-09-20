@@ -28,26 +28,37 @@ jobs:
         # -c constraints.txt: versiones EXACTAS probadas -> build reproducible.
         run: python -m pip install --upgrade pip && python -m pip install ".[dev]" -c constraints.txt
 
-      - name: Build executable
-        shell: cmd
-        run: >-
-          python -m PyInstaller --clean --noconfirm --onefile --windowed
-          --name AudioEnhancerFxStyle
-          --icon assets\app.ico
-          --add-data "assets;assets"
-          --hidden-import pyaudiowpatch
-          AudioEnhancer_FxStyle.py
+      # Dos artefactos:
+      #  1) ONEDIR + Inno Setup -> instalador (autoria de accesos directos, desinstalador)
+      #  2) ONEFILE -> un .exe unico para quien no quiera instalar
+      # Ambos comparten las mismas versiones (constraints.txt).
 
-      - name: Upload build artifact
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build executable (onedir, via spec)
+        run: python -m PyInstaller --clean --noconfirm AudioEnhancerFxStyle.spec
+
+      - name: Build installer (Inno Setup)
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\AudioEnhancerFxStyle.iss'
+
+      - name: Build portable executable (onefile, via spec)
+        run: python -m PyInstaller --clean --noconfirm AudioEnhancerFxStyle-onefile.spec
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: AudioEnhancerFxStyle-windows
-          path: dist/AudioEnhancerFxStyle.exe
+          path: |
+            dist/AudioEnhancerFxStyle.exe
+            dist/installer/AudioEnhancerFxStyle-Setup-*.exe
           if-no-files-found: error
 
-      - name: Publish executable to GitHub Release
+      - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/AudioEnhancerFxStyle.exe
+          files: |
+            dist/installer/AudioEnhancerFxStyle-Setup-*.exe
+            dist/AudioEnhancerFxStyle.exe
           generate_release_notes: true

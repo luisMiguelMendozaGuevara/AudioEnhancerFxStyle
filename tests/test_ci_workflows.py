@@ -62,6 +62,31 @@ def _names_from_requirements(path: Path) -> set[str]:
     return out
 
 
+def test_build_produce_instalador_y_portable():
+    """El CI debe construir AMBOS artefactos desde specs que existen: el
+    instalador (onedir + Inno Setup) y el portable (onefile)."""
+    text = _read("pyinstaller-build.yml")
+    root = WORKFLOWS.parent.parent
+    # Specs referenciados por el workflow y presentes en el repo.
+    assert "AudioEnhancerFxStyle.spec" in text
+    assert "AudioEnhancerFxStyle-onefile.spec" in text
+    assert (root / "AudioEnhancerFxStyle.spec").exists()
+    assert (root / "AudioEnhancerFxStyle-onefile.spec").exists()
+    # Inno Setup produce el instalador (no se usa --onefile a mano en el CI).
+    assert "ISCC.exe" in text
+    assert "--onefile" not in text
+    # Publica ambos en la release.
+    assert text.count("AudioEnhancerFxStyle-Setup-") >= 1
+
+
+def test_readme_documenta_ambos_artefactos():
+    root = WORKFLOWS.parent.parent
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "AudioEnhancerFxStyle.spec" in readme
+    assert "AudioEnhancerFxStyle-onefile.spec" in readme
+    assert "--onefile" not in readme.split("## Building an Executable")[0]
+
+
 def test_requirements_alineado_con_pyproject():
     """requirements*.txt son duplicados manuales de pyproject.toml; este test
     caza desincronizaciones silenciosas (la fuente de verdad es pyproject)."""

@@ -148,16 +148,25 @@ You can also use `AudioEnhancer_instalar_seguro.bat`, which creates the virtual 
 
 ## Building an Executable
 
+Two artifacts are produced from the same sources:
+
+- **Installer** (recommended): `--onedir` package wrapped with Inno Setup.
+- **Portable**: a single `--onefile` `.exe` for users who prefer not to install.
+
 ```bat
 .venv\Scripts\pip install -r requirements-dev.txt
-.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --windowed ^
-  --name AudioEnhancerFxStyle ^
-  --icon assets\app.ico ^
-  --add-data "assets;assets" ^
-  AudioEnhancer_FxStyle.py
+
+:: 1) Onedir package + installer
+.venv\Scripts\pyinstaller.exe --clean --noconfirm AudioEnhancerFxStyle.spec
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\AudioEnhancerFxStyle.iss
+::    -> dist\installer\AudioEnhancerFxStyle-Setup-<version>.exe
+
+:: 2) Portable single-file executable
+.venv\Scripts\pyinstaller.exe --clean --noconfirm AudioEnhancerFxStyle-onefile.spec
+::    -> dist\AudioEnhancerFxStyle.exe
 ```
 
-The executable will be generated at `dist\AudioEnhancerFxStyle.exe`. Binaries, virtual environments, and build artifacts are not part of the source repository.
+Binaries, virtual environments, and build artifacts are not part of the source repository.
 
 ## Quick Validation
 

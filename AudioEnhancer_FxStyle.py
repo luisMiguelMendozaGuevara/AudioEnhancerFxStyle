@@ -3,8 +3,12 @@
 
 La implementación vivía en un monolito; ahora reside en el paquete
 ``audio_enhancer``. Este módulo queda como punto de entrada para conservar la
-compatibilidad con ``AudioEnhancer_activar.bat``, ``AudioEnhancer_instalar_seguro.bat``
-y ``AudioEnhancerFxStyle.spec`` (PyInstaller lo usa como script de arranque).
+compatibilidad con ``AudioEnhancer_activar.bat`` y
+``AudioEnhancer_instalar_seguro.bat``.
+
+PyInstaller lo usa como script de arranque de los dos specs del repo:
+``AudioEnhancerFxStyle.spec`` (onedir + instalador Inno Setup) y
+``AudioEnhancerFxStyle-onefile.spec`` (portable de un solo .exe).
 """
 
 import os
