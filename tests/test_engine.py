@@ -210,14 +210,20 @@ def test_set_drift_target_ms_en_caliente(engine):
     assert engine.drift_target == int(48000 * 0.040)
 
 
-def test_deriva_corrige_limitando_a_frames_maximos(engine):
+def test_deriva_se_acota_a_max_drift_frames_por_callback(engine):
+    """El callback de salida CLAMPA n_adj a ±_max_drift_frames incluso con deriva
+    extrema. El test anterior reimplementaba la fórmula dentro del test y la
+    verificaba contra sí misma (tautológico: pasaría aunque el motor no
+    existiera). Este ejercita `_out_callback` de verdad."""
     engine.configure_ring(48000)
-    engine.write_pos = engine._drift_target + 200  # salida rezagada (mucha deriva)
-    engine.read_pos = 0
-    with engine.lock:
-        n_adj = int(np.trunc((engine.write_pos - engine.read_pos - engine._drift_target) * engine._drift_gain))
-        n_adj = max(-engine._max_drift_frames, min(engine._max_drift_frames, n_adj))
-    assert -engine._max_drift_frames <= n_adj <= engine._max_drift_frames
+    engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
+    # Pre-cargar el ring MUY por encima del drift_target (salida rezagada extrema).
+    while engine.fill() < engine._drift_target + 500:
+        engine._cap_callback(np.zeros((CHUNK, 2), dtype=np.float32).tobytes(), CHUNK, None, 0)
+    before = engine.stats_snapshot()["drift_adjust_frames"]
+    engine._out_callback(None, CHUNK, None, 0)  # un solo callback
+    delta = engine.stats_snapshot()["drift_adjust_frames"] - before
+    assert 0 < delta <= engine._max_drift_frames
 
 
 # ---------- latencia objetivo desacoplada (Fase 2) ----------

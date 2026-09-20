@@ -6,10 +6,12 @@ import importlib
 
 def test_importan_todos_los_modulos():
     for nombre in (
+        "audio_enhancer.autostart",
         "audio_enhancer.constants",
         "audio_enhancer.audio_controller",
         "audio_enhancer.config",
         "audio_enhancer.config_manager",
+        "audio_enhancer.device_utils",
         "audio_enhancer.dsp",
         "audio_enhancer.engine",
         "audio_enhancer.i18n",

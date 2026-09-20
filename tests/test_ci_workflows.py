@@ -42,3 +42,40 @@ def test_pyinstaller_instala_desde_pyproject():
     # Instala desde el extra [dev] de pyproject (runtime + pytest/ruff/pyinstaller):
     # las versiones viven en UN solo lugar (pyproject.toml), no en el workflow.
     assert '".[dev]"' in text
+
+
+def _dep_names(specs) -> set[str]:
+    """Nombres de paquete normalizados ('numpy>=1.26' -> 'numpy')."""
+    import re
+
+    return {re.split(r"[<>=!\[; ]", d.strip())[0].lower() for d in specs if d.strip()}
+
+
+def _names_from_requirements(path: Path) -> set[str]:
+    """Nombres declarados en un requirements*.txt (ignora comentarios/opciones)."""
+    out = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        out |= _dep_names([line])
+    return out
+
+
+def test_requirements_alineado_con_pyproject():
+    """requirements*.txt son duplicados manuales de pyproject.toml; este test
+    caza desincronizaciones silenciosas (la fuente de verdad es pyproject)."""
+    import tomllib
+
+    root = WORKFLOWS.parent.parent
+    with open(root / "pyproject.toml", "rb") as f:
+        pp = tomllib.load(f)
+
+    runtime = _dep_names(pp["project"]["dependencies"])
+    dev = _dep_names(pp["project"]["optional-dependencies"]["dev"])
+
+    in_req = _names_from_requirements(root / "requirements.txt")
+    in_req_dev = _names_from_requirements(root / "requirements-dev.txt")
+
+    assert runtime <= in_req, f"requirements.txt desincronizado: faltan {runtime - in_req}"
+    assert dev <= in_req_dev, f"requirements-dev.txt desincronizado: faltan {dev - in_req_dev}"
