@@ -23,6 +23,10 @@ actual/
 artefactos_compilacion/
 versiones_anteriores/
 *.spec
+# EXCEPCIÓN: los specs son la FUENTE de build (el CI los usa via commit);
+# no se ignoran aunque coincidan con el patrón *.spec de arriba.
+!AudioEnhancerFxStyle.spec
+!AudioEnhancerFxStyle-onefile.spec
 *.toc
 *.pkg
 
