@@ -77,8 +77,10 @@ def test_limiter_toggle_reaches_dsp(window):
     toggle = window._pages["effects"]._limiter_card._toggle
     toggle.setChecked(False)
     assert window.enhancer.limiter is False
+    assert toggle.text() == "OFF"
     toggle.setChecked(True)
     assert window.enhancer.limiter is True
+    assert toggle.text() == "ON"
 
 
 def test_compressor_toggle_reaches_dsp(window):
@@ -328,8 +330,10 @@ def test_techo_seguridad_toggle_llega_al_dsp(window):
     toggle = window._pages["effects"]._safety_card._toggle
     toggle.setChecked(False)
     assert window.enhancer.safety_ceiling_enabled is False
+    assert toggle.text() == "OFF"
     toggle.setChecked(True)
     assert window.enhancer.safety_ceiling_enabled is True
+    assert toggle.text() == "ON"
 
 
 def test_watchdog_check_llega_al_controlador(window):
