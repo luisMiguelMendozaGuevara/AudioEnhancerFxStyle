@@ -281,10 +281,12 @@ class EqualizerPage(QWidget):
         layout.addWidget(self._eq_curve, 1)
 
         btn_row = QHBoxLayout()
-        reset_btn = QPushButton(self._t("Restablecer todo"))
-        reset_btn.setFixedWidth(100)
-        reset_btn.clicked.connect(self._reset_all)
-        btn_row.addWidget(reset_btn)
+        self._reset_btn = QPushButton(self._t("Restablecer todo"))
+        # Anchura MÍNIMA, no fija: "Restablecer todo" no cabe en 100 px y el
+        # botón debe crecer con el texto (en inglés "Reset all" es más corto).
+        self._reset_btn.setMinimumWidth(100)
+        self._reset_btn.clicked.connect(self._reset_all)
+        btn_row.addWidget(self._reset_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 

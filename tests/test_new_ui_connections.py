@@ -287,6 +287,40 @@ def test_preferences_de_comportamiento_sobreviven_al_rebuild(window):
     window.notifications_enabled = True
 
 
+# ---------- tamaño de botones y guardas del arranque ----------
+
+
+def test_boton_reset_eq_crece_con_el_texto(window):
+    """El botón del EQ tenía ancho FIJO 100 px: 'Restablecer todo' se recortaba
+    en español. Debe poder crecer (ancho máximo por defecto)."""
+    btn = window._pages["equalizer"]._reset_btn
+    assert btn.text() == "Restablecer todo"
+    assert btn.maximumWidth() > 1000  # no fijo
+    assert btn.minimumWidth() == 100
+
+
+def test_toggle_audio_deshabilita_el_boton_durante_el_prefill(window, monkeypatch):
+    """Un segundo clic durante el prefill detenía el audio recién iniciado:
+    el botón se bloquea hasta que la salida está lista."""
+    home = window._pages["home"]
+    audio_page = window._pages["audio"]
+    window.loopbacks = [{"name": "CABLE Input", "index": 1, "defaultSampleRate": 48000}]
+    window.speakers = [{"name": "Speakers", "index": 2, "defaultSampleRate": 48000}]
+    audio_page.set_loopbacks(["CABLE Input"])
+    audio_page.set_speakers(["Speakers"])
+    audio_page.set_input("CABLE Input")
+    audio_page.set_output("Speakers")
+    window._route_guard()
+    assert window.go
+
+    monkeypatch.setattr(window.controller, "start", lambda *a, **k: None)
+    window.toggle_audio()
+    assert home._start_button.isEnabled() is False
+
+    window._on_output_ready(80.0)  # fin del prefill
+    assert home._start_button.isEnabled() is True
+
+
 # ---------- Importar / Exportar presets (JSON) ----------
 
 

@@ -119,7 +119,7 @@ class HomePage(QWidget):
         for tag, attr in [("ENTRADA", "_input_meter"), ("SALIDA", "_output_meter")]:
             row = QHBoxLayout()
             lbl = QLabel(self._t(tag))
-            lbl.setFixedWidth(56)
+            lbl.setMinimumWidth(56)
             lbl.setStyleSheet(
                 f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
                 f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
@@ -172,7 +172,7 @@ class HomePage(QWidget):
         row_vol = QHBoxLayout()
         row_vol.setSpacing(Theme.SPACING_MD)
         lbl_vol = QLabel(self._t("Volumen"))
-        lbl_vol.setFixedWidth(56)
+        lbl_vol.setMinimumWidth(56)
         lbl_vol.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_SM}px; background: transparent;")
         row_vol.addWidget(lbl_vol)
         self._volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -199,6 +199,14 @@ class HomePage(QWidget):
     def preset_text(self) -> str:
         """Preset actualmente seleccionado (lectura pública)."""
         return self._preset_combo.currentText()
+
+    def set_start_enabled(self, enabled: bool) -> None:
+        """Habilita/deshabilita el botón principal.
+
+        Durante el prefill (~0.5 s tras pulsar Iniciar) se deshabilita: un
+        segundo clic encontraba el motor ya en marcha y lo DETENÍA al instante
+        (arranque seguido de parada)."""
+        self._start_button.setEnabled(enabled)
 
     def set_running(self, active: bool) -> None:
         """Refleja el estado del motor en el boton principal."""

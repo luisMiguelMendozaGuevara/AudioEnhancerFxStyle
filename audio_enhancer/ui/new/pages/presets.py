@@ -89,7 +89,7 @@ class PresetsPage(QWidget):
         row.addWidget(self._name_entry, 1)
         self._save_btn = QPushButton(self._t("Guardar"))
         self._save_btn.setProperty("variant", "primary")
-        self._save_btn.setFixedWidth(100)
+        self._save_btn.setMinimumWidth(100)
         row.addWidget(self._save_btn)
         nl.addLayout(row)
         layout.addWidget(new_card)
@@ -188,7 +188,7 @@ class PresetsPage(QWidget):
             row.addWidget(lbl)
             row.addStretch()
             btn = QPushButton(self._t("Eliminar"))
-            btn.setFixedWidth(80)
+            btn.setMinimumWidth(80)
             btn.clicked.connect(lambda _=False, n=name: self.delete_requested.emit(n))
             btn.setStyleSheet(
                 f"QPushButton {{ background: {Theme.DANGER_BG}; color: {Theme.DANGER};"

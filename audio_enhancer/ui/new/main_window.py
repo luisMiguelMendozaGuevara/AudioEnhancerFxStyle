@@ -429,40 +429,28 @@ class NewMainWindow(QMainWindow):
         from ...constants import APP_VERSION
         from ...single_instance import LOG_FILE
 
-        so = platform.system() + " " + platform.release() + " (" + platform.machine() + ")"
-        fx = (
-            "volume="
-            + str(self.enhancer.volume)
-            + " bass="
-            + str(self.enhancer.bass)
-            + " treble="
-            + str(self.enhancer.treble)
-        )
+        so = f"{platform.system()} {platform.release()} ({platform.machine()})"
+        fx = f"volume={self.enhancer.volume} bass={self.enhancer.bass} treble={self.enhancer.treble}"
         sw = (
-            "limiter="
-            + str(self.enhancer.limiter)
-            + " compressor="
-            + str(self.enhancer.compressor)
-            + " true_peak="
-            + str(self.enhancer.true_peak)
+            f"limiter={self.enhancer.limiter} compressor={self.enhancer.compressor} true_peak={self.enhancer.true_peak}"
         )
         lines = [
-            "Audio Enhancer FxStyle " + APP_VERSION,
-            "Python " + platform.python_version() + " | " + so,
+            f"Audio Enhancer FxStyle {APP_VERSION}",
+            f"Python {platform.python_version()} | {so}",
             "",
             "== Config ==",
-            "source=" + repr(self._keep_src) + " output=" + repr(self._keep_out),
+            f"source={self._keep_src!r} output={self._keep_out!r}",
             fx,
             sw,
-            "latency_pref=" + str(self.state.latency_pref) + " theme=" + Theme.mode + " language=" + self.language,
-            "eq_gains=" + str([round(float(g), 2) for g in self.enhancer.eq_gains]),
+            f"latency_pref={self.state.latency_pref} theme={Theme.mode} language={self.language}",
+            f"eq_gains={[round(float(g), 2) for g in self.enhancer.eq_gains]}",
             "",
             "== Dispositivos (loopbacks) ==",
         ]
-        lines += ["- " + str(d.get("name")) + " @ " + str(d.get("defaultSampleRate")) + " Hz" for d in self.loopbacks]
+        lines += [f"- {d.get('name')} @ {d.get('defaultSampleRate')} Hz" for d in self.loopbacks]
         lines.append("== Dispositivos (salidas) ==")
-        lines += ["- " + str(d.get("name")) + " @ " + str(d.get("defaultSampleRate")) + " Hz" for d in self.speakers]
-        lines += ["", "== Motor ==", "running=" + str(self.running)]
+        lines += [f"- {d.get('name')} @ {d.get('defaultSampleRate')} Hz" for d in self.speakers]
+        lines += ["", "== Motor ==", f"running={self.running}"]
         if self.running:
             lines.append("stats=" + str(self.engine.stats_snapshot()))
         lines += ["", "== Log (cola) =="]
@@ -874,12 +862,16 @@ class NewMainWindow(QMainWindow):
             self._route_guard()
             self._status_bar.set_status_text(self._t("Revisa el ruteo."), DANGER)
             return
+        # (C5) Bloquear el botón hasta que la salida esté lista (prefill): un
+        # segundo clic durante ese instante detenía el audio recién iniciado.
+        self._pages["home"].set_start_enabled(False)
         try:
             # (R3-C1) Negociación de tasa, reset de estado DSP y prefill viven
             # en el controlador; esta ventana solo pinta su señal 'started'.
             self.controller.start(source, output, drift_target_ms=self.state.latency_pref)
         except Exception as exc:
             logger.exception("Failed to start")
+            self._pages["home"].set_start_enabled(True)
             self._status_bar.set_status_text(self._t("No se pudo iniciar: %s") % exc, DANGER)
 
     # ---------- slots de señales del AudioController ----------
@@ -903,6 +895,7 @@ class NewMainWindow(QMainWindow):
 
     def _on_output_ready(self, latency: float) -> None:
         """Salida abierta tras el prefill: punto de operación estable."""
+        self._pages["home"].set_start_enabled(True)  # fin del prefill
         self._status_bar.set_latency(latency)
         self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
         self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
@@ -910,6 +903,7 @@ class NewMainWindow(QMainWindow):
 
     def _on_start_failed(self, message: str) -> None:
         """La salida falló (el controlador ya liberó la captura)."""
+        self._pages["home"].set_start_enabled(True)
         self._spectrum_worker.set_active(False)
         self.state.processing = False
         self._status_bar.set_processing(False)
@@ -918,6 +912,7 @@ class NewMainWindow(QMainWindow):
 
     def _on_audio_stopped(self) -> None:
         """Parada limpia solicitada por el usuario."""
+        self._pages["home"].set_start_enabled(True)
         self._spectrum_worker.set_active(False)
         self.state.processing = False
         self._status_bar.set_processing(False)

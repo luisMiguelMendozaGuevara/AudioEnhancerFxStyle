@@ -42,7 +42,9 @@ _PALETTES: dict[str, dict[str, str]] = {
         "TEXT": "#ececee",
         "TEXT_SECONDARY": "#b8bac1",
         "TEXT_MUTED": "#8a8c94",
-        "TEXT_DIM": "#5f6067",
+        # #5f6067 daba ~3.0:1 sobre #131316 (por debajo de WCAG AA 4.5:1);
+        # #7d7e85 sube a ~4.6:1 manteniendo el nivel "tenue".
+        "TEXT_DIM": "#7d7e85",
         "TEXT_ON_ACCENT": "#0d2120",
         # Acento (fósforo teal)
         "ACCENT": "#3ddad7",
