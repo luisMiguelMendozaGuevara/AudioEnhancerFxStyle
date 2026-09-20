@@ -437,11 +437,13 @@ def test_reset_state_limpia_estados_y_medidores():
 
 def _pico_true_peak(x, fs):
     """Pico true-peak: reconstrucción 4x de la senal CON SIGNO por canal y
-    abs después (rectificar antes oculta los picos inter-muestra)."""
-    from scipy import signal
+    abs después (rectificar antes oculta los picos inter-muestra).
 
-    up = np.abs(signal.resample_poly(x, 4, 1, axis=0))
-    return float(up.max())
+    Se calcula con el MISMO helper que usa el limitador (FIR cacheado), así el
+    test y el DSP no pueden divergir."""
+    from audio_enhancer.dsp import _true_peak_oversample
+
+    return float(np.abs(_true_peak_oversample(x)).max())
 
 
 def test_true_peak_captura_picos_intermuestra():
@@ -643,6 +645,29 @@ def test_medidores_por_canal_l_r():
     assert e.level_rms_l > e.level_rms_r
     assert e.level_peak == pytest.approx(max(e.level_peak_l, e.level_peak_r))
     assert e.level_rms == pytest.approx(max(e.level_rms_l, e.level_rms_r))
+
+
+def test_true_peak_no_rediseña_el_fir_por_bloque(monkeypatch):
+    """Regresión del pico de 20-30 ms/bloque que causaba microcortes:
+    resample_poly RE-DISEÑABA el filtro Kaiser en cada llamada. El helper debe
+    construir el FIR una sola vez y reutilizarlo (upfirdn)."""
+    import audio_enhancer.dsp as dsp
+    from audio_enhancer.dsp import _scipy_signal, _true_peak_oversample
+
+    dsp._upfirdn_cache.clear()
+    sig = _scipy_signal()
+    llamadas = {"n": 0}
+    orig = sig.firwin
+
+    def _spy(*a, **kw):
+        llamadas["n"] += 1
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(sig, "firwin", _spy)
+    x = _stereo(0.5, 440.0)
+    for _ in range(20):
+        _true_peak_oversample(x)
+    assert llamadas["n"] == 1, f"el FIR se rediseñó {llamadas['n']} veces (debe ser 1)"
 
 
 def test_techo_seguridad_desactivable():

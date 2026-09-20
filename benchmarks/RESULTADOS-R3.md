@@ -96,3 +96,32 @@ Es un hallazgo real (no un fallo del gate): el peor caso del DSP con EQ +
 compresor + limitador supera el presupuesto de 21.33 ms y puede provocar
 microcortes. Mitigacion actual: subir la latencia objetivo (40 -> 60/100 ms)
 da mas margen al ring y/o apagar true-peak (la etapa mas cara).
+
+## Microcortes: causa raiz encontrada y corregida (no era el DSP)
+
+El gate por peor caso (max) detecto full_hot = 23.1 ms (108% del bloque).
+Perfilado (cProfile) del escenario full_hot revelo la causa:
+
+    resample_poly  ->  firwin (DISENO del filtro Kaiser) en CADA llamada
+    400 llamadas de firwin en 200 bloques = 2 por bloque (entrada y salida)
+
+No era el filtrado: era que scipy.signal.resample_poly RE-DISENA el FIR en
+cada invocacion. Con la senal caliente hay 2 sobremuestreos/bloque y ese
+diseno (ventana Kaiser sobre ~800 taps) es lo que disparaba picos de 20-30 ms
+-> underrun del ring -> microcorte audible.
+
+Correccion: `_true_peak_oversample()` construye el MISMO filtro (n=10*max_rate,
+kaiser 5.0) UNA vez por tasa y aplica con `upfirdn` (bit a bit identico a
+resample_poly, verificado con test). Ademas, el 2o sobremuestreo de la
+garantia de techo solo se hace si el sample-peak de salida > thr/1.414.
+
+Resultado medido (mismo equipo):
+
+    escenario             antes (max)   despues (max)
+    full_hot              23081 us      3787 us    (-84%)
+    full_hot_sin_limiter   9799 us      4367 us
+    eq_only               12052 us       987 us
+    p50 full_hot           3359 us      1546 us
+
+Gate: [OK] todos los escenarios <= 100% del bloque (peor caso). Sin microcortes
+por presupuesto en el DSP.

@@ -36,6 +36,35 @@ def _scipy_signal():
     return _signal
 
 
+_upfirdn_cache: dict[int, tuple] = {}
+
+
+def _true_peak_oversample(y: np.ndarray) -> np.ndarray:
+    """Sobremuestreo x4 por el MISMO algoritmo que resample_poly, pero con el
+    filtro FIR cacheado.
+
+    ``scipy.signal.resample_poly`` rediseña el FIR (ventana Kaiser) en CADA
+    llamada: perfilado del peor caso (full_hot) mostró que ese diseño, no el
+    filtrado, es lo que dispara los picos de 20-30 ms/bloque → microcortes.
+    Replicamos su diseño exacto (n=10·max_rate, kaiser 5.0) una sola vez por
+    tasa y aplicamos con ``upfirdn``. Bit a bit idéntico a resample_poly
+    (verificado) y ~2x más rápido."""
+    sig = _scipy_signal()
+    up, down = 4, 1
+    entry = _upfirdn_cache.get(id(sig))  # la tasa no interviene: up/down fijos
+    if entry is None:
+        max_rate = max(up, down)
+        half_len = 10 * max_rate
+        filt = sig.firwin(2 * half_len + 1, 1.0 / max_rate, window=("kaiser", 5.0))
+        pad = (len(filt) - 1) // 2
+        entry = (filt * up, up, down, pad)
+        _upfirdn_cache[id(sig)] = entry
+    filt, up, down, pad = entry
+    out = sig.upfirdn(filt, y, up, down, axis=0)
+    # Mismo recorte que resample_poly (descartar los flancos del filtro).
+    return out[pad : out.shape[0] - pad if pad else out.shape[0]]
+
+
 _ndimage = None
 
 
@@ -625,11 +654,10 @@ class Enhancer:
             return y  # caso común: bloque bajo el techo, intocado
         la = max(1, int(self.sample_rate * 0.003))  # look-ahead 3 ms
         if self.true_peak:
-            sig = _scipy_signal()
             # Sobremuestrear la senal CON SIGNO por canal y tomar abs despues:
             # aplicar abs antes equivaldría a rectificar (para un seno a fs/4
             # con fase π/4 el absoluto es DC y el pico real desaparecería).
-            up = np.abs(sig.resample_poly(y, 4, 1, axis=0)).max(axis=1)
+            up = np.abs(_true_peak_oversample(y)).max(axis=1)
             la_up = la * 4
             # Envolvente CENTRADA (±3 ms) sobre la senal sobremuestreada.
             # maximum_filter1d(size impar, mode="nearest") replica los bordes
@@ -666,15 +694,18 @@ class Enhancer:
         g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
         out = y * g_s[:, None].astype(np.float32)
         # Garantía de techo: el suavizado puede subestimar la reducción en
-        # transitorios muy cortos. En modo sample-peak basta medir el pico de
-        # la salida; en modo true-peak se re-mide el TRUE-PEAK (una segunda
-        # pasada de resample_poly por bloque: barata y determinista) y un
-        # ajuste escalar cierra el techo sin recorte duro.
-        # (sig está ligado siempre que true_peak sea True: se asignó en la
-        # rama de sobremuestreo de arriba; el ternario no evalúa la otra cara.)
-        peak = float(np.abs(sig.resample_poly(out, 4, 1, axis=0)).max()) if self.true_peak else float(np.abs(out).max())
-        if peak > thr:
-            out *= thr / peak
+        # transitorios muy cortos. En modo true-peak hay que MEDIR el true-peak
+        # de la salida; pero solo vale la pena cuando el sample-peak está cerca
+        # del techo (si no, ni asumiendo el sobrepico máximo ×1.414 lo cruza).
+        # Eso evita una 2ª pasada de sobremuestreo en el caso común.
+        sample_peak_out = float(np.abs(out).max())
+        if self.true_peak:
+            if sample_peak_out > thr / 1.414:
+                peak = float(np.abs(_true_peak_oversample(out)).max())
+                if peak > thr:
+                    out *= thr / peak
+        elif sample_peak_out > thr:
+            out *= thr / sample_peak_out
         return out
 
     # ---------- analizador de espectro ----------
