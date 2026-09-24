@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -32,6 +33,7 @@ class EffectCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
         layout.setSpacing(Theme.SPACING_SM)
+        self._layout = layout
 
         row_top = QHBoxLayout()
         lbl = QLabel(title)
@@ -206,6 +208,34 @@ class EffectsPage(QWidget):
             self._final_clip_card._toggle.toggled.connect(self._on_final_clip_toggle)
         layout.addWidget(self._final_clip_card)
 
+        # Crossfeed BS2B: imagen estéreo "fuera de la cabeza" para auriculares.
+        # OFF por defecto (modifica la separación estéreo: no es universal).
+        self._crossfeed_card = EffectCard(
+            self._t("Crossfeed (auriculares)"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("crossfeed"),
+        )
+        self._crossfeed_card._slider.setEnabled(False)
+        preset_row = QHBoxLayout()
+        preset_lbl = QLabel(self._t("Perfil"))
+        preset_lbl.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
+        preset_row.addWidget(preset_lbl)
+        self._crossfeed_combo = QComboBox()
+        for name in ("Natural", "Moderate", "Strong"):
+            self._crossfeed_combo.addItem(self._t(name), name)
+        self._crossfeed_combo.currentIndexChanged.connect(self._on_crossfeed_preset)
+        preset_row.addWidget(self._crossfeed_combo, 1)
+        self._crossfeed_card._layout.addLayout(preset_row)
+        if self._crossfeed_card._toggle is not None:
+            self._crossfeed_card._toggle.setChecked(False)  # OFF por defecto
+            self._crossfeed_card._toggle.setText("OFF")
+            self._crossfeed_card._toggle.toggled.connect(self._on_crossfeed_toggle)
+        layout.addWidget(self._crossfeed_card)
+
         layout.addStretch()
         scroll.setWidget(container)
         outer = QVBoxLayout(self)
@@ -253,6 +283,15 @@ class EffectsPage(QWidget):
             self._final_clip_card._toggle.setText("ON" if on else "OFF")
         self._state.final_clip = on
 
+    def _on_crossfeed_toggle(self, on) -> None:
+        if self._crossfeed_card._toggle is not None:
+            self._crossfeed_card._toggle.setText("ON" if on else "OFF")
+        self._state.crossfeed = on
+
+    def _on_crossfeed_preset(self, index: int) -> None:
+        name = self._crossfeed_combo.itemData(index) or "Natural"
+        self._state.crossfeed_preset = str(name)
+
     def set_bass(self, v) -> None:
         self._bass_card.set_value(v)
 
@@ -273,3 +312,11 @@ class EffectsPage(QWidget):
 
     def set_final_clip(self, on) -> None:
         self._final_clip_card.set_enabled(on)
+
+    def set_crossfeed(self, on, preset: str = "Natural") -> None:
+        self._crossfeed_card.set_enabled(on)
+        idx = self._crossfeed_combo.findData(preset)
+        if idx >= 0:
+            self._crossfeed_combo.blockSignals(True)
+            self._crossfeed_combo.setCurrentIndex(idx)
+            self._crossfeed_combo.blockSignals(False)

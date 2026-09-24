@@ -738,3 +738,102 @@ def test_medidores_reset_limpia_canales():
     e.level_peak_l = e.level_peak_r = e.level_rms_l = e.level_rms_r = 0.7
     e.reset_state()
     assert (e.level_peak_l, e.level_peak_r, e.level_rms_l, e.level_rms_r) == (0.0, 0.0, 0.0, 0.0)
+
+
+# ---------- Crossfeed BS2B (auriculares) ----------
+
+
+def _bs2b_referencia(x, fs, preset):
+    """Puerto del algoritmo de libbs2b (frame a frame) para verificar igualdad."""
+    import math
+
+    tabla = {"Natural": (700, 4.5), "Moderate": (700, 6.0), "Strong": (650, 9.5)}
+    fc_lo, level_db = tabla[preset]
+    gb_lo = level_db * -5.0 / 6.0 - 3.0
+    gb_hi = level_db / 6.0 - 3.0
+    g_lo = 10.0 ** (gb_lo / 20.0)
+    g_hi = 1.0 - 10.0 ** (gb_hi / 20.0)
+    fc_hi = fc_lo * 2.0 ** ((gb_lo - 20.0 * math.log10(g_hi)) / 12.0)
+    x_lo = math.exp(-2.0 * math.pi * fc_lo / fs)
+    x_hi = math.exp(-2.0 * math.pi * fc_hi / fs)
+    a0_lo, b1_lo = g_lo * (1.0 - x_lo), x_lo
+    a0_hi, a1_hi, b1_hi = 1.0 - g_hi * (1.0 - x_hi), -x_hi, x_hi
+    gain = 1.0 / (1.0 - g_hi + g_lo)
+    asis = [0.0, 0.0]
+    lo = [0.0, 0.0]
+    hi = [0.0, 0.0]
+    out = np.empty_like(x)
+    for i in range(len(x)):
+        left, right = x[i, 0], x[i, 1]
+        nlo = [a0_lo * left + b1_lo * lo[0], a0_lo * right + b1_lo * lo[1]]
+        nhi = [a0_hi * left + a1_hi * asis[0] + b1_hi * hi[0], a0_hi * right + a1_hi * asis[1] + b1_hi * hi[1]]
+        asis, lo, hi = [left, right], nlo, nhi
+        out[i, 0] = (hi[0] + lo[1]) * gain
+        out[i, 1] = (hi[1] + lo[0]) * gain
+    return out
+
+
+@pytest.mark.parametrize("preset", ["Natural", "Moderate", "Strong"])
+def test_crossfeed_igual_a_libbs2b(preset):
+    """La etapa reproduce EXACTAMENTE el algoritmo de libbs2b (bit a bit)."""
+    rng = np.random.default_rng(0)
+    x = (rng.standard_normal((512, 2)) * 0.3).astype(np.float32)
+    e = Enhancer()
+    e.sample_rate = FS
+    e.crossfeed = True
+    e.crossfeed_preset = preset
+    got = e._apply_crossfeed(x.copy())
+    ref = _bs2b_referencia(x.astype(np.float64), FS, preset).astype(np.float32)
+    assert np.array_equal(got, ref)
+
+
+def test_crossfeed_mezcla_el_canal_opuesto():
+    """Con solo L sonando, R recibe crossfeed (deja de estar en silencio)."""
+    x = np.zeros((1024, 2), dtype=np.float32)
+    x[:, 0] = 0.5
+    e = Enhancer()
+    e.sample_rate = FS
+    e.crossfeed = True
+    y = e._apply_crossfeed(x.copy())
+    assert float(np.abs(y[:, 1]).max()) > 0.05  # R recibe la señal cruzada
+
+
+def test_crossfeed_off_no_cambia_la_senal():
+    """OFF (default) no toca la señal: mismo resultado con la etapa apagada
+    que sin ella (la etapa es un no-op cuando crossfeed=False)."""
+    rng = np.random.default_rng(1)
+    x = (rng.standard_normal((1024, 2)) * 0.3).astype(np.float32)
+
+    def _run(crossfeed):
+        e = Enhancer()
+        e.sample_rate = FS
+        e.compressor = False
+        e.limiter = False
+        e.safety_ceiling_enabled = False
+        e.crossfeed = crossfeed
+        warm(e, x)  # estabilizar rampas (blend/EQ)
+        return e.process(x.copy())
+
+    np.testing.assert_array_equal(_run(False), _run(False))
+    assert Enhancer().crossfeed is False  # default OFF
+
+
+def test_crossfeed_configurable_por_params():
+    from audio_enhancer.dsp import EnhancerParams
+
+    e = Enhancer()
+    assert e.crossfeed is False and e.crossfeed_preset == "Natural"
+    e.apply_params(EnhancerParams(crossfeed=True, crossfeed_preset="Strong"))
+    assert e.crossfeed is True and e.crossfeed_preset == "Strong"
+    snap = e.snapshot_params()
+    assert snap.crossfeed is True and snap.crossfeed_preset == "Strong"
+
+
+def test_crossfeed_reset_limpia_estado():
+    e = Enhancer()
+    e.sample_rate = FS
+    e.crossfeed = True
+    e._apply_crossfeed(np.ones((64, 2), dtype=np.float32))
+    assert e._cf_state is not None
+    e.reset_state()
+    assert e._cf_state is None
