@@ -74,6 +74,19 @@ def _ctrl_running():
     return ctrl
 
 
+def test_start_es_idempotente_cierra_streams_previos():
+    """Un segundo start() con la cadena ya activa NO debe dejar dos capturas
+    (dos callbacks duplicaban 'capturados' y desbordaban el ring)."""
+    ctrl = _ctrl_running()
+    ctrl.engine.stream = _FakeStream(True)  # simular captura ya abierta
+    ctrl.engine.out_stream = _FakeStream(True)
+    parado = []
+    ctrl.engine.stop = lambda: parado.append(True)
+    ctrl.start({"name": "src", "index": 1, "defaultSampleRate": 48000}, {"name": "out", "index": 2}, 60)
+    assert parado == [True]  # cerró los streams previos antes de reabrir
+    assert ctrl._open_output_args is not None  # dejó armado el nuevo arranque
+
+
 def test_check_streams_todo_vivo():
     ctrl = _ctrl_running()
     ctrl.engine.stream = _FakeStream(True)

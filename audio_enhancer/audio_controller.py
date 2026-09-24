@@ -144,6 +144,16 @@ class AudioController(QObject):
         capa visual la presenta. La tasa la fija la FUENTE (código H5: abrir
         la captura a la tasa del output desincronizaba relojes)."""
         logger.info("Auto/manual start: %s -> %s", source["name"], output["name"])
+        # Idempotencia: si ya hay streams abiertos (doble start por auto-arranque
+        # + clic), cerrarlos antes de reabrir. Dos capturas activas duplican los
+        # callbacks (capturados) y desbordan el ring -> cortes de audio.
+        if self.running or self.engine.stream is not None or self.engine.out_stream is not None:
+            logger.warning("start() con audio ya activo: se reinicia la cadena")
+            self.engine.stop()
+            self._prefill_timer.stop()
+            self._watchdog.stop()
+            self._open_output_args = None
+            self.running = False
         self.ensure_pa()
         rate = self.negotiate_rate(source, output)
         if rate != self.enhancer.sample_rate:

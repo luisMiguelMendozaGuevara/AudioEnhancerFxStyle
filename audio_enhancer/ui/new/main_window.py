@@ -924,6 +924,12 @@ class NewMainWindow(QMainWindow):
         if self.running:
             self._stop_audio()
             return
+        # Guarda de idempotencia: si el controlador ya tiene una captura en
+        # marcha (p. ej. auto-arranque + clic casi simultáneos), NO se abre una
+        # segunda: dos callbacks de captura inflaban `capturados` y desbordaban
+        # el ring (saltos/cortes de audio).
+        if self.controller.running:
+            return
         audio_page = self._pages.get("audio")
         if audio_page is None:
             return  # recarga de interfaz en curso
