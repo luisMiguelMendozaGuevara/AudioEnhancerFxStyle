@@ -36,6 +36,11 @@ TRANSLATIONS = {
     "True-peak (x4)": "True-peak (x4)",
     "Techo de seguridad": "Safety ceiling",
     "Recorte final (±1.0)": "Final clip (±1.0)",
+    "Crossfeed (auriculares)": "Crossfeed (headphones)",
+    "Perfil": "Profile",
+    "Natural": "Natural",
+    "Moderate": "Moderate",
+    "Strong": "Strong",
     "LIMITA": "LIMITS",
     "Reducción de ganancia del limitador (dB)": "Limiter gain reduction (dB)",
     "Detener el audio si se pierde el dispositivo": "Stop audio if the device is lost",
@@ -238,6 +243,10 @@ EXPLAIN = {
     "final_clip": "Recorte final (±1.0): última guardia digital; limita la "
     "señal al rango válido. Apágalo solo para dejar pasar la señal sin "
     "recortar (el recorte, si lo hay, lo hará el driver de audio).",
+    "crossfeed": "Crossfeed BS2B para auriculares: mezcla cada canal en el "
+    "opuesto (con filtro) para que el estéreo se sienta 'fuera de la cabeza', "
+    "como con altavoces. NO es una mejora universal: compacta la imagen "
+    "estéreo. Ajusta el perfil (Natural/Moderate/Strong) a tu gusto.",
 }
 
 EXPLAIN_EN = {
@@ -263,6 +272,10 @@ EXPLAIN_EN = {
     "final_clip": "Final clip (±1.0): last digital guard; limits the signal to "
     "the valid range. Turn it off only to let the signal pass unclipped (any "
     "clipping, if present, will happen in the audio driver).",
+    "crossfeed": "BS2B crossfeed for headphones: mixes each channel into the "
+    "opposite one (filtered) so stereo feels 'out of your head', like speakers. "
+    "It is NOT a universal improvement: it narrows the stereo image. Pick the "
+    "profile (Natural/Moderate/Strong) to taste.",
 }
 
 EQ_EXPLAIN = {

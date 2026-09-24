@@ -167,6 +167,8 @@ class ConfigManager:
             "true_peak": self.as_bool(raw.get("true_peak"), True),
             "safety_ceiling": self.as_bool(raw.get("safety_ceiling"), True),
             "final_clip": self.as_bool(raw.get("final_clip"), True),
+            "crossfeed": self.as_bool(raw.get("crossfeed"), False),
+            "crossfeed_preset": str(raw.get("crossfeed_preset", "Natural") or "Natural"),
             "watchdog": self.as_bool(raw.get("watchdog"), True),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),

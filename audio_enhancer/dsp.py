@@ -138,6 +138,8 @@ class EnhancerParams:
     compressor: bool = True
     true_peak: bool = True
     blend: float = 1.0
+    crossfeed: bool = False
+    crossfeed_preset: str = "Natural"
 
 
 class Enhancer:
@@ -200,6 +202,17 @@ class Enhancer:
         self._section_on: dict[str, bool] = {}
         # A/B crossfade: blend=1 efectos, blend=0 directo
         self.blend: float = 1.0
+        # Crossfeed BS2B (para auriculares; OFF por defecto). Hace que el
+        # estéreo se perciba más "fuera de la cabeza" mezclando cada canal en el
+        # opuesto con un LPF + shelf (algoritmo de libbs2b: ver _crossfeed_coeffs).
+        # Es una etapa aislada: no toca EQ/compresor/limitador.
+        self.crossfeed: bool = False
+        self.crossfeed_preset: str = "Natural"
+        # Coeficientes y estados (zi) del crossfeed, recalculados al cambiar
+        # preset/tasa; reset_state() los limpia.
+        self._cf_coeffs: tuple | None = None
+        self._cf_src: tuple | None = None  # (sample_rate, preset) de _cf_coeffs
+        self._cf_state: np.ndarray | None = None  # zi de lfilter
         # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
         # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
         # global); los _l/_r alimentan los medidores estéreo de la UI.
@@ -260,6 +273,7 @@ class Enhancer:
         self.level_peak_l = 0.0
         self.level_peak_r = 0.0
         self.level_gr = 0.0
+        self._cf_state = None
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -317,6 +331,8 @@ class Enhancer:
         self.compressor = bool(params.compressor)
         self.true_peak = bool(params.true_peak)
         self.blend = float(params.blend)
+        self.crossfeed = bool(params.crossfeed)
+        self.crossfeed_preset = str(params.crossfeed_preset)
 
     def snapshot_params(self) -> "EnhancerParams":
         """Lee el estado actual como instantánea inmutable."""
@@ -329,6 +345,8 @@ class Enhancer:
             compressor=bool(self.compressor),
             true_peak=bool(self.true_peak),
             blend=float(self.blend),
+            crossfeed=bool(self.crossfeed),
+            crossfeed_preset=str(self.crossfeed_preset),
         )
 
     @staticmethod
@@ -388,6 +406,71 @@ class Enhancer:
             sos = cached[1]
         return key, sos, zi
 
+    # ---------- crossfeed BS2B (auriculares) ----------
+
+    # Perfiles de libbs2b: (frecuencia de corte Hz, nivel de cruce en dB).
+    # Natural = default de BS2B; Moderate = Chu Moy (CMoy); Strong = Jan Meier.
+    CROSSFEED_PRESETS: dict[str, tuple[int, float]] = {
+        "Natural": (700, 4.5),
+        "Moderate": (700, 6.0),
+        "Strong": (650, 9.5),
+    }
+
+    def _crossfeed_coeffs(self):
+        """Coeficientes de libbs2b para (tasa, preset), cacheados.
+
+        Reproduce EXACTAMENTE el algoritmo de referencia (bs2b.c / bs2b):
+          gb_lo = -5/6·dB - 3 ; gb_hi = dB/6 - 3
+          g_lo  = 10^(gb_lo/20) ; g_hi = 1 - 10^(gb_hi/20)
+          fc_hi = fc_lo · 2^((gb_lo - 20·log10(g_hi))/12)
+        La señal propia pasa por un shelf (hi); la CRUZADA por un LPF 1er orden
+        (lo). out_L = (hi_L + lo_R)·gain, out_R = (hi_R + lo_L)·gain."""
+        preset = self.crossfeed_preset if self.crossfeed_preset in self.CROSSFEED_PRESETS else "Natural"
+        src = (self.sample_rate, preset)
+        if self._cf_coeffs is not None and self._cf_src == src:
+            return self._cf_coeffs
+        fc_lo, level_db = self.CROSSFEED_PRESETS[preset]
+        fs = float(self.sample_rate)
+        gb_lo = level_db * -5.0 / 6.0 - 3.0
+        gb_hi = level_db / 6.0 - 3.0
+        g_lo = 10.0 ** (gb_lo / 20.0)
+        g_hi = 1.0 - 10.0 ** (gb_hi / 20.0)
+        fc_hi = fc_lo * 2.0 ** ((gb_lo - 20.0 * math.log10(g_hi)) / 12.0)
+        x_lo = math.exp(-2.0 * math.pi * fc_lo / fs)
+        x_hi = math.exp(-2.0 * math.pi * fc_hi / fs)
+        a0_lo, b1_lo = g_lo * (1.0 - x_lo), x_lo
+        a0_hi, a1_hi, b1_hi = 1.0 - g_hi * (1.0 - x_hi), -x_hi, x_hi
+        gain = 1.0 / (1.0 - g_hi + g_lo)
+        self._cf_coeffs = (a0_lo, b1_lo, a0_hi, a1_hi, b1_hi, gain)
+        self._cf_src = src
+        return self._cf_coeffs
+
+    def _apply_crossfeed(self, y: np.ndarray) -> np.ndarray:
+        """Etapa BS2B por bloque (vectorizada con lfilter; O(n), sin allocs).
+
+        Estado zi persistente entre bloques (continuidad); el bloque estéreo se
+        procesa por canal y luego se cruza. No altera ganancia global (gain la
+        normaliza). Entra al INICIO de la cadena (Input -> Crossfeed -> EQ...),
+        igual que en libbs2b."""
+        if y.shape[1] < 2:
+            return y  # mono: no hay cruce posible
+        a0_lo, b1_lo, a0_hi, a1_hi, b1_hi, gain = self._crossfeed_coeffs()
+        sig = _scipy_signal()
+        zi = self._cf_state
+        # zi por canal: orden 1 -> estado de 1 tap por canal (2, 1, 2)=(filtro, 1, canales).
+        if zi is None or zi.shape != (2, 1, 2):
+            zi = np.zeros((2, 1, 2), dtype=np.float64)
+        x = y.astype(np.float64, copy=False)
+        # lo: LPF 1er orden del canal propio (luego se cruza).
+        lo, zi_lo = sig.lfilter([a0_lo], [1.0, -b1_lo], x, axis=0, zi=zi[0])
+        # hi: shelf del canal propio (realimenta el estado previo con a1_hi).
+        hi, zi_hi = sig.lfilter([a0_hi, a1_hi], [1.0, -b1_hi], x, axis=0, zi=zi[1])
+        self._cf_state = np.stack([zi_lo, zi_hi])
+        out = np.empty_like(hi)
+        out[:, 0] = (hi[:, 0] + lo[:, 1]) * gain  # L propio + cross de R
+        out[:, 1] = (hi[:, 1] + lo[:, 0]) * gain
+        return out.astype(np.float32, copy=False)
+
     # ---------- DSP ----------
 
     @staticmethod
@@ -430,6 +513,10 @@ class Enhancer:
         y = data.copy()
         nyquist = self.sample_rate / 2
         channels = data.shape[1]
+        # Crossfeed BS2B al INICIO de la cadena (Input -> Crossfeed -> EQ ->
+        # Comp -> Limit), como en libbs2b. Es una etapa aislada y O(n).
+        if self.crossfeed:
+            y = self._apply_crossfeed(y)
         if self._channels != channels:
             self._states = {}
             self._sos_cache = {}
