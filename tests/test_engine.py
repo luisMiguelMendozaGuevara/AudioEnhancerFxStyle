@@ -199,6 +199,34 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
         assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
 
 
+def test_underrun_pequeno_se_estira_sin_hueco(engine):
+    """Si al ring le falta un poco para el bloque pedido, se devuelven los
+    frames disponibles (el remuestreador los estira) en vez de insertar
+    silencio: no se cuenta como hueco ni se pierde continuidad."""
+    engine.configure_ring(48000, drift_target_ms=60)
+    engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
+    engine._cap_callback(np.zeros((960, 2), dtype=np.float32).tobytes(), 960, None, 0)
+    assert engine.fill() == 960
+    before = engine.stats_snapshot()
+    out = engine._read(CHUNK)  # pide 1024, hay 960 (ratio 0.94 >= 0.9)
+    assert out.shape[0] == 960  # devuelve lo disponible, no rellena con ceros
+    after = engine.stats_snapshot()
+    assert after["gap_blocks"] == before["gap_blocks"]  # NO es hueco
+    assert after["grace_stretches"] == before["grace_stretches"] + 1
+
+
+def test_underrun_grande_sigue_siendo_hueco(engine):
+    """Por debajo de la zona de gracia el underrun sigue siendo un hueco real
+    (silencio con fundidos), no un estirado."""
+    engine.configure_ring(48000, drift_target_ms=60)
+    engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
+    engine._cap_callback(np.zeros((400, 2), dtype=np.float32).tobytes(), 400, None, 0)
+    before = engine.stats_snapshot()
+    out = engine._read(CHUNK)  # ratio 0.39 < 0.9
+    assert out.shape[0] == CHUNK  # bloque completo con silencio
+    assert engine.stats_snapshot()["gap_blocks"] == before["gap_blocks"] + 1
+
+
 def test_set_drift_target_ms_en_caliente(engine):
     """La latencia objetivo se puede mover en caliente (sin reconstruir el
     ring): el control de deriva converge a la nueva consigna."""

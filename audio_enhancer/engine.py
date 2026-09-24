@@ -18,6 +18,15 @@ from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS
 
 logger = logging.getLogger("audio_enhancer.engine")
 
+# Degradación elegante en underrun: si al pedir n frames al ring faltan pocos
+# (ratio >= este umbral), se devuelven los disponibles y el remuestreador los
+# ESTIRA al bloque pedido, en vez de insertar silencio (hueco audible de unos
+# ms). Medido en el caso real del CABLE: los huecos eran de ~63 frames sobre
+# 1024 (~6%), dentro de la zona. El estirado por bloque queda acotado por este
+# ratio (0.9 = hasta ~11% de pitch en un bloque); por debajo se trata como
+# hueco real y se aplica el silencio con fundidos.
+UNDERFLOW_GRACE_RATIO = 0.9
+
 _pa_mod = None
 
 
@@ -107,6 +116,8 @@ class AudioEngine:
             "drift_adjust_frames": 0,
             "output_underruns": 0,
             "input_overflows": 0,
+            # Underruns pequeños absorbidos estirando (sin silencio audible).
+            "grace_stretches": 0,
             # Frames de SILENCIO insertados por el hueco (subconjunto de los
             # frame_count de gap_blocks). Separa la causa: si en un intervalo
             # no hubo descartes ni overflows ni bajada del ring, el hueco no se
@@ -298,6 +309,20 @@ class AudioEngine:
                     data[:f] *= fade_in[:, None]
                 self.fadein_frames = 0
                 self.in_gap = False
+            return data
+        # Underrun pequeño: devolver lo disponible y dejar que _match_frame_count
+        # lo ESTIRE al bloque pedido (el pitch sube un poco por un bloque, menos
+        # audible que un hueco de silencio). No es un hueco: no se cuentan
+        # gap_blocks/gap_frames ni se marca in_gap.
+        if avail > 0 and avail / n >= UNDERFLOW_GRACE_RATIO:
+            idx = self.read_pos % nframes
+            if idx + avail <= nframes:
+                data = ring[idx : idx + avail].copy()
+            else:
+                a = nframes - idx
+                data = np.concatenate([ring[idx:], ring[: avail - a]])
+            self.read_pos += avail
+            self._stats["grace_stretches"] += 1
             return data
         # hueco: silencio con fundido de salida (sin corte seco)
         m = avail
