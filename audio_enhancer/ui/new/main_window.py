@@ -225,13 +225,18 @@ class NewMainWindow(QMainWindow):
         self._discovery_worker: Any = None
         self._spectrum_worker = SpectrumWorker(self.enhancer, self)
         self.tray: Any = None
+        self._tray_menu: Any = None  # menú de bandeja (Qt no lo posee; ver _rebuild_tray_menu)
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(Theme.DEFAULT_WIDTH, Theme.DEFAULT_HEIGHT)
         self._apply_adaptive_min_size()
         self.setWindowIcon(QIcon(resource_path("app.ico")))
         self.setStyleSheet(Theme.stylesheet())
         self._build_shell()
-        self._build_tray()
+        # La bandeja se crea DIFERIDA (QTimer.singleShot en build_content), ya
+        # con el bucle de eventos corriendo. Crear QSystemTrayIcon dentro del
+        # __init__ (antes de app.exec) crasheaba de forma intermitente en
+        # pyside6.abi3.dll (0xc0000005) cuando coincidían dos arranques: es un
+        # problema conocido de QSystemTrayIcon en Windows.
 
     # ---------- puentes de compatibilidad hacia el controlador ----------
 
@@ -349,16 +354,40 @@ class NewMainWindow(QMainWindow):
         self.setMinimumSize(min_w, min_h)
 
     def _build_tray(self) -> None:
-        self.tray = QSystemTrayIcon(QIcon(resource_path("app.ico")), self)
-        self._rebuild_tray_menu()
-        self.tray.setToolTip(WINDOW_TITLE)
-        self.tray.activated.connect(self._on_tray_activated)
-        if QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray.show()
+        """Crea la bandeja. Tolerante a fallos: si Qt falla, la app sigue.
+
+        Se invoca DIFERIDA (ver _create_tray_deferred) para que el
+        QSystemTrayIcon nazca con el bucle de eventos ya activo; crearlo antes
+        de app.exec() crasheaba intermitentemente en Windows."""
+        if self.tray is not None:
+            return
+        try:
+            self.tray = QSystemTrayIcon(QIcon(resource_path("app.ico")), self)
+            self._rebuild_tray_menu()
+            self.tray.setToolTip(WINDOW_TITLE)
+            self.tray.activated.connect(self._on_tray_activated)
+            if QSystemTrayIcon.isSystemTrayAvailable():
+                self.tray.show()
+        except Exception:
+            logger.exception("No se pudo crear la bandeja del sistema")
+            self.tray = None
+
+    def _create_tray_deferred(self) -> None:
+        """Crea la bandeja tras el primer ciclo del bucle de eventos."""
+        self._build_tray()
 
     def _rebuild_tray_menu(self) -> None:
-        """(Re)crea el menu de bandeja con los textos del idioma actual."""
-        menu = QMenu()
+        """(Re)crea el menu de bandeja con los textos del idioma actual.
+
+        IMPORTANTE (crash c0000005 en pyside6.abi3.dll): QSystemTrayIcon NO toma
+        ownership del menu (lo dice la doc oficial de Qt). Si el QMenu queda en
+        una variable local, Python lo destruye al salir de la función y el icono
+        usa un puntero liberado → access violation intermitente. Por eso el menú
+        se crea CON parent (self) y se guarda en self._tray_menu."""
+        if self.tray is None:
+            return  # aún no hay bandeja (creación diferida)
+        menu = QMenu(self)  # parent: Qt lo gestiona y no se libera antes de tiempo
+        self._tray_menu = menu  # referencia viva extra (defensa en profundidad)
         show_act = menu.addAction(self._t("Mostrar / Ocultar"))
         show_act.triggered.connect(self._toggle_show)
         audio_act = menu.addAction(self._t("Iniciar / Detener"))
@@ -374,6 +403,9 @@ class NewMainWindow(QMainWindow):
         self._content_built = True
         self.metrics.mark("first_paint")
         self._wire_pages()
+        # Bandeja diferida: se crea con el bucle de eventos ya activo (evita el
+        # crash intermitente de QSystemTrayIcon al arrancar en Windows).
+        QTimer.singleShot(0, self._create_tray_deferred)
         self._apply_config()
         self.metrics.mark("ui_ready")
         self._status_bar.set_status_text(self._t("Detectando dispositivos..."), WARN)

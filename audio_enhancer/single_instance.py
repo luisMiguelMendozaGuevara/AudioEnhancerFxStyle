@@ -85,10 +85,19 @@ def _bring_existing_to_front() -> bool:
         return False
 
 
+# Handle del mutex de instancia única. DEBE quedar referenciado durante toda la
+# vida del proceso: si el objeto HANDLE se recolecta, Windows CIERRA el mutex y
+# una segunda instancia lo recrea (permitiendo ventanas duplicadas → 2 iconos
+# de bandeja → crash intermitente en pyside6).
+_MUTEX_HANDLE = None
+
+
 def acquire_single_instance():
-    """Candado de instancia única: mutex nombrado + detección por título de
-    ventana. Si ya hay otra instancia (antigua o nueva), la trae al frente y
-    devuelve None para que esta salga sin abrir otra ventana."""
+    """Candado de instancia única: mutex nombrado + detección por título.
+
+    Si ya hay otra instancia (antigua sin mutex o nueva), la trae al frente y
+    devuelve None para que esta salga sin abrir una segunda ventana/bandeja."""
+    global _MUTEX_HANDLE
     try:
         import ctypes
         from ctypes import wintypes
@@ -97,18 +106,20 @@ def acquire_single_instance():
         k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
         k32.CreateMutexW.restype = wintypes.HANDLE
 
-        # 1) cualquier ventana existente de otra instancia (incluidas viejas
-        #    builds que no tienen mutex): restaurar y salir.
+        # 1) Cualquier ventana existente de otra instancia (incluidas builds
+        #    viejas sin mutex): restaurar y salir.
         if _bring_existing_to_front():
             return None
 
-        # 2) mutex para bloquear instancias nuevas.
+        # 2) Mutex para bloquear instancias nuevas. Se guarda el handle en una
+        #    referencia de módulo para que NO se libere durante el proceso.
         mutex_name = "Local\\AudioEnhancerFxStyle_SingleInstance"
         handle = k32.CreateMutexW(None, False, mutex_name)
         err = k32.GetLastError()
         if err == 183:  # ERROR_ALREADY_EXISTS
             _bring_existing_to_front()
             return None
+        _MUTEX_HANDLE = handle  # mantiene vivo el mutex
         return handle
     except Exception:
         return object()  # sin guarda: dejar pasar
