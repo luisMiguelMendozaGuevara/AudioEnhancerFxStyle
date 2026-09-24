@@ -36,6 +36,8 @@ TRANSLATIONS = {
     "True-peak (x4)": "True-peak (x4)",
     "Techo de seguridad": "Safety ceiling",
     "Recorte final (±1.0)": "Final clip (±1.0)",
+    "LIMITA": "LIMITS",
+    "Reducción de ganancia del limitador (dB)": "Limiter gain reduction (dB)",
     "Detener el audio si se pierde el dispositivo": "Stop audio if the device is lost",
     "Nivel:": "Level:",
     "Ecualizador (9 bandas)": "Equalizer (9 bands)",

@@ -130,10 +130,27 @@ class HomePage(QWidget):
             row.addWidget(meter, 1)
             layout.addLayout(row)
 
+        # GR (gain reduction) del limitador: cuánto está atenuando. Se deja
+        # visible siempre (a 0 dB no pinta barra), así el usuario ve cuándo el
+        # limitador entra sin ir a ciegas.
+        row_gr = QHBoxLayout()
+        lbl_gr = QLabel(self._t("LIMITA"))
+        lbl_gr.setMinimumWidth(56)
+        lbl_gr.setStyleSheet(
+            f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
+            f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
+        )
+        row_gr.addWidget(lbl_gr)
+        self._gr_meter = LevelMeterWidget(orientation="horizontal", show_label=False, stereo=False)
+        self._gr_meter.setToolTip(self._t("Reducción de ganancia del limitador (dB)"))
+        row_gr.addWidget(self._gr_meter, 1)
+        layout.addLayout(row_gr)
+
         parent.addWidget(card)
-        # Medidores estéreo: niveles por canal (L, R).
+        # Medidores estéreo: niveles por canal (L, R) + GR del limitador.
         self._state.input_levels_changed.connect(self._on_input_levels)
         self._state.output_levels_changed.connect(self._on_output_levels)
+        self._state.output_gr_changed.connect(self._on_output_gr)
 
     def _build_controls_card(self, parent: QVBoxLayout) -> None:
         card = self._card()
@@ -242,6 +259,9 @@ class HomePage(QWidget):
 
     def _on_output_levels(self, left: float, right: float) -> None:
         self._output_meter.set_stereo(left, right)
+
+    def _on_output_gr(self, db: float) -> None:
+        self._gr_meter.set_gr(db)
 
     def set_preset_items(self, names: list[str]) -> None:
         self._preset_combo.blockSignals(True)

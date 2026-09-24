@@ -209,6 +209,8 @@ class Enhancer:
         self.level_rms_r: float = 0.0
         self.level_peak_l: float = 0.0
         self.level_peak_r: float = 0.0
+        # Reducción de ganancia del limitador (dB, <=0): feedback para la UI.
+        self.level_gr: float = 0.0
         # Valores suavizados actuales (rampa anti-cremallera)
         self._c_vol: float = 1.0
         self._c_bass: float = 0.0
@@ -257,6 +259,7 @@ class Enhancer:
         self.level_rms_r = 0.0
         self.level_peak_l = 0.0
         self.level_peak_r = 0.0
+        self.level_gr = 0.0
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -706,6 +709,11 @@ class Enhancer:
                     out *= thr / peak
         elif sample_peak_out > thr:
             out *= thr / sample_peak_out
+        # GR (gain reduction) del bloque en dB: 0 = sin limitar, negativo =
+        # atenuando. La UI lo muestra en un medidor para ajustar sin ir a
+        # ciegas. Se toma el mínimo de la ganancia suavizada (el peor caso).
+        min_gain = float(g_s.min()) if g_s.size else 1.0
+        self.level_gr = max(-24.0, 20.0 * math.log10(max(min_gain, 1e-6)))
         return out
 
     # ---------- analizador de espectro ----------
