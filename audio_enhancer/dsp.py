@@ -456,20 +456,24 @@ class Enhancer:
             return y  # mono: no hay cruce posible
         a0_lo, b1_lo, a0_hi, a1_hi, b1_hi, gain = self._crossfeed_coeffs()
         sig = _scipy_signal()
+        # Estado zi por filtro/canal en float64 (1 tap, orden 1). Se reusa el
+        # mismo array y se actualiza IN-PLACE (evita el np.stack por bloque).
         zi = self._cf_state
-        # zi por canal: orden 1 -> estado de 1 tap por canal (2, 1, 2)=(filtro, 1, canales).
         if zi is None or zi.shape != (2, 1, 2):
             zi = np.zeros((2, 1, 2), dtype=np.float64)
-        x = y.astype(np.float64, copy=False)
+            self._cf_state = zi
         # lo: LPF 1er orden del canal propio (luego se cruza).
-        lo, zi_lo = sig.lfilter([a0_lo], [1.0, -b1_lo], x, axis=0, zi=zi[0])
+        lo, z_lo = sig.lfilter([a0_lo], [1.0, -b1_lo], y, axis=0, zi=zi[0])
+        zi[0] = z_lo
         # hi: shelf del canal propio (realimenta el estado previo con a1_hi).
-        hi, zi_hi = sig.lfilter([a0_hi, a1_hi], [1.0, -b1_hi], x, axis=0, zi=zi[1])
-        self._cf_state = np.stack([zi_lo, zi_hi])
-        out = np.empty_like(hi)
-        out[:, 0] = (hi[:, 0] + lo[:, 1]) * gain  # L propio + cross de R
-        out[:, 1] = (hi[:, 1] + lo[:, 0]) * gain
-        return out.astype(np.float32, copy=False)
+        hi, z_hi = sig.lfilter([a0_hi, a1_hi], [1.0, -b1_hi], y, axis=0, zi=zi[1])
+        zi[1] = z_hi
+        # Mezcla cruzada in-place sobre el buffer `hi` (evita un `out` nuevo).
+        # lfilter conserva el dtype de la entrada `y`; se normaliza a float32
+        # al final para el resto de la cadena (DSP en float32).
+        hi[:, 0] = (hi[:, 0] + lo[:, 1]) * gain  # L propio + cross de R
+        hi[:, 1] = (hi[:, 1] + lo[:, 0]) * gain
+        return hi if hi.dtype == np.float32 else hi.astype(np.float32, copy=False)
 
     # ---------- DSP ----------
 
