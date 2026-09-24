@@ -798,6 +798,28 @@ def test_crossfeed_mezcla_el_canal_opuesto():
     assert float(np.abs(y[:, 1]).max()) > 0.05  # R recibe la señal cruzada
 
 
+def test_crossfeed_off_no_cruza_por_la_ruta_real():
+    """Por la ruta REAL (process): con solo L sonando, OFF deja R en 0 y ON
+    inyecta señal cruzada. (El método interno siempre procesa; el gate es el
+    `if self.crossfeed` de _process_dsp.)"""
+    x = np.zeros((1024, 2), dtype=np.float32)
+    x[:, 0] = 0.5
+
+    def _r_out(crossfeed):
+        e = Enhancer()
+        e.sample_rate = FS
+        e.compressor = False
+        e.limiter = False
+        e.safety_ceiling_enabled = False
+        e.crossfeed = crossfeed
+        for _ in range(30):  # estabilizar la rampa de blend
+            out = e.process(x.copy())
+        return float(np.abs(out[:, 1]).max())
+
+    assert _r_out(False) == pytest.approx(0.0, abs=1e-6)
+    assert _r_out(True) > 0.05
+
+
 def test_crossfeed_off_no_cambia_la_senal():
     """OFF (default) no toca la señal: mismo resultado con la etapa apagada
     que sin ella (la etapa es un no-op cuando crossfeed=False)."""
