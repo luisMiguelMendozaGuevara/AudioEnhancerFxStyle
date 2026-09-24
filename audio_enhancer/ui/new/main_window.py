@@ -475,9 +475,8 @@ class NewMainWindow(QMainWindow):
         dest = os.path.join(os.path.dirname(LOG_FILE), "diagnostico.txt")
         try:
             with open(dest, "w", encoding="utf-8") as f:
-                for ln in lines:
-                    print(ln, file=f)
-        except Exception:
+                f.write("\n".join(lines) + "\n")
+        except OSError:
             logger.exception("No se pudo exportar el diagnostico")
             self._status_bar.set_status_text(self._t("No se pudo guardar el diagnóstico."), DANGER)
             return
@@ -977,6 +976,7 @@ class NewMainWindow(QMainWindow):
         # Niveles por canal para los medidores estéreo (L/R).
         self.state.input_levels = (self.enhancer.level_rms_l, self.enhancer.level_rms_r)
         self.state.output_levels = (self.enhancer.level_peak_l, self.enhancer.level_peak_r)
+        self.state.output_gr = float(self.enhancer.level_gr)
         if self._latest_spectrum is not None:
             self.state.spectrum = self._latest_spectrum
             self._latest_spectrum = None

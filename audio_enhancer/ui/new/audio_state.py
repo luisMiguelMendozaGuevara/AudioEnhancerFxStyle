@@ -32,6 +32,8 @@ class AudioState(QObject):
     # Niveles por canal (L, R) para los medidores estéreo.
     input_levels_changed = Signal(float, float)
     output_levels_changed = Signal(float, float)
+    # Reducción de ganancia del limitador (dB, <=0).
+    output_gr_changed = Signal(float)
     latency_changed = Signal(float)
     sample_rate_changed = Signal(int)
     spectrum_changed = Signal(object)
@@ -60,6 +62,7 @@ class AudioState(QObject):
         self._output_level: float = 0.0
         self._input_levels: tuple[float, float] = (0.0, 0.0)
         self._output_levels: tuple[float, float] = (0.0, 0.0)
+        self._output_gr: float = 0.0
         # Tecnico
         self._latency_ms: float = 0.0
         self._sample_rate: int = 48000
@@ -163,6 +166,18 @@ class AudioState(QObject):
         if changed:
             self._output_levels = (left, right)
             self.output_levels_changed.emit(left, right)
+
+    @property
+    def output_gr(self) -> float:
+        """Reducción de ganancia del limitador en dB (<=0)."""
+        return self._output_gr
+
+    @output_gr.setter
+    def output_gr(self, value: float) -> None:
+        # Umbral 0.5 dB: por debajo de eso el medidor no cambia de forma visible.
+        if abs(value - self._output_gr) >= 0.5:
+            self._output_gr = value
+            self.output_gr_changed.emit(value)
 
     @property
     def latency_ms(self) -> float:

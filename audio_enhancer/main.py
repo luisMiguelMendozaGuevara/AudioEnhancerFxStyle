@@ -20,17 +20,19 @@ from .ui.new import NewMainWindow
 
 
 def _preload_scipy() -> None:
-    """Precarga scipy.signal fuera del hilo de UI.
+    """Precarga pesada (scipy.signal/ndimage) fuera del hilo de UI.
 
-    El import de scipy cuesta ~2,3 s: hacerlo aquí (tras mostrar la ventana)
-    lo oculta tras el arranque y garantiza que no se pague dentro del callback
-    de audio la primera vez que se activa una sección de filtro."""
+    scipy cuesta ~2,3 s de import: hacerlo aquí (tras mostrar la ventana) lo
+    oculta tras el arranque y garantiza que no se pague dentro del callback de
+    audio la primera vez que se activa una sección de filtro. Se precargan los
+    dos submódulos que usa el camino de audio (signal y ndimage)."""
+    logger = logging.getLogger("audio_enhancer.main")
     try:
-        from audio_enhancer.dsp import _scipy_signal
+        from audio_enhancer.dsp import _scipy_ndimage, _scipy_signal
 
         _scipy_signal()
+        _scipy_ndimage()
     except Exception:
-        logger = logging.getLogger("audio_enhancer.main")
         logger.debug("Precarga de scipy fallida", exc_info=True)
 
 

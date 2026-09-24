@@ -54,4 +54,6 @@ jobs:
         run: python -m compileall -q AudioEnhancer_FxStyle.py audio_enhancer tests
 
       - name: Run tests (con cobertura)
-        run: python -m pytest tests/ -q --cov=audio_enhancer --cov-report=term-missing
+        # --cov-fail-under: red de regresión (el suite cubre ~80%; el umbral
+        # deja margen para no fallar por ruido de plataforma).
+        run: python -m pytest tests/ -q --cov=audio_enhancer --cov-report=term-missing --cov-fail-under=75

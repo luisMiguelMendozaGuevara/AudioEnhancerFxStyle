@@ -692,6 +692,25 @@ def test_techo_seguridad_desactivable():
     assert float(np.abs(y_on).max()) <= on.safety_ceiling + 1e-3  # techo transparente
 
 
+def test_gr_mide_la_reduccion_del_limitador():
+    """El limitador publica level_gr (dB <=0): 0 sin reducir y negativo cuando
+    la señal cruza el techo."""
+    t = np.arange(N) / FS
+    x = np.stack([(1.4 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)] * 2, axis=1)
+    e = Enhancer()
+    e.compressor = False
+    warm(e, x)
+    e.process(x.copy())
+    assert e.level_gr <= 0.0
+    assert e.level_gr < -1.0  # el limitador entró con esta señal
+
+
+def test_gr_en_silencio_es_cero():
+    e = Enhancer()
+    e.process(np.zeros((N, 2), dtype=np.float32))
+    assert e.level_gr == pytest.approx(0.0)
+
+
 def test_recorte_final_desactivable():
     """Con el recorte final apagado la señal sale SIN recortar (>1.0); con él
     activo nunca pasa de ±1.0."""

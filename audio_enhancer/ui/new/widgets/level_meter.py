@@ -42,6 +42,9 @@ class LevelMeterWidget(QWidget):
         self._orientation = orientation
         self._show_label = show_label
         self._stereo = stereo
+        # Modo GR (gain reduction): 0..-24 dB, barra que crece hacia la derecha
+        # cuanto MÁS reducción hay. El "nivel" es 0 (sin reducir) a 1 (-24 dB).
+        self._gr = False
         self._level: float = 0.0
         self._peak: float = 0.0
         self._peak_hold: int = 0
@@ -74,6 +77,15 @@ class LevelMeterWidget(QWidget):
                 self._peak_hold -= 1
             else:
                 self._peak *= 0.97
+        self.update()
+
+    def set_gr(self, db: float) -> None:
+        """Actualiza el medidor de gain reduction (dB <= 0)."""
+        self._gr = True
+        # -24 dB -> 1.0 (barra llena); 0 dB -> 0.0
+        frac = min(1.0, max(0.0, -db / 24.0))
+        self._level = frac
+        self._peak = max(self._peak * 0.97, frac)
         self.update()
 
     def set_stereo(
@@ -134,8 +146,11 @@ class LevelMeterWidget(QWidget):
         self._paint_lane_h(p, bx, bw, by, bh, self._level, self._peak, g, y)
 
         if self._show_label:
-            db = self._db_from_level(self._level)
-            label = f"{db:+.1f} dB" if self._level > 1e-6 else "-inf dB"
+            if self._gr:
+                label = f"-{self._level * 24.0:.1f} dB"  # reducción mostrada
+            else:
+                db = self._db_from_level(self._level)
+                label = f"{db:+.1f} dB" if self._level > 1e-6 else "-inf dB"
             p.setPen(QColor(Theme.TEXT_MUTED))
             p.setFont(QFont(Theme.FONT_FAMILY, 8))
             p.drawText(QRectF(bx, by, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
