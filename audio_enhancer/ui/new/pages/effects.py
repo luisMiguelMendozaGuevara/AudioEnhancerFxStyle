@@ -225,11 +225,49 @@ class EffectsPage(QWidget):
         preset_lbl.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
         preset_row.addWidget(preset_lbl)
         self._crossfeed_combo = QComboBox()
-        for name in ("Natural", "Moderate", "Strong"):
-            self._crossfeed_combo.addItem(self._t(name), name)
+        for name in ("Natural", "Moderate", "Strong", "Custom"):
+            label = self._t("Avanzado") if name == "Custom" else self._t(name)
+            self._crossfeed_combo.addItem(label, name)
         self._crossfeed_combo.currentIndexChanged.connect(self._on_crossfeed_preset)
         preset_row.addWidget(self._crossfeed_combo, 1)
         self._crossfeed_card._layout.addLayout(preset_row)
+
+        # Modo Avanzado (preset "Custom"): frecuencia y nivel de cruce, con los
+        # rangos válidos de libbs2b (300-2000 Hz, 1-15 dB).
+        adv_row = QHBoxLayout()
+        lbl_cut = QLabel(self._t("Frec."))
+        lbl_cut.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
+        adv_row.addWidget(lbl_cut)
+        self._cf_cut_slider = QSlider(Qt.Orientation.Horizontal)
+        self._cf_cut_slider.setRange(300, 2000)
+        self._cf_cut_slider.setValue(700)
+        self._cf_cut_slider.valueChanged.connect(self._on_cf_advanced)
+        adv_row.addWidget(self._cf_cut_slider, 1)
+        self._cf_cut_label = QLabel("700 Hz")
+        self._cf_cut_label.setFixedWidth(64)
+        self._cf_cut_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._cf_cut_label.setStyleSheet(f"color: {Theme.TEXT}; background: transparent;")
+        adv_row.addWidget(self._cf_cut_label)
+        self._crossfeed_card._layout.addLayout(adv_row)
+
+        adv_row2 = QHBoxLayout()
+        lbl_feed = QLabel(self._t("Nivel"))
+        lbl_feed.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
+        adv_row2.addWidget(lbl_feed)
+        self._cf_feed_slider = QSlider(Qt.Orientation.Horizontal)
+        self._cf_feed_slider.setRange(10, 150)  # 1.0-15.0 dB en décimas
+        self._cf_feed_slider.setValue(45)
+        self._cf_feed_slider.valueChanged.connect(self._on_cf_advanced)
+        adv_row2.addWidget(self._cf_feed_slider, 1)
+        self._cf_feed_label = QLabel("4.5 dB")
+        self._cf_feed_label.setFixedWidth(64)
+        self._cf_feed_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._cf_feed_label.setStyleSheet(f"color: {Theme.TEXT}; background: transparent;")
+        adv_row2.addWidget(self._cf_feed_label)
+        self._crossfeed_card._layout.addLayout(adv_row2)
+        # Los sliders solo se habilitan en el perfil Avanzado.
+        self._set_cf_advanced_enabled(False)
+
         if self._crossfeed_card._toggle is not None:
             self._crossfeed_card._toggle.setChecked(False)  # OFF por defecto
             self._crossfeed_card._toggle.setText("OFF")
@@ -289,8 +327,23 @@ class EffectsPage(QWidget):
         self._state.crossfeed = on
 
     def _on_crossfeed_preset(self, index: int) -> None:
-        name = self._crossfeed_combo.itemData(index) or "Natural"
-        self._state.crossfeed_preset = str(name)
+        name = str(self._crossfeed_combo.itemData(index) or "Natural")
+        self._set_cf_advanced_enabled(name == "Custom")
+        self._state.crossfeed_preset = name
+
+    def _set_cf_advanced_enabled(self, on: bool) -> None:
+        self._cf_cut_slider.setEnabled(on)
+        self._cf_feed_slider.setEnabled(on)
+
+    def _on_cf_advanced(self) -> None:
+        cut = self._cf_cut_slider.value()
+        feed = self._cf_feed_slider.value() / 10.0
+        self._cf_cut_label.setText(f"{cut} Hz")
+        self._cf_feed_label.setText(f"{feed:.1f} dB")
+        # Solo tiene efecto si el perfil es Avanzado; se emite igual (la ventana
+        # reenvía a state, y state solo aplica crossfeed_cut_hz/feed_db).
+        self._state.crossfeed_cut_hz = cut
+        self._state.crossfeed_feed_db = feed
 
     def set_bass(self, v) -> None:
         self._bass_card.set_value(v)
@@ -313,10 +366,20 @@ class EffectsPage(QWidget):
     def set_final_clip(self, on) -> None:
         self._final_clip_card.set_enabled(on)
 
-    def set_crossfeed(self, on, preset: str = "Natural") -> None:
+    def set_crossfeed(self, on, preset: str = "Natural", cut_hz: int = 700, feed_db: float = 4.5) -> None:
         self._crossfeed_card.set_enabled(on)
         idx = self._crossfeed_combo.findData(preset)
         if idx >= 0:
             self._crossfeed_combo.blockSignals(True)
             self._crossfeed_combo.setCurrentIndex(idx)
             self._crossfeed_combo.blockSignals(False)
+        # Reflejar los valores del modo Avanzado sin re-emitir señales.
+        for slider, label, value, fmt in (
+            (self._cf_cut_slider, self._cf_cut_label, int(cut_hz), "{:d} Hz"),
+            (self._cf_feed_slider, self._cf_feed_label, int(round(feed_db * 10)), "{:.1f} dB"),
+        ):
+            slider.blockSignals(True)
+            slider.setValue(value)
+            slider.blockSignals(False)
+            label.setText(fmt.format(value if slider is self._cf_cut_slider else value / 10.0))
+        self._set_cf_advanced_enabled(preset == "Custom")

@@ -195,9 +195,11 @@ class NewMainWindow(QMainWindow):
         state.safety_ceiling_changed.connect(lambda on: setattr(self.enhancer, "safety_ceiling_enabled", bool(on)))
         state.final_clip_changed.connect(lambda on: setattr(self.enhancer, "final_clip_enabled", bool(on)))
 
-        def _apply_crossfeed(on: bool, preset: str) -> None:
-            self.enhancer.crossfeed = bool(on)
-            self.enhancer.crossfeed_preset = str(preset)
+        def _apply_crossfeed(cfg: dict) -> None:
+            self.enhancer.crossfeed = bool(cfg["enabled"])
+            self.enhancer.crossfeed_preset = str(cfg["preset"])
+            self.enhancer.crossfeed_cut_hz = int(cfg["cut_hz"])
+            self.enhancer.crossfeed_feed_db = float(cfg["feed_db"])
 
         state.crossfeed_changed.connect(_apply_crossfeed)
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
@@ -863,7 +865,12 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_true_peak(self.enhancer.true_peak)
         self._pages["effects"].set_safety_ceiling(self.enhancer.safety_ceiling_enabled)
         self._pages["effects"].set_final_clip(self.enhancer.final_clip_enabled)
-        self._pages["effects"].set_crossfeed(self.enhancer.crossfeed, self.enhancer.crossfeed_preset)
+        self._pages["effects"].set_crossfeed(
+            self.enhancer.crossfeed,
+            self.enhancer.crossfeed_preset,
+            self.enhancer.crossfeed_cut_hz,
+            self.enhancer.crossfeed_feed_db,
+        )
         home.set_ab(self.enhancer.blend > 0.5)
         # Consistencia: AudioState alineado con el DSP (los set_* de las
         # paginas usan blockSignals y no escriben en el estado).
@@ -1059,6 +1066,8 @@ class NewMainWindow(QMainWindow):
         self.enhancer.final_clip_enabled = bool(cfg["final_clip"])
         self.enhancer.crossfeed = bool(cfg["crossfeed"])
         self.enhancer.crossfeed_preset = str(cfg["crossfeed_preset"])
+        self.enhancer.crossfeed_cut_hz = int(cfg["crossfeed_cut_hz"])
+        self.enhancer.crossfeed_feed_db = float(cfg["crossfeed_feed_db"])
         self.watchdog_enabled = bool(cfg["watchdog"])
         self.controller.set_watchdog_enabled(self.watchdog_enabled)
         # Preferencia de latencia persistida (40/60/100 ms), ya validada.
@@ -1095,6 +1104,8 @@ class NewMainWindow(QMainWindow):
             "final_clip": bool(self.enhancer.final_clip_enabled),
             "crossfeed": bool(self.enhancer.crossfeed),
             "crossfeed_preset": str(self.enhancer.crossfeed_preset),
+            "crossfeed_cut_hz": int(self.enhancer.crossfeed_cut_hz),
+            "crossfeed_feed_db": float(self.enhancer.crossfeed_feed_db),
             "theme": Theme.mode,
             "latency_pref": int(self.state.latency_pref),
             "minimize_to_tray": bool(self.minimize_to_tray),

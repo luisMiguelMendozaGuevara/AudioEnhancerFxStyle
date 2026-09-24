@@ -44,7 +44,9 @@ class AudioState(QObject):
     treble_changed = Signal(float)
     eq_changed = Signal(object)
     limiter_changed = Signal(bool)
-    crossfeed_changed = Signal(bool, str)
+    # (enabled, preset, cut_hz, feed_db): un solo dict/objeto para no encadenar
+    # 4 argumentos ni perder el modo Avanzado al emitir.
+    crossfeed_changed = Signal(object)
     compressor_changed = Signal(bool)
     true_peak_changed = Signal(bool)
     safety_ceiling_changed = Signal(bool)
@@ -88,6 +90,8 @@ class AudioState(QObject):
         # Crossfeed BS2B (auriculares): OFF por defecto + preset.
         self._crossfeed: bool = False
         self._crossfeed_preset: str = "Natural"
+        self._crossfeed_cut_hz: int = 700
+        self._crossfeed_feed_db: float = 4.5
         # Preferencia de latencia (ms) elegida en la página Audio.
         self._latency_pref: int = LATENCY_CHOICES_MS[1]  # 60 ms
 
@@ -316,6 +320,16 @@ class AudioState(QObject):
             self._final_clip = value
             self.final_clip_changed.emit(value)
 
+    def _emit_crossfeed(self) -> None:
+        self.crossfeed_changed.emit(
+            {
+                "enabled": self._crossfeed,
+                "preset": self._crossfeed_preset,
+                "cut_hz": self._crossfeed_cut_hz,
+                "feed_db": self._crossfeed_feed_db,
+            }
+        )
+
     @property
     def crossfeed(self) -> bool:
         return self._crossfeed
@@ -324,7 +338,7 @@ class AudioState(QObject):
     def crossfeed(self, value: bool) -> None:
         if self._crossfeed != value:
             self._crossfeed = value
-            self.crossfeed_changed.emit(value, self._crossfeed_preset)
+            self._emit_crossfeed()
 
     @property
     def crossfeed_preset(self) -> str:
@@ -334,7 +348,27 @@ class AudioState(QObject):
     def crossfeed_preset(self, value: str) -> None:
         if self._crossfeed_preset != value:
             self._crossfeed_preset = value
-            self.crossfeed_changed.emit(self._crossfeed, value)
+            self._emit_crossfeed()
+
+    @property
+    def crossfeed_cut_hz(self) -> int:
+        return self._crossfeed_cut_hz
+
+    @crossfeed_cut_hz.setter
+    def crossfeed_cut_hz(self, value: int) -> None:
+        if self._crossfeed_cut_hz != value:
+            self._crossfeed_cut_hz = value
+            self._emit_crossfeed()
+
+    @property
+    def crossfeed_feed_db(self) -> float:
+        return self._crossfeed_feed_db
+
+    @crossfeed_feed_db.setter
+    def crossfeed_feed_db(self, value: float) -> None:
+        if self._crossfeed_feed_db != value:
+            self._crossfeed_feed_db = value
+            self._emit_crossfeed()
 
     @property
     def latency_pref(self) -> int:
@@ -366,6 +400,8 @@ class AudioState(QObject):
         self.true_peak = bool(enhancer.true_peak)
         self.safety_ceiling = bool(enhancer.safety_ceiling_enabled)
         self._crossfeed_preset = str(enhancer.crossfeed_preset)
+        self._crossfeed_cut_hz = int(enhancer.crossfeed_cut_hz)
+        self._crossfeed_feed_db = float(enhancer.crossfeed_feed_db)
         self.crossfeed = bool(enhancer.crossfeed)
         self.final_clip = bool(enhancer.final_clip_enabled)
         self.ab_enabled = float(enhancer.blend) > 0.5

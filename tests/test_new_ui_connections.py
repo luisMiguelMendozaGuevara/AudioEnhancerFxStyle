@@ -344,6 +344,28 @@ def test_ventana_no_usa_privados_conocidos_de_paginas():
 # ---------- Opciones nuevas: techo de seguridad, watchdog y latencia viva ----------
 
 
+def test_crossfeed_avanzado_llega_al_dsp(window):
+    """Preset Avanzado (Custom): los sliders de frecuencia/nivel llegan al DSP
+    y sus valores se acotan a los rangos de libbs2b."""
+    eff = window._pages["effects"]
+    eff._crossfeed_card._toggle.setChecked(True)
+    assert window.enhancer.crossfeed is True
+    # Seleccionar Avanzado habilita los sliders y cambia el preset.
+    idx = eff._crossfeed_combo.findData("Custom")
+    eff._crossfeed_combo.setCurrentIndex(idx)
+    assert window.enhancer.crossfeed_preset == "Custom"
+    assert eff._cf_cut_slider.isEnabled() and eff._cf_feed_slider.isEnabled()
+    # Mover los sliders llega al DSP.
+    eff._cf_cut_slider.setValue(500)
+    eff._cf_feed_slider.setValue(80)  # 8.0 dB
+    assert window.enhancer.crossfeed_cut_hz == 500
+    assert window.enhancer.crossfeed_feed_db == pytest.approx(8.0)
+    # Un perfil fijo deshabilita los sliders avanzados.
+    eff._crossfeed_combo.setCurrentIndex(eff._crossfeed_combo.findData("Natural"))
+    assert not eff._cf_cut_slider.isEnabled()
+    eff._crossfeed_card._toggle.setChecked(False)
+
+
 def test_techo_seguridad_toggle_llega_al_dsp(window):
     toggle = window._pages["effects"]._safety_card._toggle
     toggle.setChecked(False)

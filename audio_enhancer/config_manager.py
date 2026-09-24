@@ -169,6 +169,8 @@ class ConfigManager:
             "final_clip": self.as_bool(raw.get("final_clip"), True),
             "crossfeed": self.as_bool(raw.get("crossfeed"), False),
             "crossfeed_preset": str(raw.get("crossfeed_preset", "Natural") or "Natural"),
+            "crossfeed_cut_hz": int(_clamp(self.as_float(raw.get("crossfeed_cut_hz"), 700.0), 300.0, 2000.0)),
+            "crossfeed_feed_db": _clamp(self.as_float(raw.get("crossfeed_feed_db"), 4.5), 1.0, 15.0),
             "watchdog": self.as_bool(raw.get("watchdog"), True),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),

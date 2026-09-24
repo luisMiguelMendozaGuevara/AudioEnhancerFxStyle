@@ -140,6 +140,8 @@ class EnhancerParams:
     blend: float = 1.0
     crossfeed: bool = False
     crossfeed_preset: str = "Natural"
+    crossfeed_cut_hz: int = 700
+    crossfeed_feed_db: float = 4.5
 
 
 class Enhancer:
@@ -208,6 +210,9 @@ class Enhancer:
         # Es una etapa aislada: no toca EQ/compresor/limitador.
         self.crossfeed: bool = False
         self.crossfeed_preset: str = "Natural"
+        # Modo Avanzado (preset="Custom"): frecuencia de corte y nivel de cruce.
+        self.crossfeed_cut_hz: int = 700
+        self.crossfeed_feed_db: float = 4.5
         # Coeficientes y estados (zi) del crossfeed, recalculados al cambiar
         # preset/tasa; reset_state() los limpia.
         self._cf_coeffs: tuple | None = None
@@ -333,6 +338,8 @@ class Enhancer:
         self.blend = float(params.blend)
         self.crossfeed = bool(params.crossfeed)
         self.crossfeed_preset = str(params.crossfeed_preset)
+        self.crossfeed_cut_hz = int(params.crossfeed_cut_hz)
+        self.crossfeed_feed_db = float(params.crossfeed_feed_db)
 
     def snapshot_params(self) -> "EnhancerParams":
         """Lee el estado actual como instantánea inmutable."""
@@ -347,6 +354,8 @@ class Enhancer:
             blend=float(self.blend),
             crossfeed=bool(self.crossfeed),
             crossfeed_preset=str(self.crossfeed_preset),
+            crossfeed_cut_hz=int(self.crossfeed_cut_hz),
+            crossfeed_feed_db=float(self.crossfeed_feed_db),
         )
 
     @staticmethod
@@ -408,16 +417,24 @@ class Enhancer:
 
     # ---------- crossfeed BS2B (auriculares) ----------
 
-    # Perfiles de libbs2b: (frecuencia de corte Hz, nivel de cruce en dB).
-    # Natural = default de BS2B; Moderate = Chu Moy (CMoy); Strong = Jan Meier.
+    # Perfiles de libbs2b (valores oficiales): (frecuencia de corte Hz, nivel
+    # de cruce en dB).
+    #   DEFAULT  = subwoofer virtual a ±30°, ~3 m: cruce moderado.
+    #   CMOY     = circuito analógico de Chu Moy (el más popular).
+    #   JMEIER   = CORDA de Jan Meier: el más sutil (menor cambio).
+    #   Custom   = perfil de usuario (frecuencia/feed del modo Avanzado).
     CROSSFEED_PRESETS: dict[str, tuple[int, float]] = {
-        "Natural": (700, 4.5),
-        "Moderate": (700, 6.0),
-        "Strong": (650, 9.5),
+        "Natural": (700, 4.5),  # libbs2b DEFAULT
+        "Moderate": (700, 6.0),  # libbs2b CMOY
+        "Strong": (650, 9.5),  # libbs2b JMEIER
+        "Custom": (700, 4.5),  # valores iniciales; los fija el usuario
     }
+    # Rangos válidos de libbs2b (para el modo Custom/Avanzado).
+    CF_CUT_MIN, CF_CUT_MAX = 300, 2000  # Hz
+    CF_FEED_MIN, CF_FEED_MAX = 1.0, 15.0  # dB
 
     def _crossfeed_coeffs(self):
-        """Coeficientes de libbs2b para (tasa, preset), cacheados.
+        """Coeficientes de libbs2b para (tasa, preset/custom), cacheados.
 
         Reproduce EXACTAMENTE el algoritmo de referencia (bs2b.c / bs2b):
           gb_lo = -5/6·dB - 3 ; gb_hi = dB/6 - 3
@@ -426,10 +443,16 @@ class Enhancer:
         La señal propia pasa por un shelf (hi); la CRUZADA por un LPF 1er orden
         (lo). out_L = (hi_L + lo_R)·gain, out_R = (hi_R + lo_L)·gain."""
         preset = self.crossfeed_preset if self.crossfeed_preset in self.CROSSFEED_PRESETS else "Natural"
-        src = (self.sample_rate, preset)
+        if preset == "Custom":
+            # Modo Avanzado: usa (y acota a los rangos de libbs2b) los valores
+            # del usuario en vez de un perfil fijo.
+            fc_lo = min(self.CF_CUT_MAX, max(self.CF_CUT_MIN, int(self.crossfeed_cut_hz)))
+            level_db = min(self.CF_FEED_MAX, max(self.CF_FEED_MIN, float(self.crossfeed_feed_db)))
+        else:
+            fc_lo, level_db = self.CROSSFEED_PRESETS[preset]
+        src = (self.sample_rate, preset, fc_lo, round(level_db, 3))
         if self._cf_coeffs is not None and self._cf_src == src:
             return self._cf_coeffs
-        fc_lo, level_db = self.CROSSFEED_PRESETS[preset]
         fs = float(self.sample_rate)
         gb_lo = level_db * -5.0 / 6.0 - 3.0
         gb_hi = level_db / 6.0 - 3.0

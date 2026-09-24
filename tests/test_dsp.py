@@ -859,3 +859,60 @@ def test_crossfeed_reset_limpia_estado():
     assert e._cf_state is not None
     e.reset_state()
     assert e._cf_state is None
+
+
+def test_crossfeed_modo_avanzado_custom():
+    """Modo Avanzado (preset Custom): usa crossfeed_cut_hz/feed_db del usuario,
+    acotados a los rangos de libbs2b (300-2000 Hz, 1-15 dB)."""
+    e = Enhancer()
+    e.sample_rate = FS
+    e.crossfeed = True
+    e.crossfeed_preset = "Custom"
+    e.crossfeed_cut_hz = 500
+    e.crossfeed_feed_db = 8.0
+    e._cf_coeffs = None  # forzar recálculo
+    coeffs_custom = e._crossfeed_coeffs()
+
+    e.crossfeed_preset = "Natural"
+    e._cf_coeffs = None
+    coeffs_natural = e._crossfeed_coeffs()
+    assert coeffs_custom != coeffs_natural  # 500/8.0 != 700/4.5
+
+    # Valores fuera de rango se acotan (no rompen el filtro).
+    e.crossfeed_preset = "Custom"
+    e.crossfeed_cut_hz = 99999
+    e.crossfeed_feed_db = 999.0
+    e._cf_coeffs = None
+    assert e._crossfeed_coeffs() is not None
+
+    # La salida es finita y distinta de la entrada (el cruce actúa).
+    x = (np.random.default_rng(3).standard_normal((256, 2)) * 0.3).astype(np.float32)
+    e.crossfeed_cut_hz = 500
+    e.crossfeed_feed_db = 8.0
+    e._cf_coeffs = None
+    got = e._apply_crossfeed(x.copy())
+    assert np.isfinite(got).all()
+    assert not np.array_equal(got, x)
+
+
+def test_crossfeed_preset_oficiales_coinciden_con_libbs2b():
+    """Los 3 perfiles base usan los valores oficiales de libbs2b."""
+    assert Enhancer.CROSSFEED_PRESETS["Natural"] == (700, 4.5)  # DEFAULT
+    assert Enhancer.CROSSFEED_PRESETS["Moderate"] == (700, 6.0)  # CMOY
+    assert Enhancer.CROSSFEED_PRESETS["Strong"] == (650, 9.5)  # JMEIER
+    assert (Enhancer.CF_CUT_MIN, Enhancer.CF_CUT_MAX) == (300, 2000)
+    assert (Enhancer.CF_FEED_MIN, Enhancer.CF_FEED_MAX) == (1.0, 15.0)
+
+
+def test_crossfeed_avanzado_configurable_por_params():
+    from audio_enhancer.dsp import EnhancerParams
+
+    e = Enhancer()
+    e.apply_params(
+        EnhancerParams(crossfeed=True, crossfeed_preset="Custom", crossfeed_cut_hz=400, crossfeed_feed_db=7.5)
+    )
+    assert e.crossfeed_preset == "Custom"
+    assert e.crossfeed_cut_hz == 400
+    assert e.crossfeed_feed_db == 7.5
+    snap = e.snapshot_params()
+    assert snap.crossfeed_cut_hz == 400 and snap.crossfeed_feed_db == 7.5
