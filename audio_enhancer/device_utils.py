@@ -10,6 +10,8 @@ el idioma del sistema; aquí vive la heurística (testeable) para dos decisiones
 
 from __future__ import annotations
 
+from .constants import CABLE_KEYWORDS
+
 # Marcas de que el dispositivo es inalámbrico (Bluetooth). Se comparan en
 # minúsculas y son marcas técnicas estándar (independientes del idioma), más
 # el nombre en español de Windows.
@@ -72,3 +74,49 @@ def pick_default_output(names: list[str]) -> int:
         if s > best_score:
             best_idx, best_score = i, s
     return best_idx
+
+
+def _strip_loopback_suffix(name: str) -> str:
+    """'Altavoces (Synaptics HD) [Loopback]' -> 'altavoces' (clave base).
+
+    Windows muestra el mismo dispositivo con sufijos distintos entre la lista
+    de salidas y el loopback ('Altavoces (Synaptics)' vs 'Altavoces
+    (Synaptics) [Loopback]' o '(Synaptics HD)'). Se normaliza a la parte antes
+    del primer paréntesis, en minúsculas y sin el sufijo [Loopback]."""
+    n = name.lower().replace("[loopback]", "").strip()
+    n = n.split("(")[0].strip()  # descarta el fabricante/paréntesis
+    return " ".join(n.split())
+
+
+def pick_capture_source(loopback_names: list[str], output_name: str | None) -> int:
+    """Índice del loopback a capturar, SIN depender de un cable virtual.
+
+    Orden de preferencia:
+      1. Loopback del MISMO dispositivo que la salida elegida (feedback
+         controlado: procesas lo que suena; es el caso del cable virtual).
+      2. Un cable virtual explícito (VB-CABLE/VoiceMeeter) si está presente.
+      3. El loopback de salida más probable (parlantes/auriculares), no un
+         HDMI/SPDIF que aparezca primero.
+      4. El primero (fallback estable).
+
+    Así la app funciona en modo NATIVO (sin instalar nada) capturando el
+    loopback del dispositivo de reproducción activo, y sigue prefiriendo el
+    cable si el usuario lo tiene (permite enrutado manual)."""
+    names = [str(n) for n in loopback_names]
+    if not names:
+        return 0
+    out_key = _strip_loopback_suffix(output_name or "")
+    if out_key:
+        # Comparación por CONTENCIÓN: Windows trunca los nombres (la lista de
+        # salidas muestra 'Altavoces (Synaptics)' y el loopback
+        # 'Altavoces (Synaptics) [Loopback]', pero en otras PCs difieren en
+        # sufijos como ' HD').
+        for i, n in enumerate(names):
+            key = _strip_loopback_suffix(n)
+            if key == out_key or key.startswith(out_key) or out_key.startswith(key):
+                return i
+    for i, n in enumerate(names):
+        low = n.lower()
+        if any(k in low for k in CABLE_KEYWORDS):
+            return i
+    return pick_default_output(names)

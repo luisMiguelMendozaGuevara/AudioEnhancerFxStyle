@@ -38,7 +38,6 @@ from ...autostart import is_enabled as _autostart_enabled
 from ...autostart import set_enabled as _set_auto_start
 from ...config_manager import ConfigManager
 from ...constants import (
-    CABLE_KEYWORDS,
     DANGER,
     DEFAULT_PRESET,
     OK,
@@ -47,7 +46,7 @@ from ...constants import (
     WINDOW_TITLE,
     resource_path,
 )
-from ...device_utils import is_bluetooth_name, pick_default_output
+from ...device_utils import is_bluetooth_name, pick_capture_source, pick_default_output
 from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
 from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, explain, translate
@@ -740,17 +739,18 @@ class NewMainWindow(QMainWindow):
 
     def _auto_select(self) -> None:
         audio_page = self._pages["audio"]
-        if self.loopbacks and not audio_page.selected_source():
-            idx = 0
-            for i, d in enumerate(self.loopbacks):
-                if any(k in d["name"].lower() for k in CABLE_KEYWORDS):
-                    idx = i
-                    break
-            audio_page.select_source_index(idx)
+        # La salida primero: la fuente puede preferir el loopback de ESA salida
+        # (modo nativo sin cable virtual) si no hay un cable explícito.
         if self.speakers and not audio_page.selected_output():
             # Elige la salida más probable como principal (parlantes/auriculares)
             # en vez de ciegamente la primera (podía ser HDMI/SPDIF).
             audio_page.select_output_index(pick_default_output([d["name"] for d in self.speakers]))
+        if self.loopbacks and not audio_page.selected_source():
+            idx = pick_capture_source(
+                [d["name"] for d in self.loopbacks],
+                audio_page.selected_output(),
+            )
+            audio_page.select_source_index(idx)
 
     def _maybe_warn_bluetooth(self) -> None:
         """Aviso si la salida elegida es Bluetooth: su reloj es inestable y

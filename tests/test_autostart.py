@@ -53,6 +53,8 @@ def test_sin_winreg_degrada_sin_lanzar(monkeypatch):
     """En plataformas sin winreg (Linux/CI) is/set_enabled no lanzan."""
     import builtins
 
+    import sys
+
     real_import = builtins.__import__
 
     def _sin_winreg(name, *args, **kwargs):
@@ -60,6 +62,10 @@ def test_sin_winreg_degrada_sin_lanzar(monkeypatch):
             raise ImportError("winreg solo existe en Windows")
         return real_import(name, *args, **kwargs)
 
+    # Si winreg YA está en sys.modules (otro test lo importó), el import no
+    # pasaría por __import__ y el test sería un falso positivo. Se elimina del
+    # cache para que la simulación sea determinista e independiente del orden.
+    monkeypatch.delitem(sys.modules, "winreg", raising=False)
     monkeypatch.setattr(builtins, "__import__", _sin_winreg)
     assert autostart.is_enabled() is False
     assert autostart.set_enabled(True) is False
