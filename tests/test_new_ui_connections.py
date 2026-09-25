@@ -386,6 +386,16 @@ def test_recorte_final_toggle_llega_al_dsp(window):
     assert toggle.text() == "ON"
 
 
+def test_native_capture_es_optin_y_se_aplica(window):
+    """(PRUEBA) La captura nativa es OFF por defecto y el checkbox la activa."""
+    assert window.native_capture is False
+    check = window._pages["settings"]._native_capture_check
+    check.setChecked(True)
+    assert window.native_capture is True
+    check.setChecked(False)
+    assert window.native_capture is False
+
+
 def test_watchdog_check_llega_al_controlador(window):
     check = window._pages["settings"]._watchdog_check
     check.setChecked(False)

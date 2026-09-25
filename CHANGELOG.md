@@ -4,6 +4,41 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.4] - 2026-09-24
+
+Estabilidad de audio y de arranque, más **crossfeed para auriculares**.
+
+### Corregido
+- **Crash intermitente al arrancar** (`0xc0000005` en pyside6.abi3.dll): el menú
+  del icono de bandeja se creaba sin *parent* y Python lo recolectaba (Qt no
+  toma ownership del menú); el icono usaba un puntero liberado. Ahora se crea con
+  parent + referencia viva, y la bandeja nace con el bucle de eventos activo.
+  También se mantiene vivo el mutex de instancia única (evita 2ª ventana).
+- **Saltos/descartés de audio**: un doble arranque abría DOS capturas (callbacks
+  duplicados → ring desbordado). `start()` y el botón son ahora idempotentes.
+- **Bucle de retroalimentación del cable** en modo estirado/underflow acotado.
+- **Prueba**: intercalado de audio con captura a ráfagas (colchón de jitter) y
+  estirado en underrun pequeño (menos microcortes sin subir latencia).
+
+### Añadido
+- **Crossfeed BS2B para auriculares** (OFF por defecto): perfiles Natural
+  (DEFAULT), Moderate (CMOY) y Strong (JMEIER) + **modo Avanzado** (frecuencia
+  300-2000 Hz, nivel 1-15 dB). Reproduce el algoritmo de libbs2b (verificado).
+- **Medidor de gain reduction (GR)** del limitador en Inicio.
+- **Captura nativa sin cable virtual (EXPERIMENTAL, opt-in)**: auto-selecciona
+  el loopback del dispositivo de salida; permite usar la app sin instalar
+  VB-CABLE. OFF por defecto hasta validarla.
+- **Dos artefactos** de release: instalador (onedir + Inno Setup) y portable
+  (onefile).
+
+### Diagnóstico
+- Métricas de huecos separadas por causa (descartes/overflows/fill) y log cada
+  ~10 s. Gate de rendimiento del DSP por peor caso (`--check`).
+
+### Notas
+- Cobertura de tests: 246. Todas las protecciones (limitador, compresor,
+  true-peak, techo de seguridad, recorte final, watchdog) son configurables.
+
 ## [1.5.3] - 2026-09-20
 
 Corrige los **microcortes** ("pausas") y hace configurables todas las
@@ -108,3 +143,4 @@ calidad y rendimiento, integradas sobre la UI PySide6.
 [1.0.1]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.0.1
 [1.0.0]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.0.0
 [1.5.3]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.5.3
+[1.5.4]: https://github.com/luisMiguelMendozaGuevara/AudioEnhancerFxStyle/releases/tag/v1.5.4

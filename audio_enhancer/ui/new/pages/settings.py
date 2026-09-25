@@ -31,6 +31,7 @@ class SettingsPage(QWidget):
     autostart_audio_pref_changed = Signal(bool)
     notifications_pref_changed = Signal(bool)
     watchdog_pref_changed = Signal(bool)
+    native_capture_pref_changed = Signal(bool)
     diagnostics_requested = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
@@ -46,6 +47,7 @@ class SettingsPage(QWidget):
         self._autostart_audio_check.toggled.connect(self.autostart_audio_pref_changed.emit)
         self._notifications_check.toggled.connect(self.notifications_pref_changed.emit)
         self._watchdog_check.toggled.connect(self.watchdog_pref_changed.emit)
+        self._native_capture_check.toggled.connect(self.native_capture_pref_changed.emit)
         self._diag_btn.clicked.connect(self.diagnostics_requested.emit)
 
     def _card(self) -> QFrame:
@@ -151,6 +153,17 @@ class SettingsPage(QWidget):
             f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
         )
         bl.addWidget(self._watchdog_check)
+
+        # (PRUEBA) Captura nativa sin cable virtual. Experimental: opt-in.
+        self._native_capture_check = QCheckBox(self._t("Captura nativa sin cable (experimental)"))
+        self._native_capture_check.setChecked(False)
+        self._native_capture_check.setStyleSheet(
+            f"QCheckBox {{ color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_MD}px; background: transparent; }}"
+        )
+        self._native_capture_check.setToolTip(
+            self._t("Captura el loopback del dispositivo de salida sin instalar un cable virtual. Experimental.")
+        )
+        bl.addWidget(self._native_capture_check)
         layout.addWidget(beh_card)
 
         # Diagnóstico: exporta log + config + dispositivos para soporte.
@@ -192,7 +205,14 @@ class SettingsPage(QWidget):
         self._theme_combo.setCurrentIndex(index)
         self._theme_combo.blockSignals(False)
 
-    def set_behavior(self, tray: bool, autostart_audio: bool, notifications: bool, watchdog: bool = True) -> None:
+    def set_behavior(
+        self,
+        tray: bool,
+        autostart_audio: bool,
+        notifications: bool,
+        watchdog: bool = True,
+        native_capture: bool = False,
+    ) -> None:
         """Refleja las preferencias de comportamiento tras aplicar config o
         reconstruir páginas (los widgets nuevos nacen con defaults)."""
         for check, value in (
@@ -200,6 +220,7 @@ class SettingsPage(QWidget):
             (self._autostart_audio_check, autostart_audio),
             (self._notifications_check, notifications),
             (self._watchdog_check, watchdog),
+            (self._native_capture_check, native_capture),
         ):
             check.blockSignals(True)
             check.setChecked(value)

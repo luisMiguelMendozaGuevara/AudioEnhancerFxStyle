@@ -47,6 +47,10 @@ TRANSLATIONS = {
     "LIMITA": "LIMITS",
     "Reducción de ganancia del limitador (dB)": "Limiter gain reduction (dB)",
     "Detener el audio si se pierde el dispositivo": "Stop audio if the device is lost",
+    "Captura nativa sin cable (experimental)": "Native capture without cable (experimental)",
+    "Captura el loopback del dispositivo de salida sin instalar un cable virtual. Experimental.": (
+        "Captures the loopback of the output device without installing a virtual cable. Experimental."
+    ),
     "Nivel:": "Level:",
     "Ecualizador (9 bandas)": "Equalizer (9 bands)",
     "Analizador de espectro": "Spectrum analyzer",

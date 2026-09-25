@@ -172,6 +172,8 @@ class ConfigManager:
             "crossfeed_cut_hz": int(_clamp(self.as_float(raw.get("crossfeed_cut_hz"), 700.0), 300.0, 2000.0)),
             "crossfeed_feed_db": _clamp(self.as_float(raw.get("crossfeed_feed_db"), 4.5), 1.0, 15.0),
             "watchdog": self.as_bool(raw.get("watchdog"), True),
+            # (PRUEBA) captura nativa sin cable virtual: OFF por defecto.
+            "native_capture": self.as_bool(raw.get("native_capture"), False),
             "latency_pref": latency,
             "minimize_to_tray": self.as_bool(raw.get("minimize_to_tray"), True),
             "autostart_audio": self.as_bool(raw.get("autostart_audio"), True),

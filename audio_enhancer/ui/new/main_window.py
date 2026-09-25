@@ -38,6 +38,7 @@ from ...autostart import is_enabled as _autostart_enabled
 from ...autostart import set_enabled as _set_auto_start
 from ...config_manager import ConfigManager
 from ...constants import (
+    CABLE_KEYWORDS,
     DANGER,
     DEFAULT_PRESET,
     OK,
@@ -211,6 +212,9 @@ class NewMainWindow(QMainWindow):
         self.autostart_audio = True
         self.notifications_enabled = True
         self.watchdog_enabled = True
+        # (PRUEBA, opt-in) captura nativa sin cable virtual: auto-selecciona el
+        # loopback del dispositivo de salida. OFF por defecto hasta validarla.
+        self.native_capture = False
         self._closing = False
         self._active_names = ("", "")
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
@@ -445,6 +449,7 @@ class NewMainWindow(QMainWindow):
         settings.autostart_audio_pref_changed.connect(self._on_autostart_audio_changed)
         settings.notifications_pref_changed.connect(self._on_notifications_changed)
         settings.watchdog_pref_changed.connect(self._on_watchdog_changed)
+        settings.native_capture_pref_changed.connect(self._on_native_capture_changed)
         settings.diagnostics_requested.connect(self._export_diagnostics)
         self._refresh_preset_list()
 
@@ -471,6 +476,12 @@ class NewMainWindow(QMainWindow):
         """Activa/desactiva el watchdog en caliente (sin reiniciar el audio)."""
         self.watchdog_enabled = bool(on)
         self.controller.set_watchdog_enabled(self.watchdog_enabled)
+        self._save_config()
+
+    def _on_native_capture_changed(self, on: bool) -> None:
+        """(PRUEBA) Captura nativa sin cable virtual: aplica en el próximo
+        auto-select (refresco de dispositivos o reinicio)."""
+        self.native_capture = bool(on)
         self._save_config()
 
     def _export_diagnostics(self) -> None:
@@ -530,7 +541,11 @@ class NewMainWindow(QMainWindow):
         if settings is None:
             return
         settings.set_behavior(
-            self.minimize_to_tray, self.autostart_audio, self.notifications_enabled, self.watchdog_enabled
+            self.minimize_to_tray,
+            self.autostart_audio,
+            self.notifications_enabled,
+            self.watchdog_enabled,
+            self.native_capture,
         )
 
     def _notify_tray(self, body: str) -> None:
@@ -739,17 +754,26 @@ class NewMainWindow(QMainWindow):
 
     def _auto_select(self) -> None:
         audio_page = self._pages["audio"]
-        # La salida primero: la fuente puede preferir el loopback de ESA salida
-        # (modo nativo sin cable virtual) si no hay un cable explícito.
+        # Salida primero: la fuente puede preferir el loopback de ESA salida.
         if self.speakers and not audio_page.selected_output():
             # Elige la salida más probable como principal (parlantes/auriculares)
             # en vez de ciegamente la primera (podía ser HDMI/SPDIF).
             audio_page.select_output_index(pick_default_output([d["name"] for d in self.speakers]))
         if self.loopbacks and not audio_page.selected_source():
-            idx = pick_capture_source(
-                [d["name"] for d in self.loopbacks],
-                audio_page.selected_output(),
-            )
+            if self.native_capture:
+                # (PRUEBA) Captura nativa: loopback del dispositivo de salida si
+                # no hay cable virtual; permite usar la app sin instalar nada.
+                idx = pick_capture_source(
+                    [d["name"] for d in self.loopbacks],
+                    audio_page.selected_output(),
+                )
+            else:
+                # Comportamiento clásico: preferir un cable virtual.
+                idx = 0
+                for i, d in enumerate(self.loopbacks):
+                    if any(k in d["name"].lower() for k in CABLE_KEYWORDS):
+                        idx = i
+                        break
             audio_page.select_source_index(idx)
 
     def _maybe_warn_bluetooth(self) -> None:
@@ -1107,6 +1131,7 @@ class NewMainWindow(QMainWindow):
         self.enhancer.crossfeed_cut_hz = int(cfg["crossfeed_cut_hz"])
         self.enhancer.crossfeed_feed_db = float(cfg["crossfeed_feed_db"])
         self.watchdog_enabled = bool(cfg["watchdog"])
+        self.native_capture = bool(cfg["native_capture"])
         self.controller.set_watchdog_enabled(self.watchdog_enabled)
         # Preferencia de latencia persistida (40/60/100 ms), ya validada.
         self.state.latency_pref = cfg["latency_pref"]
@@ -1150,6 +1175,7 @@ class NewMainWindow(QMainWindow):
             "autostart_audio": bool(self.autostart_audio),
             "notifications": bool(self.notifications_enabled),
             "watchdog": bool(self.watchdog_enabled),
+            "native_capture": bool(self.native_capture),
             "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
         }
         if not self._config.save(config):

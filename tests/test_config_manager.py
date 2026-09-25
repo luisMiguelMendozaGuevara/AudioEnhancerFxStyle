@@ -67,6 +67,8 @@ def test_watchdog_y_techo_seguridad_defaults_y_coercion(tmp_path):
     mgr = ConfigManager(eq_band_count=9, path=str(p))
     cfg = mgr.load()
     assert cfg["watchdog"] is True and cfg["safety_ceiling"] is True and cfg["final_clip"] is True
+    # (PRUEBA) captura nativa: OFF por defecto.
+    assert cfg["native_capture"] is False
 
     p.write_text(json.dumps({"watchdog": False, "safety_ceiling": "no", "final_clip": False}), encoding="utf-8")
     cfg2 = mgr.load()

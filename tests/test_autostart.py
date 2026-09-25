@@ -52,7 +52,6 @@ def test_comando_frozen_no_duplica_la_ruta(monkeypatch):
 def test_sin_winreg_degrada_sin_lanzar(monkeypatch):
     """En plataformas sin winreg (Linux/CI) is/set_enabled no lanzan."""
     import builtins
-
     import sys
 
     real_import = builtins.__import__
