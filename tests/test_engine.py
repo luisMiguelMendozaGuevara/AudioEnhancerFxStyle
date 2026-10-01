@@ -61,6 +61,16 @@ def _noise(n=2048, seed=3):
     return (rng.standard_normal((n, 2)) * 0.1).astype(np.float32)
 
 
+def _capture(engine, data: bytes, n: int):
+    """Simula un callback de captura + procesado DSP síncrono.
+
+    Desde que el DSP salió del callback a un hilo dedicado, `_cap_callback`
+    solo copia crudo al ring de entrada; `drain()` reproduce lo que el hilo
+    haría en producción sin depender de threading en los tests."""
+    engine._cap_callback(data, n, None, 0)
+    engine.drain()
+
+
 # ---------- apertura de streams ----------
 
 
@@ -170,7 +180,7 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
     engine._pa_mod = SimpleNamespace(paContinue=0)
     # prellenar a la mitad como hace la app real (latencia inicial ~100 ms)
     for _ in range(engine.nframes // 2 // 1024):
-        engine._cap_callback(np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024, None, 0)
+        _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
 
     def _simulate(skew):
         # salida mas lenta (skew<0) tiende a llenar el ring; mas rapida (skew>0)
@@ -182,7 +192,7 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
         low = engine.nframes + 1
         while min(cap_t, out_t) < 48000 * 120:
             if cap_t <= out_t:
-                engine._cap_callback(np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024, None, 0)
+                _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
                 cap_t += 1024
             else:
                 engine._out_callback(None, 1024, None, 0)
@@ -205,7 +215,7 @@ def test_underrun_pequeno_se_estira_sin_hueco(engine):
     silencio: no se cuenta como hueco ni se pierde continuidad."""
     engine.configure_ring(48000, drift_target_ms=60)
     engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
-    engine._cap_callback(np.zeros((960, 2), dtype=np.float32).tobytes(), 960, None, 0)
+    _capture(engine, np.zeros((960, 2), dtype=np.float32).tobytes(), 960)
     assert engine.fill() == 960
     before = engine.stats_snapshot()
     out = engine._read(CHUNK)  # pide 1024, hay 960 (ratio 0.94 >= 0.9)
@@ -220,7 +230,7 @@ def test_underrun_grande_sigue_siendo_hueco(engine):
     (silencio con fundidos), no un estirado."""
     engine.configure_ring(48000, drift_target_ms=60)
     engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
-    engine._cap_callback(np.zeros((400, 2), dtype=np.float32).tobytes(), 400, None, 0)
+    _capture(engine, np.zeros((400, 2), dtype=np.float32).tobytes(), 400)
     before = engine.stats_snapshot()
     out = engine._read(CHUNK)  # ratio 0.39 < 0.9
     assert out.shape[0] == CHUNK  # bloque completo con silencio
@@ -247,7 +257,7 @@ def test_deriva_se_acota_a_max_drift_frames_por_callback(engine):
     engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
     # Pre-cargar el ring MUY por encima del drift_target (salida rezagada extrema).
     while engine.fill() < engine._drift_target + 500:
-        engine._cap_callback(np.zeros((CHUNK, 2), dtype=np.float32).tobytes(), CHUNK, None, 0)
+        _capture(engine, np.zeros((CHUNK, 2), dtype=np.float32).tobytes(), CHUNK)
     before = engine.stats_snapshot()["drift_adjust_frames"]
     engine._out_callback(None, CHUNK, None, 0)  # un solo callback
     delta = engine.stats_snapshot()["drift_adjust_frames"] - before
@@ -323,7 +333,7 @@ def test_downmix_5_1_a_stereo_en_callback(engine):
     x[:, 2] = 0.5  # C
     x[:, 4] = 0.5  # SL
     x[:, 5] = 0.5  # SR
-    engine._cap_callback(x.tobytes(), n, None, 0)
+    _capture(engine, x.tobytes(), n)
     data = engine._read(n)
     esperado_l = 0.5 + 0.707 * 0.5 + 0.707 * 0.5  # FL + C + SL
     esperado_r = 0.25 + 0.707 * 0.5 + 0.707 * 0.5  # FR + C + SR
