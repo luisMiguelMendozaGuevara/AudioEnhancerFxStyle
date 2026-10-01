@@ -9,12 +9,13 @@ orquestado desde el hilo de la UI.
 
 import logging
 import threading
+import time
 from functools import lru_cache
 from typing import Any
 
 import numpy as np
 
-from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS
+from .constants import CAPTURE_CHUNK, CHUNK, DRIFT_TARGET_MS, RING_SECONDS
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -104,6 +105,16 @@ class AudioEngine:
         # Canales negociados en la captura (el callback mezcla a estéreo si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2
+        # (ARQ) DSP FUERA del callback de captura. El callback de PortAudio solo
+        # COPIA crudo al ring de entrada; un hilo dedicado lee, procesa y
+        # escribe al ring de salida. Motivo: con carga alta (vol 2x + EQ +
+        # limitador true-peak, ~1.8 ms/bloque) el callback no devolvía a tiempo
+        # y PortAudio DESCARTABA input (capt/s < 48000) -> microcortes/estática.
+        self._raw_ring: np.ndarray | None = None
+        self._raw_write: int = 0
+        self._raw_read: int = 0
+        self._dsp_thread: threading.Thread | None = None
+        self._dsp_running: bool = False
         # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
         # de entrada anterior (interpolación continua entre callbacks).
         self._interp_tail: np.ndarray | None = None
@@ -147,6 +158,11 @@ class AudioEngine:
         self.nframes = nframes
         self.rate = int(rate)
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
+        # Ring de ENTRADA crudo (captura -> hilo DSP): ~1 s de margen. Absorbe
+        # los tirones del callback y los picos del DSP sin descartar audio.
+        self._raw_ring = np.zeros((rate, 2), dtype=np.float32)
+        self._raw_write = 0
+        self._raw_read = 0
         self.write_pos = 0
         self.read_pos = 0
         self.fadein_frames = 0
@@ -179,11 +195,14 @@ class AudioEngine:
         self._drift_target = max(CHUNK, min(target, upper))
 
     def _open_capture_stream(self, pa, in_idx: int, rate: int, channels: int):
+        # CAPTURE_CHUNK (2048) > CHUNK (1024): el callback de captura corre el
+        # DSP; con carga alta (vol 2x + EQ + limitador) un buffer de 1024 no da
+        # margen y PortAudio descarta input -> microcortes. Ver constants.py.
         return pa.open(
             format=self._pa_mod.paFloat32,
             channels=channels,
             rate=rate,
-            frames_per_buffer=CHUNK,
+            frames_per_buffer=CAPTURE_CHUNK,
             input=True,
             output=False,
             input_device_index=in_idx,
@@ -215,6 +234,10 @@ class AudioEngine:
             )
             self.stream = self._open_capture_stream(pa, in_idx, rate, max_in)
         self.stream.start_stream()
+        # Arrancar el hilo de DSP que consume el ring crudo.
+        self._dsp_running = True
+        self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
+        self._dsp_thread.start()
 
     def fill(self) -> int:
         """Frames disponibles en el ring (para pre-cargar la salida)."""
@@ -238,6 +261,11 @@ class AudioEngine:
     def stop(self) -> None:
         """Detiene y cierra ambos streams (idempotente). Cierra también la
         captura si la salida nunca llegó a abrirse (evita fuga de stream)."""
+        # Parar el hilo de DSP ANTES de cerrar los streams.
+        self._dsp_running = False
+        if self._dsp_thread is not None:
+            self._dsp_thread.join(timeout=1.0)
+            self._dsp_thread = None
         for s in (self.stream, self.out_stream):
             if s is not None:
                 try:
@@ -349,11 +377,14 @@ class AudioEngine:
     # ---------- callbacks ----------
 
     def _cap_callback(self, in_data, frame_count, time_info, status):
-        if self.ring is None or self._pa_mod is None:
+        """Callback de captura: solo COPIA crudo al ring de entrada.
+
+        No corre DSP aquí (eso va en el hilo _dsp_loop): así el callback
+        devuelve en microsegundos y PortAudio nunca descarta input por tardanza
+        (que era la causa de los microcortes/estática con carga alta)."""
+        if self._raw_ring is None or self._pa_mod is None:
             return (None, self._pa_mod.paContinue if self._pa_mod else 0)
         ch = self._capture_channels
-        # frombuffer es de solo lectura y el slicing no copia: process() ya
-        # copia internamente antes de escribir (D3: asarray era redundante).
         x = np.frombuffer(in_data, dtype=np.float32)[: frame_count * ch]
         try:
             x = x.reshape(frame_count, ch)
@@ -362,13 +393,82 @@ class AudioEngine:
         if ch > 2:
             # Loopback multicanal (5.1/7.1): downmix a estéreo ANTES del DSP.
             x = _downmix_to_stereo(x)
-        y = self.enhancer.process(x)
-        self._put(y)
+        self._put_raw(x)
         with self.lock:
             self._stats["captured_frames"] += frame_count
             if status & getattr(self._pa_mod, "paInputOverflow", 0x2):
                 self._stats["input_overflows"] += 1
         return (None, self._pa_mod.paContinue)
+
+    # ---------- ring de entrada crudo (captura -> hilo DSP) ----------
+
+    def _put_raw(self, data: np.ndarray) -> None:
+        raw = self._raw_ring
+        if raw is None:
+            return
+        n = len(data)
+        nframes = len(raw)
+        with self.lock:
+            avail = self._raw_write - self._raw_read
+            if avail + n > nframes:
+                # El hilo DSP no da abasto: descartar lo más viejo del crudo.
+                drop = avail + n - nframes
+                self._raw_read += drop
+            idx = self._raw_write % nframes
+            if idx + n <= nframes:
+                raw[idx : idx + n] = data
+            else:
+                a = nframes - idx
+                raw[idx:] = data[:a]
+                raw[: n - a] = data[a:]
+            self._raw_write += n
+
+    def _read_raw(self) -> np.ndarray | None:
+        """Devuelve el bloque crudo disponible (o None si no hay)."""
+        raw = self._raw_ring
+        if raw is None:
+            return None
+        with self.lock:
+            avail = self._raw_write - self._raw_read
+            if avail <= 0:
+                return None
+            n = min(avail, CHUNK)  # procesar en bloques de CHUNK
+            nframes = len(raw)
+            idx = self._raw_read % nframes
+            if idx + n <= nframes:
+                data = raw[idx : idx + n].copy()
+            else:
+                a = nframes - idx
+                data = np.concatenate([raw[idx:], raw[: n - a]])
+            self._raw_read += n
+            return data
+
+    def drain(self) -> int:
+        """Procesa TODO el crudo pendiente de forma SÍNCRONA y devuelve los
+        frames procesados. Lo usa el hilo de DSP un bloque a la vez y los tests
+        (que no arrancan el hilo) para no depender de threading."""
+        total = 0
+        while True:
+            block = self._read_raw()
+            if block is None:
+                return total
+            self._put(self.enhancer.process(block))
+            total += len(block)
+
+    def _dsp_loop(self) -> None:
+        """Hilo dedicado: lee crudo, procesa y alimenta el ring de salida."""
+        logger.info("Hilo de DSP iniciado")
+        while self._dsp_running:
+            block = self._read_raw()
+            if block is None:
+                time.sleep(0.001)  # 1 ms: espera sin quemar CPU
+                continue
+            try:
+                y = self.enhancer.process(block)
+                self._put(y)
+            except Exception:
+                logger.exception("Error en el hilo de DSP")
+        logger.info("Hilo de DSP detenido")
 
     def _out_callback(self, in_data, frame_count, time_info, status):
         if self.ring is None or self._pa_mod is None:
