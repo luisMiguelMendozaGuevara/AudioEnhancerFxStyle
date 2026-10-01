@@ -60,7 +60,11 @@ def _bring_existing_to_front() -> bool:
         expected = WINDOW_TITLE
         found = []
 
-        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        # WINFUNCTYPE (stdcall) desapareció en 3.13; en x64 stdcall==cdecl,
+        # así que CFUNCTYPE es equivalente como respaldo.
+        _winfunctype = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+
+        @_winfunctype(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def _cb(hwnd, lparam):
             if u32.GetWindowTextLengthW(hwnd) <= 0:
                 return True

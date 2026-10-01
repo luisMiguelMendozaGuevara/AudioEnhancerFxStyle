@@ -9,7 +9,6 @@ orquestado desde el hilo de la UI.
 
 import logging
 import threading
-import time
 from functools import lru_cache
 from typing import Any
 
@@ -115,6 +114,9 @@ class AudioEngine:
         self._raw_read: int = 0
         self._dsp_thread: threading.Thread | None = None
         self._dsp_running: bool = False
+        # Evento para despertar/parar el hilo DSP sin polling con sleep
+        # (menos wakeups y parada inmediata en stop()).
+        self._dsp_wakeup = threading.Event()
         # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
         # de entrada anterior (interpolación continua entre callbacks).
         self._interp_tail: np.ndarray | None = None
@@ -221,7 +223,7 @@ class AudioEngine:
         self._capture_channels = 2
         try:
             self.stream = self._open_capture_stream(pa, in_idx, rate, 2)
-        except Exception:
+        except OSError:
             max_in = 0
             if device_info:
                 max_in = int(device_info.get("maxInputChannels", 0) or 0)
@@ -236,6 +238,7 @@ class AudioEngine:
         self.stream.start_stream()
         # Arrancar el hilo de DSP que consume el ring crudo.
         self._dsp_running = True
+        self._dsp_wakeup.clear()
         self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
         self._dsp_thread.start()
 
@@ -263,8 +266,11 @@ class AudioEngine:
         captura si la salida nunca llegó a abrirse (evita fuga de stream)."""
         # Parar el hilo de DSP ANTES de cerrar los streams.
         self._dsp_running = False
+        self._dsp_wakeup.set()  # despierta el wait para que salga ya
         if self._dsp_thread is not None:
             self._dsp_thread.join(timeout=1.0)
+            if self._dsp_thread.is_alive():
+                logger.warning("El hilo de DSP no paró en 1 s; se abandona (daemon)")
             self._dsp_thread = None
         for s in (self.stream, self.out_stream):
             if s is not None:
@@ -463,7 +469,7 @@ class AudioEngine:
         while self._dsp_running:
             block = self._read_raw()
             if block is None:
-                time.sleep(0.001)  # 1 ms: espera sin quemar CPU
+                self._dsp_wakeup.wait(0.001)  # espera sin quemar CPU; stop() despierta
                 continue
             try:
                 y = self.enhancer.process(block)
