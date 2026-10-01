@@ -390,7 +390,6 @@ class NewMainWindow(QMainWindow):
         if self.tray is None:
             return  # aún no hay bandeja (creación diferida)
         menu = QMenu(self)  # parent: Qt lo gestiona y no se libera antes de tiempo
-        self._tray_menu = menu  # referencia viva extra (defensa en profundidad)
         show_act = menu.addAction(self._t("Mostrar / Ocultar"))
         show_act.triggered.connect(self._toggle_show)
         audio_act = menu.addAction(self._t("Iniciar / Detener"))
@@ -398,7 +397,11 @@ class NewMainWindow(QMainWindow):
         menu.addSeparator()
         quit_act = menu.addAction(self._t("Salir"))
         quit_act.triggered.connect(self._quit_from_tray)
+        old = self._tray_menu
+        self._tray_menu = menu  # referencia viva extra (defensa en profundidad)
         self.tray.setContextMenu(menu)
+        if old is not None:
+            old.deleteLater()  # el menú anterior queda huérfano: liberarlo
 
     def build_content(self) -> None:
         if hasattr(self, "_content_built"):
