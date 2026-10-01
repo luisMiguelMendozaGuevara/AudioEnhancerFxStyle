@@ -285,7 +285,8 @@ class AudioEngine:
         n = len(data)
         nframes = self.nframes
         ring = self.ring
-        assert ring is not None  # configure_ring() lo crea antes de arrancar streams
+        if ring is None:  # sin configure_ring(): descartar, no reventar el hilo de audio
+            return
         with self.lock:
             avail = self.write_pos - self.read_pos
             if avail + n > nframes:
@@ -318,7 +319,8 @@ class AudioEngine:
         """
         nframes = self.nframes
         ring = self.ring
-        assert ring is not None  # configure_ring() lo crea antes de arrancar streams
+        if ring is None:  # sin configure_ring(): silencio, no reventar el hilo de audio
+            return np.zeros((n, 2), dtype=np.float32)
         avail = self.write_pos - self.read_pos
         if avail >= n:
             idx = self.read_pos % nframes

@@ -5,8 +5,8 @@
 #   pip install . -c constraints.txt
 #
 # `requirements*.txt` declara los rangos compatibles; este archivo fija las
-# versiones que pasaron la suite (155 tests) y el empaquetado con PyInstaller
-# en Windows x64 / Python 3.11. Actualizar tras validar una subida.
+# versiones que pasaron la suite y el empaquetado con PyInstaller en
+# Windows x64 / Python 3.11. Actualizar tras validar una subida.
 numpy==2.4.6
 scipy==1.17.1
 PySide6==6.11.2

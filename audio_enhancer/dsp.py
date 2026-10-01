@@ -1,7 +1,8 @@
 """Cadena DSP de Audio Enhancer FxStyle (puro numpy/scipy, sin UI).
 
-``Enhancer`` procesa bloques de audio en el hilo de captura de PortAudio.
-Thread-safety: el hilo de audio (callbacks) lee los *targets mientras la UI
+``Enhancer`` procesa bloques de audio en el hilo DSP dedicado del motor
+(``AudioEngine._dsp_loop``; antes corría dentro del callback de captura).
+Thread-safety: el hilo de audio (DSP) lee los *targets mientras la UI
 escribe en volume/bass/treble/eq_gains/blend. Para evitar zipper noise y
 estados corruptos, process() desliza los valores "actuales" (_c*) hacia los
 objetivos con una rampa exponencial por bloque; los filtros se rediseñan cada
