@@ -83,6 +83,10 @@ def test_start_capture_usa_constantes_del_modulo(fake_pa, engine):
     assert kw["input"] is True and kw["output"] is False
     assert kw["input_device_index"] == 7
     assert kw["channels"] == 2
+    # La captura usa el mismo bloque que la salida: el callback solo copia
+    # (el DSP va en hilo dedicado); bloques grandes (4096) llegan en ráfagas
+    # que hacen oscilar el ring 0..8192 (lag + huecos).
+    assert kw["frames_per_buffer"] == CHUNK
     assert pa.streams[0].started is True
     assert engine.fill() == 0
 

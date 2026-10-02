@@ -21,18 +21,8 @@ WINDOW_TITLE = "Audio Enhancer - FxStyle"
 # Audio
 SAMPLE_RATE = 48000
 CHUNK = 1024
-# Buffer de captura (frames_per_buffer del stream de ENTRADA). Debe ser MAYOR
-# que CHUNK: el DSP corre dentro del callback de captura y con carga alta
-# (volumen 2x + EQ + limitador true-peak, ~1.8 ms/bloque) un buffer pequeño no
-# da margen a PortAudio -> descarta input (capt/s<48000) y suenan microcortes
-# (estática). Barrido medido con el motor real (DSP completo, 100 ms):
-#   fpb=1024 -> capt/s 40755, 92 huecos
-#   fpb=2048 -> capt/s 43827, 63 huecos
-#   fpb=4096 -> capt/s 48606,  0 huecos   <- WASAPI ya usa 4096 internamente
-#   fpb=8192 -> capt/s 48606,  0 huecos
-# 4096 es el valor estable; cuesta ~85 ms de latencia del buffer de captura,
-# que NO se suma a la percibida (se absorbe en el ring).
-CAPTURE_CHUNK = 4096
+# (La captura usa el mismo CHUNK: el callback solo copia al ring crudo y el
+# DSP va en hilo dedicado, así que el flujo es suave bloque a bloque.)
 RING_SECONDS = 0.2
 # Latencia objetivo del ring (ms): el punto de consigna del control de deriva.
 # Antes era RING_SECONDS/2 = 100 ms fijos. 60 ms es el compromiso

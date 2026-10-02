@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from .constants import CAPTURE_CHUNK, CHUNK, DRIFT_TARGET_MS, RING_SECONDS
+from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -197,14 +197,15 @@ class AudioEngine:
         self._drift_target = max(CHUNK, min(target, upper))
 
     def _open_capture_stream(self, pa, in_idx: int, rate: int, channels: int):
-        # CAPTURE_CHUNK (2048) > CHUNK (1024): el callback de captura corre el
-        # DSP; con carga alta (vol 2x + EQ + limitador) un buffer de 1024 no da
-        # margen y PortAudio descarta input -> microcortes. Ver constants.py.
+        # Mismo tamaño que la salida (CHUNK): el callback SOLO copia al ring
+        # crudo (el DSP va en hilo dedicado), así que no necesita margen extra
+        # y la captura fluye suave (un bloque de 4096 cada ~86 ms hacía oscilar
+        # el ring 0..8192 -> lag y huecos; ver test_deriva_sostenida).
         return pa.open(
             format=self._pa_mod.paFloat32,
             channels=channels,
             rate=rate,
-            frames_per_buffer=CAPTURE_CHUNK,
+            frames_per_buffer=CHUNK,
             input=True,
             output=False,
             input_device_index=in_idx,
