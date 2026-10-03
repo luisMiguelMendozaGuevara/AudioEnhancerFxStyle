@@ -42,18 +42,39 @@ class SidebarItem(QFrame):
         self._icon_label = QLabel(self._icon_char)
         self._icon_label.setFixedWidth(20)
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._icon_label.setStyleSheet(f"font-size: 14px; color: {Theme.TEXT_MUTED}; background: transparent;")
         layout.addWidget(self._icon_label)
 
         self._text_label = QLabel(self._label_text)
-        self._text_label.setStyleSheet(
-            f"font-size: {Theme.FONT_SIZE_MD}px; color: {Theme.TEXT_MUTED}; background: transparent;"
-        )
         layout.addWidget(self._text_label)
         layout.addStretch()
+        self._apply_label_style()
+
+    def _label_colors(self) -> tuple[str, str, int]:
+        """(color icono, color texto, peso) según estado activo/hover."""
+        if self._active:
+            return Theme.ACCENT, Theme.TEXT, Theme.FONT_WEIGHT_SEMIBOLD
+        if self._hover:
+            return Theme.TEXT, Theme.TEXT, Theme.FONT_WEIGHT_MEDIUM
+        return Theme.TEXT_MUTED, Theme.TEXT_SECONDARY, Theme.FONT_WEIGHT_NORMAL
+
+    def _apply_label_style(self) -> None:
+        """Aplica el estilo de las etiquetas SOLO al cambiar de estado.
+
+        Antes se hacía dentro de paintEvent: setStyleSheet en un paint marca el
+        widget sucio y dispara OTRO repintado -> bucle sin fin (~285 paints/s
+        por item) que saturaba el hilo de UI y, vía GIL, mataba de hambre al
+        hilo de DSP (lag/descartes de audio)."""
+        ic, tc, tw = self._label_colors()
+        self._icon_label.setStyleSheet(f"font-size: 14px; color: {ic}; background: transparent;")
+        self._text_label.setStyleSheet(
+            f"font-size: {Theme.FONT_SIZE_MD}px; color: {tc}; font-weight: {tw}; background: transparent;"
+        )
 
     def set_active(self, active: bool) -> None:
+        if self._active == active:
+            return
         self._active = active
+        self._apply_label_style()
         self.update()
 
     def set_label(self, text: str) -> None:
@@ -69,12 +90,16 @@ class SidebarItem(QFrame):
             self.clicked.emit(self.page_id)
 
     def enterEvent(self, event) -> None:  # noqa: N802
-        self._hover = True
-        self.update()
+        if not self._hover:
+            self._hover = True
+            self._apply_label_style()
+            self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        self._hover = False
-        self.update()
+        if self._hover:
+            self._hover = False
+            self._apply_label_style()
+            self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)
@@ -89,23 +114,10 @@ class SidebarItem(QFrame):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(Theme.ACCENT))
             p.drawRoundedRect(QRectF(0, 6, 3, self.height() - 12), 1.5, 1.5)
-            ic = Theme.ACCENT
-            tc = Theme.TEXT
-            tw = Theme.FONT_WEIGHT_SEMIBOLD
         elif self._hover:
             p.fillRect(self.rect(), QColor(Theme.SURFACE_HOVER))
-            ic = Theme.TEXT
-            tc = Theme.TEXT
-            tw = Theme.FONT_WEIGHT_MEDIUM
-        else:
-            ic = Theme.TEXT_MUTED
-            tc = Theme.TEXT_SECONDARY
-            tw = Theme.FONT_WEIGHT_NORMAL
-
-        self._icon_label.setStyleSheet(f"font-size: 14px; color: {ic}; background: transparent;")
-        self._text_label.setStyleSheet(
-            f"font-size: {Theme.FONT_SIZE_MD}px; color: {tc}; font-weight: {tw}; background: transparent;"
-        )
+        # El color del icono/texto lo aplica _apply_label_style() al cambiar de
+        # estado; NO aquí (setStyleSheet en paintEvent = bucle de repintado).
         p.end()
 
 
