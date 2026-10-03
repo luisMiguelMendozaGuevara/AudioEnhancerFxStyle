@@ -2,6 +2,7 @@
 simulado: apertura de streams, formato de muestreo, ring buffer con
 wrap-around, huecos con fundido y ajuste de deriva."""
 
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -114,6 +115,28 @@ def test_stop_cierra_streams_y_es_idempotente(fake_pa, engine):
 
 
 # ---------- ring buffer ----------
+
+
+def test_warmup_silencio_sin_descartes(engine):
+    """Durante el silencio de arranque la salida emite silencio y el ring se
+    recorta a la consigna: no se descarta audio a golpes ni se cuentan huecos
+    mientras el dispositivo físico alcanza su reloj real."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    engine.stream = object()
+    engine.out_stream = object()
+    engine._warmup_until = time.monotonic() + 10.0
+    engine._put(np.ones((2048, 2), dtype=np.float32))
+    out = engine._out_callback(None, 1024, None, 0)
+    data = np.frombuffer(out[0], dtype=np.float32)
+    assert np.all(data == 0.0)  # silencio
+    assert engine.fill() <= engine.drift_target  # recortado
+    assert engine.stats_snapshot()["dropped_frames"] == 0
+    assert engine.stats_snapshot()["gap_blocks"] == 0
+    # Pasado el silencio, vuelve a leer normal.
+    engine._warmup_until = 0.0
+    out2 = engine._out_callback(None, 1024, None, 0)
+    assert out2[0] is not None
 
 
 def test_ring_fill_y_lectura_contigua(engine):

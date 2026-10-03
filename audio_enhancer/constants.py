@@ -29,6 +29,11 @@ RING_SECONDS = 0.2
 # estabilidad/latencia; la UI ofrece 40/60/100 ms.
 DRIFT_TARGET_MS = 60
 LATENCY_CHOICES_MS = (40, 60, 100)
+# Al abrir la salida, el dispositivo físico tarda en alcanzar su reloj real
+# (~20 s en algunos drivers): durante ese lapso la captura va más rápido y el
+# motor descartaría audio a golpes (glitches audibles). Se silencia y descarta
+# explícitamente este tiempo para que el inicio sea limpio.
+STARTUP_MUTE_S = 2.0
 
 # Rutas
 EXE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))

@@ -9,12 +9,13 @@ orquestado desde el hilo de la UI.
 
 import logging
 import threading
+import time
 from functools import lru_cache
 from typing import Any
 
 import numpy as np
 
-from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS
+from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, STARTUP_MUTE_S
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -117,6 +118,11 @@ class AudioEngine:
         # Evento para despertar/parar el hilo DSP sin polling con sleep
         # (menos wakeups y parada inmediata en stop()).
         self._dsp_wakeup = threading.Event()
+        # Fin del silencio de arranque (monotonic). Mientras now < esto, la
+        # salida emite silencio y el ring se recorta a la consigna para no
+        # descartar audio a golpes mientras el dispositivo físico alcanza su
+        # reloj real (>0 => no activo; se fija en open_output).
+        self._warmup_until: float = 0.0
         # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
         # de entrada anterior (interpolación continua entre callbacks).
         self._interp_tail: np.ndarray | None = None
@@ -183,6 +189,7 @@ class AudioEngine:
         target = int(rate * drift_target_ms / 1000.0)
         self._drift_target = max(CHUNK, min(target, upper))
         self._drift_accum = 0.0
+        self._warmup_until = 0.0
 
     def set_drift_target_ms(self, drift_target_ms: float) -> None:
         """Cambia la latencia objetivo EN CALIENTE (sin vaciar el ring).
@@ -261,6 +268,10 @@ class AudioEngine:
             stream_callback=self._out_callback,
         )
         self.out_stream.start_stream()
+        # Silencio/descarte explícito de arranque: la salida física tarda en
+        # alcanzar su reloj; mientras tanto la captura va más rápido y el motor
+        # descartaría audio a golpes. Ver STARTUP_MUTE_S.
+        self._warmup_until = time.monotonic() + STARTUP_MUTE_S
 
     def stop(self) -> None:
         """Detiene y cierra ambos streams (idempotente). Cierra también la
@@ -482,6 +493,15 @@ class AudioEngine:
     def _out_callback(self, in_data, frame_count, time_info, status):
         if self.ring is None or self._pa_mod is None:
             return (None, self._pa_mod.paContinue if self._pa_mod else 0)
+        # Silencio de arranque: la salida física aún no corre a su reloj real, así
+        # que se emite silencio y se recorta el ring a la consigna (conservando lo
+        # más nuevo) para no desbordar/descartar. No cuenta como hueco.
+        if self._warmup_until and time.monotonic() < self._warmup_until:
+            with self.lock:
+                excess = self.write_pos - self.read_pos - self._drift_target
+                if excess > 0:
+                    self.read_pos += excess
+            return (np.zeros((frame_count, 2), dtype=np.float32).tobytes(), self._pa_mod.paContinue)
         with self.lock:
             fill = self.write_pos - self.read_pos
             error = fill - self._drift_target
