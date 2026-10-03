@@ -2,6 +2,8 @@
 simulado: apertura de streams, formato de muestreo, ring buffer con
 wrap-around, huecos con fundido y ajuste de deriva."""
 
+import queue
+import threading
 import time
 from types import SimpleNamespace
 
@@ -447,3 +449,45 @@ def test_out_callback_guarda_la_cola_del_remuestreador(engine):
     engine._out_callback(None, 1024, None, 0)
     assert engine._interp_tail is not None
     assert engine._interp_tail.shape == (2, 2)
+
+
+# ---------- DSP en proceso hijo ----------
+
+
+def test_dsp_process_procesa_y_replica_parametros():
+    """El proceso hijo procesa un bloque y aplica los parámetros recibidos."""
+    from audio_enhancer.dsp import Enhancer
+    from audio_enhancer.dsp_process import child_main, snapshot_params
+
+    base = Enhancer()
+    params_q: queue.Queue = queue.Queue()
+    snap = snapshot_params(base)
+    snap["volume"] = 2.0
+    params_q.put(snap)
+    raw_q: queue.Queue = queue.Queue()
+    out_q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    t = threading.Thread(target=child_main, args=(raw_q, out_q, params_q, stop), daemon=True)
+    t.start()
+    try:
+        x = np.full((1024, 2), 0.1, dtype=np.float32)
+        raw_q.put(x.tobytes())
+        item = out_q.get(timeout=20.0)  # el 1er bloque importa scipy (~2-3 s)
+        y = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+        assert y.shape == (1024, 2)
+        assert np.isfinite(y).all()
+    finally:
+        stop.set()
+        raw_q.put(None)
+        t.join(timeout=3.0)
+
+
+def test_snapshot_params_incluye_eq_gains():
+    from audio_enhancer.dsp import Enhancer
+    from audio_enhancer.dsp_process import snapshot_params
+
+    e = Enhancer()
+    e.eq_gains = [1.0, -2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    snap = snapshot_params(e)
+    assert snap["eq_gains"] == [1.0, -2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert "volume" in snap and "limiter" in snap

@@ -7,7 +7,9 @@ Tk. ``start_capture``/``open_output``/``stop`` permiten un arranque no bloqueant
 orquestado desde el hilo de la UI.
 """
 
+import contextlib
 import logging
+import multiprocessing as mp
 import threading
 import time
 from functools import lru_cache
@@ -118,6 +120,15 @@ class AudioEngine:
         # Evento para despertar/parar el hilo DSP sin polling con sleep
         # (menos wakeups y parada inmediata en stop()).
         self._dsp_wakeup = threading.Event()
+        # DSP EXTERNO (proceso hijo): aísla el DSP del hilo del callback de
+        # salida (la contención de GIL retrasaba ese callback y descartaba
+        # audio). En tests se deja False (se usa el hilo DSP in-process/drain).
+        self.use_dsp_process: bool = False
+        self._dsp_proc: Any = None
+        self._raw_q: Any = None
+        self._out_q: Any = None
+        self._params_q: Any = None
+        self._mp_stop: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -244,11 +255,14 @@ class AudioEngine:
             )
             self.stream = self._open_capture_stream(pa, in_idx, rate, max_in)
         self.stream.start_stream()
-        # Arrancar el hilo de DSP que consume el ring crudo.
-        self._dsp_running = True
-        self._dsp_wakeup.clear()
-        self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
-        self._dsp_thread.start()
+        # Arrancar el DSP: en un proceso hijo (producción) o en un hilo local.
+        if self.use_dsp_process:
+            self._start_dsp_process()
+        else:
+            self._dsp_running = True
+            self._dsp_wakeup.clear()
+            self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
+            self._dsp_thread.start()
 
     def fill(self) -> int:
         """Frames disponibles en el ring (para pre-cargar la salida)."""
@@ -276,7 +290,7 @@ class AudioEngine:
     def stop(self) -> None:
         """Detiene y cierra ambos streams (idempotente). Cierra también la
         captura si la salida nunca llegó a abrirse (evita fuga de stream)."""
-        # Parar el hilo de DSP ANTES de cerrar los streams.
+        # Parar el DSP (hilo local o proceso hijo) ANTES de cerrar los streams.
         self._dsp_running = False
         self._dsp_wakeup.set()  # despierta el wait para que salga ya
         if self._dsp_thread is not None:
@@ -284,6 +298,7 @@ class AudioEngine:
             if self._dsp_thread.is_alive():
                 logger.warning("El hilo de DSP no paró en 1 s; se abandona (daemon)")
             self._dsp_thread = None
+        self._stop_dsp_process()
         for s in (self.stream, self.out_stream):
             if s is not None:
                 try:
@@ -474,6 +489,81 @@ class AudioEngine:
                 return total
             self._put(self.enhancer.process(block))
             total += len(block)
+
+    def _start_dsp_process(self) -> None:
+        """Arranca el proceso hijo del DSP y las bombas de cola.
+
+        El proceso hijo tiene su propio GIL: su trabajo numpy no compite con el
+        callback de salida de PortAudio (que era la causa de los descartes)."""
+        from .dsp_process import child_main, snapshot_params
+
+        ctx = mp.get_context("spawn")
+        self._raw_q = ctx.Queue(maxsize=256)
+        self._out_q = ctx.Queue(maxsize=256)
+        self._params_q = ctx.Queue(maxsize=8)
+        self._mp_stop = ctx.Event()
+        self._params_q.put(snapshot_params(self.enhancer))
+        self._dsp_proc = ctx.Process(
+            target=child_main,
+            args=(self._raw_q, self._out_q, self._params_q, self._mp_stop),
+            name="dsp-proc",
+            daemon=True,
+        )
+        self._dsp_proc.start()
+        self._dsp_running = True
+        for target in (self._pump_in, self._pump_out, self._pump_params):
+            threading.Thread(target=target, daemon=True).start()
+
+    def _stop_dsp_process(self) -> None:
+        if self._dsp_proc is None:
+            return
+        if self._mp_stop is not None:
+            self._mp_stop.set()
+        with contextlib.suppress(Exception):
+            self._raw_q.put_nowait(None)  # centinela de parada
+        self._dsp_proc.join(timeout=2.0)
+        if self._dsp_proc.is_alive():
+            logger.warning("El proceso DSP no paró en 2 s; se termina a la fuerza")
+            self._dsp_proc.terminate()
+            self._dsp_proc.join(timeout=1.0)
+        self._dsp_proc = None
+
+    def _pump_in(self) -> None:
+        """Mueve el audio crudo del ring local a la cola del proceso hijo."""
+        while self._dsp_running:
+            block = self._read_raw()
+            if block is None:
+                time.sleep(0.001)
+                continue
+            try:
+                self._raw_q.put(block.tobytes(), timeout=1.0)
+            except Exception:
+                logger.debug("Cola cruda llena: se descarta un bloque", exc_info=True)
+
+    def _pump_out(self) -> None:
+        """Mueve el audio procesado de la cola del hijo al ring de salida."""
+        while self._dsp_running:
+            try:
+                item = self._out_q.get(timeout=0.1)
+            except Exception:
+                continue
+            if item is None:
+                break
+            data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+            self._put(data)
+
+    def _pump_params(self) -> None:
+        """Replica los parámetros del enhancer al proceso hijo cuando cambian."""
+        from .dsp_process import snapshot_params
+
+        last = snapshot_params(self.enhancer)
+        while self._dsp_running:
+            time.sleep(0.05)
+            snap = snapshot_params(self.enhancer)
+            if snap != last:
+                last = snap
+                with contextlib.suppress(Exception):
+                    self._params_q.put_nowait(snap)
 
     def _dsp_loop(self) -> None:
         """Hilo dedicado: lee crudo, procesa y alimenta el ring de salida."""

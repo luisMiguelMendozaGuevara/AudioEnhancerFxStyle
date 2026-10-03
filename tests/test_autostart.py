@@ -50,22 +50,12 @@ def test_comando_frozen_no_duplica_la_ruta(monkeypatch):
 
 
 def test_sin_winreg_degrada_sin_lanzar(monkeypatch):
-    """En plataformas sin winreg (Linux/CI) is/set_enabled no lanzan."""
-    import builtins
-    import sys
+    """En plataformas sin winreg (Linux/CI) is/set_enabled no lanzan.
 
-    real_import = builtins.__import__
-
-    def _sin_winreg(name, *args, **kwargs):
-        if name == "winreg":
-            raise ImportError("winreg solo existe en Windows")
-        return real_import(name, *args, **kwargs)
-
-    # Si winreg YA está en sys.modules (otro test lo importó), el import no
-    # pasaría por __import__ y el test sería un falso positivo. Se elimina del
-    # cache para que la simulación sea determinista e independiente del orden.
-    monkeypatch.delitem(sys.modules, "winreg", raising=False)
-    monkeypatch.setattr(builtins, "__import__", _sin_winreg)
+    sys.modules["winreg"] = None hace que ``import winreg`` lance ImportError de
+    forma DETERMINISTA (independiente de si otro test lo importó antes o de si
+    corremos en Windows real)."""
+    monkeypatch.setitem(sys.modules, "winreg", None)
     assert autostart.is_enabled() is False
     assert autostart.set_enabled(True) is False
     assert autostart.set_enabled(False) is False

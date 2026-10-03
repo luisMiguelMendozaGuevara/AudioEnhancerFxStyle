@@ -19,6 +19,7 @@ Lo que NO sabe: cómo se dibuja un botón.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -164,6 +165,10 @@ class AudioController(QObject):
             self.enhancer.sample_rate = rate
             self.enhancer.reset_state()
         self.engine.configure_ring(rate, drift_target_ms=drift_target_ms)
+        # DSP en proceso hijo: su trabajo numpy no compite con el callback de
+        # salida de PortAudio (la contención de GIL descartaba audio). En tests
+        # se desactiva con AUDIO_ENHANCER_NO_DSP_PROCESS=1 (no spawnear procesos).
+        self.engine.use_dsp_process = os.environ.get("AUDIO_ENHANCER_NO_DSP_PROCESS") != "1"
         self.engine.start_capture(self.pa, source["index"], rate, device_info=source)
         self.running = True
         self._prefill_deadline = time.time() + 0.5

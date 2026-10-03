@@ -6,6 +6,9 @@ import os
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Los tests no deben spawnear el proceso hijo del DSP (audio_controller lo
+# activa en producción): se desactiva por variable de entorno.
+os.environ.setdefault("AUDIO_ENHANCER_NO_DSP_PROCESS", "1")
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:

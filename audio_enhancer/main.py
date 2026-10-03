@@ -7,6 +7,7 @@ también instancias viejas de builds que no usan mutex.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import threading
 from typing import cast
 
@@ -37,6 +38,8 @@ def _preload_scipy() -> None:
 
 
 def main() -> int:
+    # Soporte de multiprocessing en el EXE congelado (proceso hijo del DSP).
+    multiprocessing.freeze_support()
     setup_logging()
     logger = logging.getLogger("audio_enhancer.main")
     logger.info("Arranque de %s", APP_NAME)
