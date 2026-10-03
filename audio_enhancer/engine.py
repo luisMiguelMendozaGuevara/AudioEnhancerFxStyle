@@ -98,9 +98,12 @@ class AudioEngine:
         # defecto para construccion directa en tests)
         self._drift_target: int = 0
         self._drift_deadband: int = 0
-        self._drift_gain: float = 0.02
+        # Ganancia del control proporcional: 0.005 mantiene el ring cerca de la
+        # consigna sin reaccionar al ruido de bloque (con 0.02 el término
+        # saturaba en cada callback -> limit cycle con warble audible).
+        self._drift_gain: float = 0.005
         self._drift_accum: float = 0.0
-        self._max_drift_frames: int = 8
+        self._max_drift_frames: int = 6
         # Canales negociados en la captura (el callback mezcla a estéreo si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2
@@ -173,10 +176,11 @@ class AudioEngine:
         self._fade = max(1, int(rate * 0.005))  # fundido ~5 ms
         if drift_target_ms is None:
             drift_target_ms = DRIFT_TARGET_MS
-        # Banda muerta estrecha (~0.3 ms): deja que el control ignore el ruido
-        # del ring y NO deje acumular latencia. Antes era CHUNK/8 (~2.7 ms) y
-        # eso dejaba que el ring derivara decenas de ms.
-        self._drift_deadband = max(CHUNK // 64, int(rate * 0.00015))
+        # Banda muerta (~1.3 ms): el control ignora el ruido de bloque (la
+        # captura entrega de golpe 1024, la salida de golpe 1024) para no
+        # reaccionar a esa oscilación de fase y saturar. Antes era CHUNK/64
+        # (~0.3 ms), demasiado estrecha: con jitter real el término saturaba.
+        self._drift_deadband = max(CHUNK // 16, int(rate * 0.0008))
         # Consigna acotada: ni tan baja que un chunk de hueco la vacíe, ni tan
         # alta que se acerque al borde del ring.
         upper = max(CHUNK, nframes - 4 * CHUNK)

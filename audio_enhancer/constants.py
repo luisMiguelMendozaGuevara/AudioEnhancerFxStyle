@@ -23,7 +23,10 @@ SAMPLE_RATE = 48000
 CHUNK = 1024
 # (La captura usa el mismo CHUNK: el callback solo copia al ring crudo y el
 # DSP va en hilo dedicado, así que el flujo es suave bloque a bloque.)
-RING_SECONDS = 0.2
+# 0.3 s (antes 0.2): colchón para las ráfagas de la captura WASAPI (llegan
+# bloques agrupados) sin desbordar el ring y descartar audio. NO añade latencia
+# percibida: la consigna la fija DRIFT_TARGET_MS; esto es solo margen superior.
+RING_SECONDS = 0.3
 # Latencia objetivo del ring (ms): el punto de consigna del control de deriva.
 # Antes era RING_SECONDS/2 = 100 ms fijos. 60 ms es el compromiso
 # estabilidad/latencia; la UI ofrece 40/60/100 ms.

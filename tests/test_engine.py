@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import audio_enhancer.engine as engine_mod
-from audio_enhancer.constants import CHUNK
+from audio_enhancer.constants import CHUNK, RING_SECONDS
 from audio_enhancer.engine import AudioEngine
 
 
@@ -118,7 +118,7 @@ def test_stop_cierra_streams_y_es_idempotente(fake_pa, engine):
 
 def test_ring_fill_y_lectura_contigua(engine):
     engine.configure_ring(48000)
-    assert engine.nframes == int(48000 * 0.2)
+    assert engine.nframes == int(48000 * RING_SECONDS)
     x = _noise(2048)
     engine._put(x)
     assert engine.fill() == 2048
@@ -129,25 +129,18 @@ def test_ring_fill_y_lectura_contigua(engine):
 
 def test_ring_wraparound_descarta_lo_mas_viejo(engine):
     engine.configure_ring(48000)
-    nframes = engine.nframes  # 9600
-    chunks = [_noise(2048, seed=i) for i in range(5)]  # 10240 frames en total
-    stream = np.concatenate(chunks, axis=0)
+    nframes = engine.nframes
+    # Suficientes bloques para desbordar el ring con holgura (independiente del
+    # tamaño de RING_SECONDS): se conservan los nframes mas nuevos.
+    n_chunks = nframes // 1024 + 3
+    chunks = [_noise(1024, seed=i) for i in range(n_chunks)]
     for c in chunks:
         engine._put(c)
     assert engine.fill() == nframes
-    dropped = 10240 - nframes  # 640
-    # _put descarta lo mas viejo poniendo a cero una ventana del ring: la
-    # lectura empieza con `dropped` ceros y el resto es stream[dropped*2:].
     out = engine._read(nframes)
-    expected = np.concatenate(
-        [
-            np.zeros((dropped, 2), dtype=np.float32),
-            stream[dropped * 2 :],
-        ],
-        axis=0,
-    )
     assert out.shape == (nframes, 2)
-    assert np.array_equal(out, expected)
+    # El ultimo bloque escrito no fue descartado: aparece integro al final.
+    assert np.array_equal(out[-1024:], chunks[-1])
 
 
 def test_hueco_devuelve_silencio_con_fundido(engine):
@@ -213,6 +206,37 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
         assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
 
 
+def test_ring_absorbe_rafagas_de_captura(engine):
+    """La captura WASAPI entrega bloques agrupados (rafagas). Con el skew real
+    medido (captura ~709 ppm mas rapida) mas rafagas, un ring de 0.2 s se
+    llenaba y DESCARTABA audio (saltos audibles); 0.3 s lo absorbe."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    while engine.fill() < engine.drift_target:  # prellenar como la app
+        _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
+    out_cb = 1024 / (1.0 - 709e-6)  # salida mas lenta: el ring tiende a llenarse
+    cap_t = 0.0
+    out_t = 0.0
+    last_burst = 0.0
+    high = -1
+    while min(cap_t, out_t) < 48000 * 120:
+        if cap_t <= out_t:
+            _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
+            cap_t += 1024
+            if cap_t - last_burst > 48000 * 15 and cap_t % 48000 < 2400:
+                for _ in range(6):  # rafaga de la captura
+                    _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
+                    cap_t += 1024
+                last_burst = cap_t
+        else:
+            engine._out_callback(None, 1024, None, 0)
+            out_t += out_cb
+        with engine.lock:
+            high = max(high, engine.write_pos - engine.read_pos)
+    assert engine.stats_snapshot()["dropped_frames"] == 0, "el ring descarto audio (rafaga)"
+    assert high < engine.nframes, "el ring se lleno del todo"
+
+
 def test_underrun_pequeno_se_estira_sin_hueco(engine):
     """Si al ring le falta un poco para el bloque pedido, se devuelven los
     frames disponibles (el remuestreador los estira) en vez de insertar
@@ -275,7 +299,7 @@ def test_drift_target_desacoplado_del_tamano_del_ring(engine):
     """El ring conserva su capacidad (RING_SECONDS) pero la consigna de
     llenado es la latencia objetivo: 60 ms por defecto, ya no nframes//2."""
     engine.configure_ring(48000)
-    assert engine.nframes == int(48000 * 0.2)  # capacidad intacta
+    assert engine.nframes == int(48000 * RING_SECONDS)  # capacidad intacta
     assert engine.drift_target == int(48000 * 0.060)  # 60 ms
     engine.configure_ring(48000, drift_target_ms=40)
     assert engine.drift_target == int(48000 * 0.040)
