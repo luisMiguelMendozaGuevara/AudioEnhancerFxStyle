@@ -151,7 +151,7 @@ class SpectrumWorker(QThread):
                     # en el log. Se deja constancia (debug: es el hilo visual,
                     # no debe ensuciar el log de producción).
                     logger.debug("compute_spectrum falló", exc_info=True)
-                self.msleep(33)  # ~30 Hz: cadencia de refresco visual
+                self.msleep(50)  # ~20 Hz: cadencia de refresco visual
             else:
                 # Inactivo (sin audio / sin espectro visible): sondeo perezoso
                 # del flag a 4 Hz, sin FFT ni allocations. La reactivación al
@@ -1054,10 +1054,14 @@ class NewMainWindow(QMainWindow):
         self._latest_spectrum = values
 
     def _refresh_visuals(self) -> None:
-        # Con la ventana oculta (bandeja) no se actualizan medidores/espectro:
-        # emitir señales a 30 Hz sin que nadie mire sólo consume GIL y puede
-        # retrasar los callbacks de audio. Se sigue registrando el diagnóstico.
-        if self.isVisible():
+        # Sólo se emiten señales de medidores/espectro si la ventana está visible
+        # Y la página que los muestra está en primer plano. Emitir a 30 Hz sin
+        # que nadie mire consume GIL y puede retrasar los callbacks de audio.
+        # El diagnóstico del motor se registra siempre.
+        visible = self.isVisible()
+        current = self._stack.currentWidget()
+        on_home = visible and current is self._pages.get("home")
+        if on_home:
             # Medidores honestos: la ENTRADA es RMS (energía percibida del
             # material capturado) y la SALIDA es pico post-DSP (lo que realmente
             # puede acercarse al techo). Antes ambos mostraban el mismo valor.
@@ -1067,11 +1071,10 @@ class NewMainWindow(QMainWindow):
             self.state.input_levels = (self.enhancer.level_rms_l, self.enhancer.level_rms_r)
             self.state.output_levels = (self.enhancer.level_peak_l, self.enhancer.level_peak_r)
             self.state.output_gr = float(self.enhancer.level_gr)
-            if self._latest_spectrum is not None:
-                self.state.spectrum = self._latest_spectrum
-                self._latest_spectrum = None
-        else:
-            self._latest_spectrum = None  # no acumular espectro sin mostrarlo
+        shows_spectrum = current in (self._pages.get("home"), self._pages.get("equalizer"))
+        if visible and shows_spectrum and self._latest_spectrum is not None:
+            self.state.spectrum = self._latest_spectrum
+        self._latest_spectrum = None  # no acumular espectro que no se muestra
         # Métricas del motor ~1 Hz (el timer corre a 33 ms): contadores vivos
         # de underruns/huecos/deriva en la barra de estado.
         self._metrics_tick = (self._metrics_tick + 1) % 30
