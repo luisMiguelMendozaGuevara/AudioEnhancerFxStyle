@@ -252,16 +252,23 @@ class HomePage(QWidget):
             )
 
     def _on_spectrum_changed(self, data) -> None:
+        # Sólo se pinta/actualiza si la página está a la vista (ahorro de GIL:
+        # el espectro llega a 30 Hz y actualizar páginas ocultas retrasa el audio).
+        if not self.isVisible():
+            return
         self._spectrum.set_spectrum(data)
 
     def _on_input_levels(self, left: float, right: float) -> None:
-        self._input_meter.set_stereo(left, right)
+        if self.isVisible():
+            self._input_meter.set_stereo(left, right)
 
     def _on_output_levels(self, left: float, right: float) -> None:
-        self._output_meter.set_stereo(left, right)
+        if self.isVisible():
+            self._output_meter.set_stereo(left, right)
 
     def _on_output_gr(self, db: float) -> None:
-        self._gr_meter.set_gr(db)
+        if self.isVisible():
+            self._gr_meter.set_gr(db)
 
     def set_preset_items(self, names: list[str]) -> None:
         self._preset_combo.blockSignals(True)

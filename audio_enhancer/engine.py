@@ -689,19 +689,19 @@ class AudioEngine:
         i_m1 = np.clip(i0 - 1, 0, n - 1)
         i1 = np.clip(i0 + 1, 0, n - 1)
         i2 = np.clip(i0 + 2, 0, n - 1)
-        a = frac
-        b = frac * frac
-        c = b * frac
-        out = np.empty((len(t), x.shape[1]), dtype=np.float32)
-        for ch in range(x.shape[1]):
-            p0, p1, p2, p3 = x[i_m1, ch], x[i0, ch], x[i1, ch], x[i2, ch]
-            out[:, ch] = 0.5 * (
-                2.0 * p1
-                + (-p0 + p2) * a
-                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * b
-                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * c
-            )
-        return out
+        a = frac[:, None]
+        b = (frac * frac)[:, None]
+        c = (frac * frac * frac)[:, None]
+        # Vectorizado sobre canales (antes un bucle Python por canal: más tiempo
+        # con el GIL dentro del callback de salida).
+        p0 = x[i_m1]
+        p1 = x[i0]
+        p2 = x[i1]
+        p3 = x[i2]
+        out = 0.5 * (
+            2.0 * p1 + (-p0 + p2) * a + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * b + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * c
+        )
+        return out.astype(np.float32, copy=False)
 
     @staticmethod
     def _match_frame_count(data, frame_count, tail=None):

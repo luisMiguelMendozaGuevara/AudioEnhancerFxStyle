@@ -268,7 +268,9 @@ class EqualizerPage(QWidget):
         self._state.spectrum_changed.connect(self._on_spectrum)
 
     def _on_spectrum(self, values) -> None:
-        self._eq_curve.set_spectrum(values)
+        # Sólo cuando la página está a la vista (ahorro de GIL en el hilo de UI).
+        if self.isVisible():
+            self._eq_curve.set_spectrum(values)
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)

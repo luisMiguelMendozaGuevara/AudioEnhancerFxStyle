@@ -1054,18 +1054,24 @@ class NewMainWindow(QMainWindow):
         self._latest_spectrum = values
 
     def _refresh_visuals(self) -> None:
-        # Medidores honestos: la ENTRADA es RMS (energía percibida del material
-        # capturado) y la SALIDA es pico post-DSP (lo que realmente puede
-        # acercarse al techo). Antes ambos mostraban el mismo valor.
-        self.state.input_level = float(self.enhancer.level_rms)
-        self.state.output_level = float(self.enhancer.level_peak)
-        # Niveles por canal para los medidores estéreo (L/R).
-        self.state.input_levels = (self.enhancer.level_rms_l, self.enhancer.level_rms_r)
-        self.state.output_levels = (self.enhancer.level_peak_l, self.enhancer.level_peak_r)
-        self.state.output_gr = float(self.enhancer.level_gr)
-        if self._latest_spectrum is not None:
-            self.state.spectrum = self._latest_spectrum
-            self._latest_spectrum = None
+        # Con la ventana oculta (bandeja) no se actualizan medidores/espectro:
+        # emitir señales a 30 Hz sin que nadie mire sólo consume GIL y puede
+        # retrasar los callbacks de audio. Se sigue registrando el diagnóstico.
+        if self.isVisible():
+            # Medidores honestos: la ENTRADA es RMS (energía percibida del
+            # material capturado) y la SALIDA es pico post-DSP (lo que realmente
+            # puede acercarse al techo). Antes ambos mostraban el mismo valor.
+            self.state.input_level = float(self.enhancer.level_rms)
+            self.state.output_level = float(self.enhancer.level_peak)
+            # Niveles por canal para los medidores estéreo (L/R).
+            self.state.input_levels = (self.enhancer.level_rms_l, self.enhancer.level_rms_r)
+            self.state.output_levels = (self.enhancer.level_peak_l, self.enhancer.level_peak_r)
+            self.state.output_gr = float(self.enhancer.level_gr)
+            if self._latest_spectrum is not None:
+                self.state.spectrum = self._latest_spectrum
+                self._latest_spectrum = None
+        else:
+            self._latest_spectrum = None  # no acumular espectro sin mostrarlo
         # Métricas del motor ~1 Hz (el timer corre a 33 ms): contadores vivos
         # de underruns/huecos/deriva en la barra de estado.
         self._metrics_tick = (self._metrics_tick + 1) % 30

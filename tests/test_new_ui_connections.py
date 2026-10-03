@@ -167,7 +167,11 @@ def test_processing_state_reflects_in_home(window):
     assert window._pages["home"]._start_button.text() == "Iniciar audio"
 
 
-def test_spectrum_flows_to_home_widget(window):
+def test_spectrum_flows_to_home_widget(window, monkeypatch):
+    # El fixture no muestra la ventana (offscreen): se simula visible, que es
+    # la condición para que el espectro se aplique (gate de visibilidad).
+    monkeypatch.setattr(window, "isVisible", lambda: True)
+    monkeypatch.setattr(window._pages["home"], "isVisible", lambda: True)
     window._receive_spectrum([-20.0] * 64)
     window._refresh_visuals()
     assert window._pages["home"]._spectrum._smooth.size > 0  # datos recibidos
