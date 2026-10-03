@@ -88,8 +88,12 @@ def _drain_params(enhancer, params_q) -> None:
         _apply(enhancer, latest)
 
 
-def child_main(raw_q, out_q, params_q, stop_event) -> None:
-    """Bucle del proceso hijo: crudo -> DSP -> procesado."""
+def child_main(raw_q, out_q, params_q, stop_event, gr_value=None) -> None:
+    """Bucle del proceso hijo: crudo -> DSP -> procesado.
+
+    ``gr_value`` (multiprocessing.Value('f')): si se pasa, se publica ahí el
+    gain reduction del limitador para que el medidor del proceso principal lo
+    muestre (el cálculo vive en el hijo)."""
     from .dsp import Enhancer
 
     enhancer = Enhancer()
@@ -110,5 +114,8 @@ def child_main(raw_q, out_q, params_q, stop_event) -> None:
         except Exception:
             logger.exception("Error en el proceso DSP")
             continue
+        if gr_value is not None:
+            with gr_value.get_lock():
+                gr_value.value = float(enhancer.level_gr)
         out_q.put(np.asarray(y, dtype=np.float32).tobytes())
     logger.info("Proceso DSP (hijo) detenido")

@@ -129,6 +129,7 @@ class AudioEngine:
         self._out_q: Any = None
         self._params_q: Any = None
         self._mp_stop: Any = None
+        self._gr: Any = None  # value compartido: gain reduction del limitador
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -502,10 +503,11 @@ class AudioEngine:
         self._out_q = ctx.Queue(maxsize=256)
         self._params_q = ctx.Queue(maxsize=8)
         self._mp_stop = ctx.Event()
+        self._gr = ctx.Value("f", 0.0)  # GR del limitador (hijo -> padre)
         self._params_q.put(snapshot_params(self.enhancer))
         self._dsp_proc = ctx.Process(
             target=child_main,
-            args=(self._raw_q, self._out_q, self._params_q, self._mp_stop),
+            args=(self._raw_q, self._out_q, self._params_q, self._mp_stop, self._gr),
             name="dsp-proc",
             daemon=True,
         )
@@ -535,6 +537,12 @@ class AudioEngine:
             if block is None:
                 time.sleep(0.001)
                 continue
+            # Vista del espectro en el proceso PRINCIPAL: el DSP corre en el
+            # hijo, así que aquí se guarda la copia mono del bloque de ENTRADA
+            # (igual que hacía Enhancer.process) para que el analizador y el
+            # ecualizador sigan dibujando.
+            if self.enhancer.spectrum_enabled:
+                self.enhancer._snapshot = block[:, 0].copy()
             try:
                 self._raw_q.put(block.tobytes(), timeout=1.0)
             except Exception:
@@ -550,6 +558,11 @@ class AudioEngine:
             if item is None:
                 break
             data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+            # Niveles para los medidores (los calculaba process() en el hijo):
+            # se miden aquí, en el hilo bomba, sin tocar el callback de audio.
+            self.enhancer._measure_levels(data)
+            if self._gr is not None:
+                self.enhancer.level_gr = float(self._gr.value)
             self._put(data)
 
     def _pump_params(self) -> None:

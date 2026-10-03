@@ -10,9 +10,7 @@ import math
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import (
-    QBrush,
     QColor,
-    QLinearGradient,
     QPainter,
     QPen,
 )
@@ -103,8 +101,10 @@ class SpectrumWidget(QWidget):
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802
+        # Sin antialiasing: las barras son rectángulos y el AA de 64 barras por
+        # frame a 30 Hz era coste puro. Tampoco se crea un QLinearGradient por
+        # barra (64 gradientes/frame): relleno sólido reutilizando 3 QColor.
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
         h = self.height()
 
@@ -118,86 +118,68 @@ class SpectrumWidget(QWidget):
         p.fillRect(self.rect(), QColor(Theme.SPECTRUM_BG))
 
         # Grilla horizontal (lineas dB)
-        p.setPen(QPen(QColor(Theme.SPECTRUM_GRID), 1, Qt.PenStyle.DotLine))
-        for db in [-48, -36, -24, -12, 0]:
+        grid_pen = QPen(QColor(Theme.SPECTRUM_GRID), 1, Qt.PenStyle.DotLine)
+        p.setPen(grid_pen)
+        for db in (-48, -36, -24, -12, 0):
             y = _db_to_y(db, h, mt, mb)
             p.drawLine(int(ml), int(y), int(w - mr), int(y))
 
         # Etiquetas dB
-        p.setPen(QColor(Theme.SPECTRUM_LABEL))
-        font = numeric_font(8)
-        p.setFont(font)
-        for db in [-48, -36, -24, -12, 0]:
+        label_color = QColor(Theme.SPECTRUM_LABEL)
+        p.setPen(label_color)
+        p.setFont(numeric_font(8))
+        for db in (-48, -36, -24, -12, 0):
             y = _db_to_y(db, h, mt, mb)
             label = f"{db}" if db < 0 else "0"
             p.drawText(2, int(y - 6), ml - 6, 12, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
 
-        # Etiquetas de frecuencia
-        freq_font = numeric_font(8)
-        p.setFont(freq_font)
-        p.setPen(QColor(Theme.SPECTRUM_LABEL))
+        # Etiquetas de frecuencia + lineas verticales
         for freq in _FREQ_LABELS:
             x = _freq_to_x(freq, w, ml, mr)
+            p.setPen(grid_pen)
+            p.drawLine(int(x), int(mt), int(x), int(h - mb))
+            p.setPen(label_color)
             label = f"{freq // 1000}k" if freq >= 1000 else str(freq)
             p.drawText(int(x) - 12, int(h - mb + 4), 24, 14, Qt.AlignmentFlag.AlignCenter, label)
-            # Linea vertical sutil
-            p.setPen(QPen(QColor(Theme.SPECTRUM_GRID), 1, Qt.PenStyle.DotLine))
-            p.drawLine(int(x), int(mt), int(x), int(h - mb))
-            p.setPen(QColor(Theme.SPECTRUM_LABEL))
 
         # Barras de espectro
-        if not self._smooth:
+        n = len(self._smooth)
+        if not n:
+            p.setPen(QPen(QColor(Theme.BORDER_SOLID), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(QRectF(ml, mt, w - ml - mr, h - mt - mb), 2, 2)
             p.end()
             return
 
-        n = len(self._smooth)
         bar_area_w = w - ml - mr
-        bar_w = max(1, bar_area_w / n - 1)
+        bar_w = max(1.0, bar_area_w / n - 1)
         gap = 1
-
+        y_floor = _db_to_y(_DB_MIN, h, mt, mb)
+        c_low = QColor(Theme.SPECTRUM_BAR_LOW)
+        c_mid = QColor(Theme.SPECTRUM_BAR_MID)
+        c_high = QColor(Theme.SPECTRUM_BAR_HIGH)
+        c_peak = QColor(Theme.SPECTRUM_BAR_PEAK)
+        smooth = self._smooth
+        peaks = self._peaks
+        p.setPen(Qt.PenStyle.NoPen)
         for i in range(n):
-            db_val = self._smooth[i]
-            peak_db = self._peaks[i] if i < len(self._peaks) else _DB_MIN
-
             x = ml + i * (bar_w + gap)
             if x + bar_w > w - mr:
                 break
-
-            # Color segun nivel
-            if db_val > -8:
-                color = QColor(Theme.SPECTRUM_BAR_HIGH)
-            elif db_val > -25:
-                color = QColor(Theme.SPECTRUM_BAR_MID)
-            else:
-                color = QColor(Theme.SPECTRUM_BAR_LOW)
-
-            # Altura de la barra
+            db_val = smooth[i]
+            color = c_high if db_val > -8 else c_mid if db_val > -25 else c_low
             bar_top = _db_to_y(db_val, h, mt, mb)
-            bar_bottom = _db_to_y(_DB_MIN, h, mt, mb)
-            bar_h = bar_bottom - bar_top
-
+            bar_h = y_floor - bar_top
             if bar_h > 0:
-                # Gradiente sutil
-                grad = QLinearGradient(x, bar_top, x, bar_bottom)
-                grad.setColorAt(0, color)
-                darker = QColor(color)
-                darker.setAlpha(80)
-                grad.setColorAt(1, darker)
-                p.setBrush(QBrush(grad))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawRoundedRect(QRectF(x, bar_top, bar_w, bar_h), 1, 1)
-
-            # Indicador de pico
-            if peak_db > _DB_MIN + 2:
-                peak_y = _db_to_y(peak_db, h, mt, mb)
-                if peak_db > -8:
-                    peak_color = QColor(Theme.SPECTRUM_BAR_PEAK)
-                elif peak_db > -25:
-                    peak_color = QColor(Theme.SPECTRUM_BAR_HIGH)
-                else:
-                    peak_color = QColor(Theme.SPECTRUM_BAR_MID)
-                p.setPen(QPen(peak_color, 2))
-                p.drawLine(int(x), int(peak_y), int(x + bar_w), int(peak_y))
+                p.setBrush(color)
+                p.drawRect(QRectF(x, bar_top, bar_w, bar_h))
+            if i < len(peaks):
+                peak_db = peaks[i]
+                if peak_db > _DB_MIN + 2:
+                    peak_y = _db_to_y(peak_db, h, mt, mb)
+                    p.setPen(QPen(c_peak if peak_db > -8 else color, 2))
+                    p.drawLine(int(x), int(peak_y), int(x + bar_w), int(peak_y))
+                    p.setPen(Qt.PenStyle.NoPen)
 
         # Borde sutil
         p.setPen(QPen(QColor(Theme.BORDER_SOLID), 1))
