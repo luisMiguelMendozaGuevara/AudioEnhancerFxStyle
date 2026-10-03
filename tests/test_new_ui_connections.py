@@ -170,7 +170,7 @@ def test_processing_state_reflects_in_home(window):
 def test_spectrum_flows_to_home_widget(window):
     window._receive_spectrum([-20.0] * 64)
     window._refresh_visuals()
-    assert window._pages["home"]._spectrum._smooth  # datos recibidos
+    assert window._pages["home"]._spectrum._smooth.size > 0  # datos recibidos
 
 
 def test_spectrum_necesario_tambien_en_ecualizador(window, monkeypatch):

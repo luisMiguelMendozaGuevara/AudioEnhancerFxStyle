@@ -88,17 +88,21 @@ def _drain_params(enhancer, params_q) -> None:
         _apply(enhancer, latest)
 
 
-def child_main(raw_q, out_q, params_q, stop_event, gr_value=None) -> None:
+def child_main(raw_q, out_q, params_q, stop_event, gr_value=None, telemetry=None, spectrum_buf=None) -> None:
     """Bucle del proceso hijo: crudo -> DSP -> procesado.
 
-    ``gr_value`` (multiprocessing.Value('f')): si se pasa, se publica ahí el
-    gain reduction del limitador para que el medidor del proceso principal lo
-    muestre (el cálculo vive en el hijo)."""
+    Publica en memoria compartida lo que consume la UI (para no hacerlo en el
+    proceso principal, donde competiría con el callback de salida):
+    - ``gr_value``: gain reduction del limitador.
+    - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr].
+    - ``spectrum_buf``: 64 barras de espectro (dB), recalculadas cada 2 bloques.
+    """
     from .dsp import Enhancer
 
     enhancer = Enhancer()
     _drain_params(enhancer, params_q)
     logger.info("Proceso DSP (hijo) iniciado")
+    blocks = 0
     while not stop_event.is_set():
         try:
             item = raw_q.get(timeout=0.1)
@@ -114,8 +118,28 @@ def child_main(raw_q, out_q, params_q, stop_event, gr_value=None) -> None:
         except Exception:
             logger.exception("Error en el proceso DSP")
             continue
+        if telemetry is not None:
+            with telemetry.get_lock():
+                telemetry[0] = enhancer.level_rms
+                telemetry[1] = enhancer.level_peak
+                telemetry[2] = enhancer.level_rms_l
+                telemetry[3] = enhancer.level_rms_r
+                telemetry[4] = enhancer.level_peak_l
+                telemetry[5] = enhancer.level_peak_r
+                telemetry[6] = enhancer.level_gr
         if gr_value is not None:
             with gr_value.get_lock():
                 gr_value.value = float(enhancer.level_gr)
+        blocks += 1
+        if spectrum_buf is not None and blocks % 2 == 0:
+            try:
+                enhancer.compute_spectrum()
+                spec = enhancer.spectrum
+                if spec is not None:
+                    with spectrum_buf.get_lock():
+                        for i in range(min(len(spec), len(spectrum_buf))):
+                            spectrum_buf[i] = float(spec[i])
+            except Exception:
+                logger.debug("compute_spectrum falló en el hijo", exc_info=True)
         out_q.put(np.asarray(y, dtype=np.float32).tobytes())
     logger.info("Proceso DSP (hijo) detenido")

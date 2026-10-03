@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import (
     QColor,
@@ -57,47 +58,43 @@ class SpectrumWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._spectrum: list[float] = []
-        self._peaks: list[float] = []
-        self._peak_hold: list[int] = []
-        self._smooth: list[float] = []
-        self._bar_count = 64
+        # Arrays numpy: set_spectrum es vectorizado (antes un bucle Python de 64
+        # iteraciones a 30 Hz que, en el hilo de UI, competía por el GIL con el
+        # callback de audio y dañaba el sonido mientras el espectro estaba a la
+        # vista).
+        self._spectrum = np.zeros(0, dtype=np.float32)
+        self._peaks = np.zeros(0, dtype=np.float32)
+        self._peak_hold = np.zeros(0, dtype=np.int32)
+        self._smooth = np.zeros(0, dtype=np.float32)
         self.setMinimumHeight(140)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
     def set_spectrum(self, values: list[float] | None) -> None:
-        """Recibe nuevos datos de espectro y dispara repintado."""
+        """Recibe nuevos datos de espectro y dispara repintado (vectorizado)."""
         if values is None:
-            self._spectrum = []
-            self._peaks = []
-            self._peak_hold = []
-            self._smooth = []
+            self._spectrum = np.zeros(0, dtype=np.float32)
+            self._peaks = np.zeros(0, dtype=np.float32)
+            self._peak_hold = np.zeros(0, dtype=np.int32)
+            self._smooth = np.zeros(0, dtype=np.float32)
             self.update()
             return
-        self._spectrum = [float(v) for v in values]
-        n = len(self._spectrum)
-        # Inicializar o ajustar picos
-        while len(self._peaks) < n:
-            self._peaks.append(_DB_MIN)
-            self._peak_hold.append(0)
-        while len(self._smooth) < n:
-            self._smooth.append(_DB_MIN)
-        # Actualizar picos
-        for i in range(min(n, len(self._peaks))):
-            val = self._spectrum[i]
-            if val > self._peaks[i]:
-                self._peaks[i] = val
-                self._peak_hold[i] = _PEAK_HOLD
-            else:
-                if self._peak_hold[i] > 0:
-                    self._peak_hold[i] -= 1
-                else:
-                    self._peaks[i] *= _PEAK_DECAY
-                    if self._peaks[i] < val:
-                        self._peaks[i] = val
-            # Suavizado para animacion fluida
-            self._smooth[i] += (val - self._smooth[i]) * 0.4
-        self._bar_count = n
+        arr = np.asarray(values, dtype=np.float32)
+        n = arr.size
+        if self._peaks.size != n:
+            self._peaks = np.full(n, _DB_MIN, dtype=np.float32)
+            self._peak_hold = np.zeros(n, dtype=np.int32)
+            self._smooth = np.full(n, _DB_MIN, dtype=np.float32)
+        self._spectrum = arr
+        # Picos (hold/decay) y suavizado, todo vectorizado.
+        up = arr > self._peaks
+        self._peaks[up] = arr[up]
+        self._peak_hold[up] = _PEAK_HOLD
+        down = ~up
+        self._peak_hold[down] = np.maximum(self._peak_hold[down] - 1, 0)
+        decay = down & (self._peak_hold <= 0)
+        self._peaks[decay] *= _PEAK_DECAY
+        np.maximum(self._peaks, arr, out=self._peaks)
+        self._smooth += (arr - self._smooth) * np.float32(0.4)
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802

@@ -112,9 +112,10 @@ class DeviceDiscoveryWorker(QObject):
 class SpectrumWorker(QThread):
     spectrum_ready = Signal(object)
 
-    def __init__(self, enhancer: Enhancer, parent=None) -> None:
+    def __init__(self, enhancer: Enhancer, engine=None, parent=None) -> None:
         super().__init__(parent)
         self.enhancer = enhancer
+        self.engine = engine
         # "active": hay audio que analizar (motor corriendo).
         # "needed" (R3-B2): alguien está MIRANDO el espectro (ventana
         # visible + página Home en primer plano). Van separados a propósito:
@@ -135,9 +136,15 @@ class SpectrumWorker(QThread):
         while not self.isInterruptionRequested():
             if self.active.is_set() and self.needed.is_set() and self.enhancer.spectrum_enabled:
                 try:
-                    self.enhancer.compute_spectrum()
-                    spec = self.enhancer.spectrum
-                    self.spectrum_ready.emit(None if spec is None else [float(v) for v in spec])
+                    if self.engine is not None and self.engine.has_dsp_process():
+                        # El FFT lo hace el proceso hijo: aquí solo se LEE el
+                        # espectro compartido (nada de numpy en el padre, que
+                        # dañaría el audio justo cuando el espectro está visible).
+                        self.spectrum_ready.emit(self.engine.read_spectrum())
+                    else:
+                        self.enhancer.compute_spectrum()
+                        spec = self.enhancer.spectrum
+                        self.spectrum_ready.emit(None if spec is None else [float(v) for v in spec])
                 except Exception:
                     # Antes tragaba la excepción en silencio: un fallo repetido
                     # del analizador dejaba el espectro congelado sin rastro
@@ -226,7 +233,7 @@ class NewMainWindow(QMainWindow):
         self._latest_spectrum = None
         self._discovery_thread: Any = None
         self._discovery_worker: Any = None
-        self._spectrum_worker = SpectrumWorker(self.enhancer, self)
+        self._spectrum_worker = SpectrumWorker(self.enhancer, self.engine, self)
         self.tray: Any = None
         self._tray_menu: Any = None  # menú de bandeja (Qt no lo posee; ver _rebuild_tray_menu)
         self.setWindowTitle(WINDOW_TITLE)

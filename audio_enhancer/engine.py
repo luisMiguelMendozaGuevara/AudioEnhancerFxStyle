@@ -130,6 +130,9 @@ class AudioEngine:
         self._params_q: Any = None
         self._mp_stop: Any = None
         self._gr: Any = None  # value compartido: gain reduction del limitador
+        # Telemetría visual (hijo -> padre): niveles (7 floats) y espectro (64).
+        self._telemetry: Any = None
+        self._spectrum_buf: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -504,10 +507,23 @@ class AudioEngine:
         self._params_q = ctx.Queue(maxsize=8)
         self._mp_stop = ctx.Event()
         self._gr = ctx.Value("f", 0.0)  # GR del limitador (hijo -> padre)
+        # El FFT del espectro y la medición de niveles se hacen en el HIJO (su
+        # GIL): si se hacen en el padre compiten con el callback de salida y
+        # dañan el audio justo cuando el espectro está visible.
+        self._telemetry = ctx.Array("f", 7)
+        self._spectrum_buf = ctx.Array("f", 64)
         self._params_q.put(snapshot_params(self.enhancer))
         self._dsp_proc = ctx.Process(
             target=child_main,
-            args=(self._raw_q, self._out_q, self._params_q, self._mp_stop, self._gr),
+            args=(
+                self._raw_q,
+                self._out_q,
+                self._params_q,
+                self._mp_stop,
+                self._gr,
+                self._telemetry,
+                self._spectrum_buf,
+            ),
             name="dsp-proc",
             daemon=True,
         )
@@ -537,12 +553,6 @@ class AudioEngine:
             if block is None:
                 time.sleep(0.001)
                 continue
-            # Vista del espectro en el proceso PRINCIPAL: el DSP corre en el
-            # hijo, así que aquí se guarda la copia mono del bloque de ENTRADA
-            # (igual que hacía Enhancer.process) para que el analizador y el
-            # ecualizador sigan dibujando.
-            if self.enhancer.spectrum_enabled:
-                self.enhancer._snapshot = block[:, 0].copy()
             try:
                 self._raw_q.put(block.tobytes(), timeout=1.0)
             except Exception:
@@ -558,12 +568,37 @@ class AudioEngine:
             if item is None:
                 break
             data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
-            # Niveles para los medidores (los calculaba process() en el hijo):
-            # se miden aquí, en el hilo bomba, sin tocar el callback de audio.
-            self.enhancer._measure_levels(data)
-            if self._gr is not None:
-                self.enhancer.level_gr = float(self._gr.value)
+            # Niveles y espectro los publica el HIJO por memoria compartida: el
+            # padre solo los copia (sin numpy/FFT que compitan con el callback).
+            self._sync_telemetry()
             self._put(data)
+
+    def _sync_telemetry(self) -> None:
+        t = self._telemetry
+        if t is None:
+            return
+        with t.get_lock():
+            e = self.enhancer
+            e.level_rms = t[0]
+            e.level_peak = t[1]
+            e.level_rms_l = t[2]
+            e.level_rms_r = t[3]
+            e.level_peak_l = t[4]
+            e.level_peak_r = t[5]
+            e.level_gr = t[6]
+
+    def has_dsp_process(self) -> bool:
+        """True si el DSP corre en un proceso hijo (el padre no hace FFT)."""
+        return self._dsp_proc is not None
+
+    def read_spectrum(self) -> list[float] | None:
+        """Último espectro publicado por el hijo (o None si no hay datos)."""
+        buf = self._spectrum_buf
+        if buf is None:
+            return None
+        with buf.get_lock():
+            values = [float(buf[i]) for i in range(len(buf))]
+        return values if any(v != 0.0 for v in values) else None
 
     def _pump_params(self) -> None:
         """Replica los parámetros del enhancer al proceso hijo cuando cambian."""

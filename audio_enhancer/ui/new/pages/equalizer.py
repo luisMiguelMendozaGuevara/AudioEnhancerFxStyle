@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
@@ -44,7 +45,14 @@ class EQCurveWidget(QWidget):
         self._gains = [0.0] * 9
         self._dragging = -1
         self._hover = -1
-        self._bars = [0.0] * 9  # nivel suavizado 0..1 por banda
+        self._bars = np.zeros(9, dtype=np.float32)  # nivel suavizado 0..1 por banda
+        # Mapa bin->banda precalculado (el mapeo es fijo): evita 64 log10 por
+        # actualización (30 Hz) en el hilo de UI, que competía por el GIL con el
+        # callback de audio.
+        self._bin_band = np.array(
+            [self._freq_to_band(20.0 * (1000.0 ** (i / (self.SPECTRUM_BINS - 1)))) for i in range(self.SPECTRUM_BINS)],
+            dtype=np.intp,
+        )
         self.setMinimumHeight(200)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
@@ -53,20 +61,18 @@ class EQCurveWidget(QWidget):
         """Recibe el espectro (dB, bins log 20Hz-20kHz) y lo agrega por banda."""
         if not values:
             # Sin audio: las barras decaen hacia cero
-            self._bars = [b * 0.85 for b in self._bars]
+            self._bars *= np.float32(0.85)
             self.update()
             return
-        n = min(len(values), self.SPECTRUM_BINS)
-        targets = [-120.0] * 9  # piso bajo silencio: -60 dB debe mapear a 0
-        for i in range(n):
-            freq = 20.0 * (1000.0 ** (i / (self.SPECTRUM_BINS - 1)))
-            band = self._freq_to_band(freq)
-            targets[band] = max(targets[band], float(values[i]))
-        for b in range(9):
-            norm = max(0.0, min(1.0, (targets[b] + 60.0) / 60.0))
-            # Amplificacion visual: gamma < 1 levanta los niveles medios y la
-            # ganancia 1.25 lleva los picos tipicos (-15..-10 dB) cerca del tope.
-            self._bars[b] += (min(1.0, norm**0.65 * 1.25) - self._bars[b]) * 0.35
+        arr = np.asarray(values, dtype=np.float32)
+        n = min(arr.size, self.SPECTRUM_BINS)
+        targets = np.full(9, -120.0, dtype=np.float32)  # piso bajo silencio
+        np.maximum.at(targets, self._bin_band[:n], arr[:n])
+        norm = np.clip((targets + 60.0) / 60.0, 0.0, 1.0)
+        # Amplificacion visual: gamma < 1 levanta los niveles medios y la
+        # ganancia 1.25 lleva los picos tipicos (-15..-10 dB) cerca del tope.
+        target_bars = np.minimum(1.0, np.power(norm, 0.65) * 1.25)
+        self._bars += (target_bars - self._bars) * np.float32(0.35)
         self.update()
 
     def _freq_to_band(self, freq: float) -> int:
