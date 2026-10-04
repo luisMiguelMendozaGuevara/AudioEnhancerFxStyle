@@ -540,17 +540,23 @@ class AudioEngine:
             threading.Thread(target=target, daemon=True).start()
 
     def _set_child_priority(self) -> None:
-        """Baja la prioridad del proceso hijo (audio primero en el principal)."""
+        """Sube la prioridad del proceso hijo por ENCIMA de lo normal.
+
+        El hijo procesa en tiempo real: si se queda sin CPU (antes estaba en
+        below-normal) el ring de salida se vacía y el callback inserta silencio
+        -> cortes/bajadas audibles bajo carga. La salida física corre en el hilo
+        de alta prioridad de PortAudio, así que subir el hijo no la perjudica.
+        """
         if os.name != "nt" or self._dsp_proc is None:
             return
         try:
             import ctypes
 
-            below_normal = 0x00004000
+            above_normal = 0x00008000
             process_set_information = 0x0200
             handle = ctypes.windll.kernel32.OpenProcess(process_set_information, False, self._dsp_proc.pid)
             if handle:
-                ctypes.windll.kernel32.SetPriorityClass(handle, below_normal)
+                ctypes.windll.kernel32.SetPriorityClass(handle, above_normal)
                 ctypes.windll.kernel32.CloseHandle(handle)
         except Exception:
             logger.debug("No se pudo ajustar la prioridad del proceso DSP", exc_info=True)

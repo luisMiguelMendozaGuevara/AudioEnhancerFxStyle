@@ -4,6 +4,17 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.8] - 2026-10-04
+
+Corregidas las "bajadas"/cortes de volumen al reproducir.
+
+### Corregido
+- **Silencios intermitentes ("bajadas brutales")**: el proceso hijo del DSP
+  corría a prioridad *below-normal*; bajo carga de CPU se quedaba sin tiempo,
+  el ring de salida se vaciaba y el callback insertaba silencio. Ahora el hijo
+  corre en *above-normal*. Verificado en 4 núcleos saturados: de 639 huecos /
+  ~643 000 frames de silencio por intervalo a 0-2 huecos y 0 descartes.
+
 ## [1.5.7] - 2026-10-04
 
 Corregido el crash de arranque en Windows.
