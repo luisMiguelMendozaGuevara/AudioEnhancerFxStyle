@@ -4,6 +4,17 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.6] - 2026-10-04
+
+Menos contencion del GIL: el audio tiene prioridad sobre el grafico.
+
+### Cambios
+- **Una sola bomba** entre el proceso principal y el DSP (antes dos hilos) y
+  **prioridad baja** del proceso DSP y del `SpectrumWorker`: el trabajo grafico
+  cede ante los callbacks de audio.
+- Los medidores se actualizan solo en Inicio y el espectro a 20 Hz; con la
+  ventana en bandeja no se actualizan graficos.
+
 ## [1.5.5] - 2026-10-03
 
 Estabilidad de audio: se eliminan los descartes/microcortes y el lag, sobre
