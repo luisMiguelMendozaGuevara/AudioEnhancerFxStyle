@@ -9,6 +9,7 @@ from typing import Any
 
 from PySide6.QtCore import (
     QAbstractAnimation,
+    QByteArray,
     QEasingCurve,
     QObject,
     QPropertyAnimation,
@@ -125,8 +126,6 @@ class SpectrumWorker(QThread):
         self.active = threading.Event()
         self.needed = threading.Event()
         self.needed.set()  # sin cablear: comportamiento clásico (siempre activo)
-        # Prioridad baja: el gráfico cede ante los callbacks de audio.
-        self.setPriority(QThread.Priority.LowPriority)
 
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
@@ -135,6 +134,10 @@ class SpectrumWorker(QThread):
         self.needed.set() if needed else self.needed.clear()
 
     def run(self) -> None:
+        # Prioridad baja: el gráfico cede ante los callbacks de audio. Debe
+        # fijarse ya en ejecución (antes de start() Qt avisa "thread is not
+        # running").
+        self.setPriority(QThread.Priority.LowPriority)
         while not self.isInterruptionRequested():
             if self.active.is_set() and self.needed.is_set() and self.enhancer.spectrum_enabled:
                 try:
@@ -691,7 +694,7 @@ class NewMainWindow(QMainWindow):
         # terminar para no penalizar el repintado del spectrum/meters.
         effect = QGraphicsOpacityEffect(page)
         page.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", page)
+        anim = QPropertyAnimation(effect, QByteArray(b"opacity"), page)
         anim.setDuration(160)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)

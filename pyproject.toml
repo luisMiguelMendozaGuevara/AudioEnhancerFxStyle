@@ -1,6 +1,6 @@
 [project]
 name = "audio-enhancer-fxstyle"
-version = "1.5.6"
+version = "1.5.7"
 description = "Real-time system audio enhancer for Windows (WASAPI loopback DSP)"
 readme = "README.md"
 license = "MIT"
@@ -9,7 +9,8 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
-    "PySide6>=6.7,<7",
+    # 6.11.x provoca crashes 0xC0000005 en Windows (bug de Qt); 6.8 es LTS.
+    "PySide6>=6.8,<6.9",
     "PyAudioWPatch>=0.2.12.8",
 ]
 

@@ -4,6 +4,18 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.7] - 2026-10-04
+
+Corregido el crash de arranque en Windows.
+
+### Corregido
+- **Crash `0xC0000005` en `pyside6.abi3.dll` al arrancar**: lo provocaba la
+  rama Qt/PySide **6.11.x** (bug de Qt en Windows). Se fija **PySide6 6.8.3**
+  (LTS) en `pyproject.toml` y `constraints.txt`. Verificado: 10/10 arranques
+  sin crash.
+- Warning `QThread::setPriority: Cannot set priority, thread is not running`:
+  la prioridad baja del `SpectrumWorker` se fija ya en ejecución.
+
 ## [1.5.6] - 2026-10-04
 
 Menos contencion del GIL: el audio tiene prioridad sobre el grafico.
