@@ -4,6 +4,32 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.5] - 2026-10-03
+
+Estabilidad de audio: se eliminan los descartes/microcortes y el lag, sobre
+todo con el espectro a la vista.
+
+### Corregido
+- **Lagazo y descartes de audio**: el DSP competia por el GIL con el callback
+  de salida de PortAudio y lo retrasaba. Ahora el DSP corre en un **proceso
+  hijo** (su propio GIL); el FFT del espectro y los niveles tambien se calculan
+  alli y se publican por memoria compartida.
+- **Bucle de repintado** que saturaba el hilo de UI (`setStyleSheet` dentro de
+  `paintEvent` del sidebar) y mataba de hambre al DSP.
+- **Captura en rafagas**: el buffer de captura vuelve a 1024 (antes 4096, que
+  hacia oscilar el ring 0..8192 y descartar).
+- **Autoridad del resampler de deriva** 8 -> 16 frames/bloque para no desbordar
+  el ring con el desajuste de reloj captura/salida.
+- **Espectro/medidores congelados** al mover el DSP al hijo: se restauran
+  publicando niveles/espectro desde el proceso hijo.
+- **Onefile** crasheaba (`0xc0000005`) con el proceso hijo: se desactiva el hijo
+  solo en el portable; el instalado/onedir lo mantiene.
+
+### Rendimiento
+- Espectro y curva de EQ vectorizados (numpy) y sin gradientes/antialias por
+  frame; actualizaciones de medidores/espectro solo cuando su pagina esta a la
+  vista; espectro a 20 Hz.
+
 ## [1.5.4] - 2026-09-24
 
 Estabilidad de audio y de arranque, más **crossfeed para auriculares**.
