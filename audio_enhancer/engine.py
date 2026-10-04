@@ -10,6 +10,7 @@ orquestado desde el hilo de la UI.
 import contextlib
 import logging
 import multiprocessing as mp
+import os
 import threading
 import time
 from functools import lru_cache
@@ -531,9 +532,28 @@ class AudioEngine:
             daemon=True,
         )
         self._dsp_proc.start()
+        self._set_child_priority()
         self._dsp_running = True
-        for target in (self._pump_in, self._pump_out, self._pump_params):
+        # UN hilo para ambas direcciones (menos hilos Python compitiendo por el
+        # GIL con los callbacks de audio) + el de parámetros.
+        for target in (self._pump, self._pump_params):
             threading.Thread(target=target, daemon=True).start()
+
+    def _set_child_priority(self) -> None:
+        """Baja la prioridad del proceso hijo (audio primero en el principal)."""
+        if os.name != "nt" or self._dsp_proc is None:
+            return
+        try:
+            import ctypes
+
+            below_normal = 0x00004000
+            process_set_information = 0x0200
+            handle = ctypes.windll.kernel32.OpenProcess(process_set_information, False, self._dsp_proc.pid)
+            if handle:
+                ctypes.windll.kernel32.SetPriorityClass(handle, below_normal)
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            logger.debug("No se pudo ajustar la prioridad del proceso DSP", exc_info=True)
 
     def _stop_dsp_process(self) -> None:
         if self._dsp_proc is None:
@@ -549,32 +569,31 @@ class AudioEngine:
             self._dsp_proc.join(timeout=1.0)
         self._dsp_proc = None
 
-    def _pump_in(self) -> None:
-        """Mueve el audio crudo del ring local a la cola del proceso hijo."""
+    def _pump(self) -> None:
+        """Un solo hilo mueve crudo->hijo y procesado->salida.
+
+        Antes eran dos hilos + los hilos "feeder" de las multiprocessing.Queue:
+        demasiados hilos Python compitiendo por el GIL con los callbacks de
+        audio (retrasaban la salida -> descartes)."""
         while self._dsp_running:
             block = self._read_raw()
-            if block is None:
+            if block is not None:
+                with contextlib.suppress(Exception):
+                    self._raw_q.put(block.tobytes(), timeout=1.0)
+            got = False
+            try:
+                item = self._out_q.get_nowait()
+            except Exception:
+                item = None
+            if item is not None:
+                got = True
+                data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+                # Niveles y espectro los publica el HIJO por memoria compartida:
+                # el padre solo los copia (sin numpy/FFT que compitan).
+                self._sync_telemetry()
+                self._put(data)
+            if block is None and not got:
                 time.sleep(0.001)
-                continue
-            try:
-                self._raw_q.put(block.tobytes(), timeout=1.0)
-            except Exception:
-                logger.debug("Cola cruda llena: se descarta un bloque", exc_info=True)
-
-    def _pump_out(self) -> None:
-        """Mueve el audio procesado de la cola del hijo al ring de salida."""
-        while self._dsp_running:
-            try:
-                item = self._out_q.get(timeout=0.1)
-            except Exception:
-                continue
-            if item is None:
-                break
-            data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
-            # Niveles y espectro los publica el HIJO por memoria compartida: el
-            # padre solo los copia (sin numpy/FFT que compitan con el callback).
-            self._sync_telemetry()
-            self._put(data)
 
     def _sync_telemetry(self) -> None:
         t = self._telemetry

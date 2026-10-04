@@ -125,6 +125,8 @@ class SpectrumWorker(QThread):
         self.active = threading.Event()
         self.needed = threading.Event()
         self.needed.set()  # sin cablear: comportamiento clásico (siempre activo)
+        # Prioridad baja: el gráfico cede ante los callbacks de audio.
+        self.setPriority(QThread.Priority.LowPriority)
 
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
