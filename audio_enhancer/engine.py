@@ -137,6 +137,9 @@ class AudioEngine:
         # Telemetría visual (hijo -> padre): niveles (7 floats) y espectro (64).
         self._telemetry: Any = None
         self._spectrum_buf: Any = None
+        # Bandera (padre -> hijo): la UI necesita el espectro (visible). El hijo
+        # solo calcula el FFT cuando está a 1; así la gráfica no toca el audio.
+        self._spec_needed: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -517,8 +520,11 @@ class AudioEngine:
         from .dsp_process import child_main, snapshot_params
 
         ctx = mp.get_context("spawn")
-        self._raw_q = ctx.Queue(maxsize=256)
-        self._out_q = ctx.Queue(maxsize=256)
+        # Colas ACOTADAS (8 bloques ~ 170 ms): si el hijo se atrasa no se
+        # acumula un backlog de segundos que luego vuelca en ráfaga sobre el
+        # ring (desborde + huecos); se descarta el exceso.
+        self._raw_q = ctx.Queue(maxsize=8)
+        self._out_q = ctx.Queue(maxsize=8)
         self._params_q = ctx.Queue(maxsize=8)
         self._mp_stop = ctx.Event()
         self._gr = ctx.Value("f", 0.0)  # GR del limitador (hijo -> padre)
@@ -527,6 +533,7 @@ class AudioEngine:
         # dañan el audio justo cuando el espectro está visible.
         self._telemetry = ctx.Array("f", 7)
         self._spectrum_buf = ctx.Array("f", 64)
+        self._spec_needed = ctx.Value("b", 0)
         self._params_q.put(snapshot_params(self.enhancer))
         self._dsp_proc = ctx.Process(
             target=child_main,
@@ -538,6 +545,7 @@ class AudioEngine:
                 self._gr,
                 self._telemetry,
                 self._spectrum_buf,
+                self._spec_needed,
             ),
             name="dsp-proc",
             daemon=True,
@@ -572,6 +580,26 @@ class AudioEngine:
         except Exception:
             logger.debug("No se pudo ajustar la prioridad del proceso DSP", exc_info=True)
 
+    def _set_thread_priority(self) -> None:
+        """Sube la prioridad del hilo ACTUAL (la bomba) por encima de lo normal.
+
+        El repintado de la UI compite por el GIL; si el hilo que alimenta la
+        salida cede, el ring se vacía y hay cortes. En Windows se sube la
+        prioridad del hilo a nivel OS para que el audio gane a la gráfica."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            thread_set_information = 0x0020
+            thread_priority_above_normal = 1
+            handle = ctypes.windll.kernel32.OpenThread(thread_set_information, False, threading.get_ident())
+            if handle:
+                ctypes.windll.kernel32.SetThreadPriority(handle, thread_priority_above_normal)
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            logger.debug("No se pudo subir la prioridad del hilo de bombeo", exc_info=True)
+
     def _stop_dsp_process(self) -> None:
         if self._dsp_proc is None:
             return
@@ -592,11 +620,15 @@ class AudioEngine:
         Antes eran dos hilos + los hilos "feeder" de las multiprocessing.Queue:
         demasiados hilos Python compitiendo por el GIL con los callbacks de
         audio (retrasaban la salida -> descartes)."""
+        self._set_thread_priority()
         while self._dsp_running:
             block = self._read_raw()
             if block is not None:
+                # put_nowait: si el hijo va atrasado, descartar en vez de
+                # bloquear. Bloquear aquí frenaría la entrega a la salida y
+                # provocaría un hueco; el backlog queda acotado por maxsize.
                 with contextlib.suppress(Exception):
-                    self._raw_q.put(block.tobytes(), timeout=1.0)
+                    self._raw_q.put_nowait(block.tobytes())
             got = False
             try:
                 item = self._out_q.get_nowait()
@@ -638,6 +670,15 @@ class AudioEngine:
         with buf.get_lock():
             values = [float(buf[i]) for i in range(len(buf))]
         return values if any(v != 0.0 for v in values) else None
+
+    def set_spectrum_needed(self, needed: bool) -> None:
+        """Marca si la UI necesita el espectro (visibilidad de la gráfica).
+
+        El hijo solo calcula el FFT cuando está a 1: cuando nadie mira el
+        espectro, el camino de audio no paga ningún coste visual."""
+        if self._spec_needed is not None:
+            with contextlib.suppress(Exception):
+                self._spec_needed.value = 1 if needed else 0
 
     def _pump_params(self) -> None:
         """Replica los parámetros del enhancer al proceso hijo cuando cambian."""

@@ -127,11 +127,19 @@ class SpectrumWorker(QThread):
         self.needed = threading.Event()
         self.needed.set()  # sin cablear: comportamiento clásico (siempre activo)
 
+    def _sync_engine_needed(self) -> None:
+        # El hijo solo calcula el FFT del espectro si hay audio Y la gráfica
+        # está visible: así el camino de audio no paga coste visual.
+        if self.engine is not None:
+            self.engine.set_spectrum_needed(self.active.is_set() and self.needed.is_set())
+
     def set_active(self, active: bool) -> None:
         self.active.set() if active else self.active.clear()
+        self._sync_engine_needed()
 
     def set_needed(self, needed: bool) -> None:
         self.needed.set() if needed else self.needed.clear()
+        self._sync_engine_needed()
 
     def run(self) -> None:
         # Prioridad baja: el gráfico cede ante los callbacks de audio. Debe
@@ -166,6 +174,7 @@ class SpectrumWorker(QThread):
     def stop(self) -> None:
         self.requestInterruption()
         self.active.clear()
+        self._sync_engine_needed()
         self.wait(1500)
 
 

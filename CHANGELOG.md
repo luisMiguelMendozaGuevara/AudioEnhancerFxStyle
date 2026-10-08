@@ -4,6 +4,21 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.11] - 2026-10-07
+
+La gráfica ya no puede degradar el audio (audio primero).
+
+### Cambiado
+- **El FFT del espectro sale del bucle de audio del hijo**: ahora lo calcula un
+  hilo de visualización aparte, que si va lento se salta refrescos (la gráfica
+  lag) sin retrasar nunca el DSP.
+- **Solo se calcula cuando la gráfica está visible**: la bandera `needed` (UI)
+  se propaga al hijo por memoria compartida; si nadie mira el espectro, el
+  camino de audio no paga ningún coste visual.
+- **Prioridad del hilo que alimenta la salida (bomba)**: subida a above-normal
+  para que el repintado de la UI no lo adule y vacíe el ring.
+- Tests nuevos del hilo visual (`tests/test_dsp_process.py`).
+
 ## [1.5.10] - 2026-10-07
 
 Arregla el "se cambia muchísimo el audio" (modulación de tono).
