@@ -104,10 +104,11 @@ class AudioEngine:
         self._drift_deadband: int = 0
         self._drift_gain: float = 0.02
         self._drift_accum: float = 0.0
-        # Autoridad del resampler de deriva: 16 frames/bloque (~1.5 %) para
-        # drenar/rellenar más rápido cuando el ring se aleja de la consigna
-        # (con 8 el control se saturaba y el ring desbordaba -> descartes).
-        self._max_drift_frames: int = 16
+        # Autoridad del resampler de deriva: 24 frames/bloque para cubrir
+        # desajustes de reloj mayores (el CABLE vs. el dispositivo físico puede
+        # llegar a ~1.5 %); con 16 el control se saturaba, el ring se desbordaba
+        # o se vaciaba y aparecían micro-cortes.
+        self._max_drift_frames: int = 24
         # Canales negociados en la captura (el callback mezcla a estéreo si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2

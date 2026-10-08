@@ -4,6 +4,19 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.9] - 2026-10-07
+
+Más robustez ante micro-cortes intermitentes bajo carga.
+
+### Cambiado
+- **Ring de salida 0.2 s → 0.35 s**: ~250 ms de margen por encima de la
+  consigna (antes ~100 ms) para absorber ráfagas del reloj/dispositivo sin
+  desbordar (descartes).
+- **Autoridad del control de deriva 16 → 24 frames/bloque**: cubre desajustes
+  de reloj mayores (CABLE vs. dispositivo físico llega a ~1.5 %); con 16 el
+  control se saturaba y el ring se vaciaba o desbordaba.
+- Tests del ring desacoplados de `RING_SECONDS` (antes fijaban 0.2 s a mano).
+
 ## [1.5.8] - 2026-10-04
 
 Corregidas las "bajadas"/cortes de volumen al reproducir.
