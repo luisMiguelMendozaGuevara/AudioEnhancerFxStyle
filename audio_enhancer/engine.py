@@ -104,11 +104,10 @@ class AudioEngine:
         self._drift_deadband: int = 0
         self._drift_gain: float = 0.02
         self._drift_accum: float = 0.0
-        # Autoridad del resampler de deriva: 24 frames/bloque para cubrir
-        # desajustes de reloj mayores (el CABLE vs. el dispositivo físico puede
-        # llegar a ~1.5 %); con 16 el control se saturaba, el ring se desbordaba
-        # o se vaciaba y aparecían micro-cortes.
-        self._max_drift_frames: int = 24
+        # Autoridad del resampler de deriva: 16 frames/bloque. Más autoridad
+        # (24) corregía antes pero modulaba el tono (±2.3 %) y se oía "cambiar"
+        # el audio; 16 es el equilibrio (con 8 el ring se desbordaba).
+        self._max_drift_frames: int = 16
         # Canales negociados en la captura (el callback mezcla a estéreo si
         # el loopback entrega más de 2).
         self._capture_channels: int = 2
@@ -382,9 +381,10 @@ class AudioEngine:
                 self.fadein_frames = 0
                 self.in_gap = False
             return data
-        # Underrun pequeño: devolver lo disponible y dejar que _match_frame_count
-        # lo ESTIRE al bloque pedido (el pitch sube un poco por un bloque, menos
-        # audible que un hueco de silencio). No es un hueco: no se cuentan
+        # Underrun pequeño: rellenar el hueco REPITIENDO (con un crossfade) el
+        # material disponible en vez de estirarlo. Estirarlo cambiaba el tono
+        # (hasta ~10 % -> "el audio se cambia muchísimo"); repetir conserva el
+        # tono y evita el silencio. No es un hueco: no se cuentan
         # gap_blocks/gap_frames ni se marca in_gap.
         if avail > 0 and avail / n >= UNDERFLOW_GRACE_RATIO:
             idx = self.read_pos % nframes
@@ -395,7 +395,17 @@ class AudioEngine:
                 data = np.concatenate([ring[idx:], ring[: avail - a]])
             self.read_pos += avail
             self._stats["grace_stretches"] += 1
-            return data
+            short = n - avail
+            out = np.empty((n, 2), dtype=np.float32)
+            out[:avail] = data
+            reps = int(np.ceil(short / avail))
+            fill = np.tile(data, (reps, 1))[:short]
+            f = min(64, short, avail)
+            if f > 0:
+                w = np.linspace(0.0, 1.0, f, dtype=np.float32)[:, None]
+                fill[:f] = data[avail - f : avail] * (1.0 - w) + fill[:f] * w
+            out[avail:] = fill
+            return out
         # hueco: silencio con fundido de salida (sin corte seco)
         m = avail
         out = np.zeros((n, 2), dtype=np.float32)

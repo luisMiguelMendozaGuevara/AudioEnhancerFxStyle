@@ -4,6 +4,20 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.10] - 2026-10-07
+
+Arregla el "se cambia muchísimo el audio" (modulación de tono).
+
+### Corregido
+- **El tono ya no se modula en los underruns parciales**: antes, si al ring le
+  faltaba un poco para el bloque, el motor ESTIRABA el bloque (hasta −10 % de
+  tono ≈ 1.8 semitonos, muy audible). Ahora rellena el hueco REPITIENDO el
+  material disponible con un crossfade: mantiene el tono y evita el silencio.
+- **Autoridad del control de deriva 24 → 16**: 24 corregía antes pero modulaba
+  el tono (±2.3 %) durante las correcciones; 16 es el equilibrio (con 8 el ring
+  se desbordaba).
+- Nuevo contador `gracias` (rellenos por underrun parcial) en el log de métricas.
+
 ## [1.5.9] - 2026-10-07
 
 Más robustez ante micro-cortes intermitentes bajo carga.

@@ -1109,11 +1109,12 @@ class NewMainWindow(QMainWindow):
                     return int(s[key]) - int(prev.get(key, s[key]))
 
                 logger.info(
-                    "metricas(10s): unders=%d huecos=%d frames_hueco=%d deriva=%d "
-                    "descartes=%d overflows=%d capturados=%d fill=%d/%d",
+                    "metricas(10s): unders=%d huecos=%d frames_hueco=%d gracias=%d "
+                    "deriva=%d descartes=%d overflows=%d capturados=%d fill=%d/%d",
                     delta("output_underruns"),
                     delta("gap_blocks"),
                     delta("gap_frames"),
+                    delta("grace_stretches"),
                     delta("drift_adjust_frames"),
                     delta("dropped_frames"),
                     delta("input_overflows"),

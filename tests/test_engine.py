@@ -231,17 +231,17 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
         assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
 
 
-def test_underrun_pequeno_se_estira_sin_hueco(engine):
-    """Si al ring le falta un poco para el bloque pedido, se devuelven los
-    frames disponibles (el remuestreador los estira) en vez de insertar
-    silencio: no se cuenta como hueco ni se pierde continuidad."""
+def test_underrun_pequeno_se_rellena_sin_hueco(engine):
+    """Si al ring le falta un poco para el bloque pedido, se rellena el hueco
+    REPITIENDO (con crossfade) lo disponible en vez de estirarlo: mantiene el
+    tono y devuelve un bloque completo, sin contarse como hueco."""
     engine.configure_ring(48000, drift_target_ms=60)
     engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
     _capture(engine, np.zeros((960, 2), dtype=np.float32).tobytes(), 960)
     assert engine.fill() == 960
     before = engine.stats_snapshot()
     out = engine._read(CHUNK)  # pide 1024, hay 960 (ratio 0.94 >= 0.9)
-    assert out.shape[0] == 960  # devuelve lo disponible, no rellena con ceros
+    assert out.shape[0] == CHUNK  # bloque completo (rellenado por repeticion)
     after = engine.stats_snapshot()
     assert after["gap_blocks"] == before["gap_blocks"]  # NO es hueco
     assert after["grace_stretches"] == before["grace_stretches"] + 1
