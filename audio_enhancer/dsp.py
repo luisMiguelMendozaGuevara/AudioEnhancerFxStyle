@@ -245,6 +245,9 @@ class Enhancer:
         # Estados de filtros y analizador
         self._states: dict[str, np.ndarray] = {}
         self._sos_cache: dict[str, tuple] = {}
+        # Coeficientes biquad por banda, cacheados: en reposo la ganancia
+        # suavizada no cambia, así que _shelf/_peaking no se recalculan.
+        self._coeff_cache: dict[str, tuple] = {}
         self._channels: int | None = None
         self.spectrum: np.ndarray | None = None  # 64 barras (dB) para el canvas
         self.spectrum_enabled: bool = True
@@ -262,6 +265,7 @@ class Enhancer:
         arrancar). También pone a cero rampas y medidores."""
         self._states = {}
         self._sos_cache = {}
+        self._coeff_cache = {}
         self._channels = None
         self._c_vol = 1.0
         self._c_bass = 0.0
@@ -416,6 +420,19 @@ class Enhancer:
             sos = cached[1]
         return key, sos, zi
 
+    def _coeff_cached(self, key, sig, compute):
+        """Coeficientes biquad cacheados por banda.
+
+        ``sig`` resume los parámetros que afectan al filtro (freq, ganancia
+        redondeada, q). En reposo la ganancia suavizada no cambia -> no se
+        recalcula el filtro; solo al mover un slider (transitorio)."""
+        cached = self._coeff_cache.get(key)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        coeffs = compute()
+        self._coeff_cache[key] = (sig, coeffs)
+        return coeffs
+
     # ---------- crossfeed BS2B (auriculares) ----------
 
     # Perfiles de libbs2b (valores oficiales): (frecuencia de corte Hz, nivel
@@ -548,6 +565,7 @@ class Enhancer:
         if self._channels != channels:
             self._states = {}
             self._sos_cache = {}
+            self._coeff_cache = {}
             self._channels = channels
         # rampa anti-cremallera de los objetivos de la UI (el volumen se
         # suaviza aparte, por muestra, en _apply_volume). La de EQ es
@@ -586,11 +604,19 @@ class Enhancer:
         # por sección, con una única ida y vuelta a scipy.
         sections = []
         if bass_on:
-            b0, b1, b2, a1, a2 = self._shelf(self.bass_freq, bass, self.sample_rate, 1.0, low=True)
-            sections.append(self._section("bass", b0, b1, b2, a1, a2))
+            coeffs = self._coeff_cached(
+                "bass",
+                (self.sample_rate, self.bass_freq, round(bass, 3)),
+                lambda: self._shelf(self.bass_freq, bass, self.sample_rate, 1.0, low=True),
+            )
+            sections.append(self._section("bass", *coeffs))
         if treb_on:
-            b0, b1, b2, a1, a2 = self._shelf(self.treble_freq, treb, self.sample_rate, 1.0, low=False)
-            sections.append(self._section("treble", b0, b1, b2, a1, a2))
+            coeffs = self._coeff_cached(
+                "treble",
+                (self.sample_rate, self.treble_freq, round(treb, 3)),
+                lambda: self._shelf(self.treble_freq, treb, self.sample_rate, 1.0, low=False),
+            )
+            sections.append(self._section("treble", *coeffs))
         for i, (freq, g) in enumerate(zip(self.eq_bands, self._c_eq, strict=False)):
             key = "eq_%d" % i
             g_db = float(g)
@@ -602,8 +628,12 @@ class Enhancer:
                 g_on = False
             self._section_on[key] = g_on
             if g_on:
-                b0, b1, b2, a1, a2 = self._peaking(freq, g_db, self.sample_rate, self.eq_q_values[i])
-                sections.append(self._section(key, b0, b1, b2, a1, a2))
+                coeffs = self._coeff_cached(
+                    key,
+                    (self.sample_rate, freq, round(g_db, 3), self.eq_q_values[i]),
+                    lambda freq=freq, g_db=g_db, q=self.eq_q_values[i]: self._peaking(freq, g_db, self.sample_rate, q),
+                )
+                sections.append(self._section(key, *coeffs))
         if sections:
             sos = np.concatenate([s[1] for s in sections], axis=0)
             zi = np.stack([s[2] for s in sections])
@@ -648,6 +678,10 @@ class Enhancer:
         ganancia se desliza muestra a muestra, sin discontinuidades."""
         target = float(self.volume)
         start = self._c_vol
+        if abs(target - start) < 1e-6:
+            # Volumen estable: sin rampa ni array de ganancia por bloque.
+            self._c_vol = target
+            return data if target == 1.0 else data * target
         n = data.shape[0]
         tau = 0.10  # segundos
         # Rampa cacheada en un LRU global acotado (solo lectura): misma
@@ -882,13 +916,16 @@ class Enhancer:
         if y.size == 0:
             peak_l = peak_r = rms_l = rms_r = 0.0
         elif y.ndim > 1 and y.shape[1] >= 2:
-            peak_l = float(np.max(np.abs(y[:, 0])))
-            peak_r = float(np.max(np.abs(y[:, 1])))
-            rms_l = float(np.sqrt(np.mean(y[:, 0] ** 2)))
-            rms_r = float(np.sqrt(np.mean(y[:, 1] ** 2)))
+            # Una sola pasada de reducciones para ambos canales (antes: 4
+            # np.max/np.mean + 2 cuadrados por canal -> overhead de llamadas).
+            pk = np.abs(y).max(axis=0)
+            rms = np.sqrt(np.mean(np.multiply(y, y), axis=0))
+            peak_l, peak_r = float(pk[0]), float(pk[1])
+            rms_l, rms_r = float(rms[0]), float(rms[1])
         else:  # mono: ambos canales idénticos
-            peak_l = peak_r = float(np.max(np.abs(y)))
-            rms_l = rms_r = float(np.sqrt(np.mean(y**2)))
+            y = np.ravel(y)
+            peak_l = peak_r = float(np.abs(y).max())
+            rms_l = rms_r = float(np.sqrt(np.mean(np.multiply(y, y))))
         self.level_peak_l = self.level_peak_l * 0.7 + peak_l * 0.3
         self.level_peak_r = self.level_peak_r * 0.7 + peak_r * 0.3
         self.level_rms_l = self.level_rms_l * 0.85 + rms_l * 0.15

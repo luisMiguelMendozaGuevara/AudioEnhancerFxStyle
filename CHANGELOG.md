@@ -4,6 +4,24 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.12] - 2026-10-07
+
+Optimización del DSP (menos CPU -> menos riesgo de cortes bajo carga).
+
+### Cambiado
+- **Caché de coeficientes biquad**: el EQ (bass/treble/9 bandas) ya no
+  recalcula `_shelf`/`_peaking` en cada bloque; solo al mover un slider. En
+  reposo, cero recálculo.
+- **Medición de niveles en una sola pasada**: peak/rms de ambos canales con 2
+  reducciones en vez de 4+ por canal.
+- **Volumen en reposo sin rampa ni array**: con el volumen estable (p. ej.
+  1.0) se multiplica por escalar (o no se toca).
+
+### Medido (misma sesión, A/B)
+- `process` con EQ+volumen: **1024 -> 475 us/bloque** (~2x más rápido, de
+  ~4.8 % a ~2.2 % de tiempo real).
+- Test de regresión de la caché (`tests/test_dsp.py`).
+
 ## [1.5.11] - 2026-10-07
 
 La gráfica ya no puede degradar el audio (audio primero).

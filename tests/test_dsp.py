@@ -916,3 +916,23 @@ def test_crossfeed_avanzado_configurable_por_params():
     assert e.crossfeed_feed_db == 7.5
     snap = e.snapshot_params()
     assert snap.crossfeed_cut_hz == 400 and snap.crossfeed_feed_db == 7.5
+
+
+def test_coeff_cache_se_invalida_al_cambiar_ganancia():
+    """La cache de coeficientes biquad no debe servir filtros obsoletos tras
+    cambiar una banda: el sonido debe reflejar la nueva ganancia."""
+    e = Enhancer()
+    e.sample_rate = FS
+    e.blend = 1.0
+    e.volume = 1.0
+    e.bass = 0.0
+    e.treble = 0.0
+    e.eq_gains = [0.0] * 9
+    x = _stereo(MILD_AMP, 200.0)
+    warm(e, x, blocks=40)
+    out0 = e.process(x).copy()
+    e.eq_gains = [6.0] + [0.0] * 8
+    warm(e, x, blocks=80)  # rampa (~30 ms) + recomputo de coeficientes
+    out1 = e.process(x).copy()
+    assert not np.allclose(out0, out1), "la ganancia nueva no se aplico (cache obsoleta)"
+    assert float(np.abs(out1).max()) > float(np.abs(out0).max())
