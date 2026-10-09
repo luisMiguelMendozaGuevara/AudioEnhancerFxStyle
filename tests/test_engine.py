@@ -197,16 +197,18 @@ def test_lectura_con_frame_count_distinto():
 def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
     """Con deriva sostenida de reloj el control debe mantener el ring lejos de
     los limites (sin descartar audio ni emitir huecos de silencio), en lugar de
-    dejar que la latencia crezca hasta saturar a los ~20 s y saltar."""
-    engine.configure_ring(48000)
+    dejar que la latencia crezca hasta saturar y saltar. Cubre el rango real
+    medido en el equipo del usuario (~1.9 %) y el nuevo limite con autoridad
+    adaptativa (~2.5-3 %)."""
     engine._pa_mod = SimpleNamespace(paContinue=0)
-    # prellenar a la mitad como hace la app real (latencia inicial ~100 ms)
-    for _ in range(engine.nframes // 2 // 1024):
-        _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
 
     def _simulate(skew):
+        # Estado limpio por skew (el ring se reconfigura y prellena como la app).
+        engine.configure_ring(48000)
+        for _ in range(engine.nframes // 2 // 1024):
+            _capture(engine, np.zeros((1024, 2), dtype=np.float32).tobytes(), 1024)
         # salida mas lenta (skew<0) tiende a llenar el ring; mas rapida (skew>0)
-        # tiende a vaciarlo. Ambos eran el disparador del lagazo a los ~20 s.
+        # tiende a vaciarlo. Ambos eran el disparador del lagazo.
         out_cb = 1024 / (1.0 + skew)
         cap_t = 0.0
         out_t = 0.0
@@ -225,7 +227,7 @@ def test_deriva_sostenida_mantiene_el_ring_acotado(engine):
                 low = min(low, f)
         return low, high
 
-    for skew in (-2000e-6, 2000e-6):
+    for skew in (-0.03, -0.025, -0.02, -0.015, -2000e-6, 2000e-6, 0.015, 0.02, 0.025):
         low, high = _simulate(skew)
         assert 0 < low < engine.nframes, f"hueco/desborde con skew={skew}"
         assert high < engine.nframes, f"ring saturado (descartaba audio) con skew={skew}"
@@ -283,7 +285,8 @@ def test_deriva_se_acota_a_max_drift_frames_por_callback(engine):
     before = engine.stats_snapshot()["drift_adjust_frames"]
     engine._out_callback(None, CHUNK, None, 0)  # un solo callback
     delta = engine.stats_snapshot()["drift_adjust_frames"] - before
-    assert 0 < delta <= engine._max_drift_frames
+    # La autoridad es adaptativa: hasta 2x con error grande (anti-desborde).
+    assert 0 < delta <= 2 * engine._max_drift_frames
 
 
 # ---------- latencia objetivo desacoplada (Fase 2) ----------

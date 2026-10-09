@@ -4,6 +4,25 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.13] - 2026-10-08
+
+Control de deriva con más rango (arregla los episodios de cortes/lag con
+relojes muy desajustados, p. ej. media app a velocidad distinta).
+
+### Corregido
+- **Autoridad de deriva adaptativa**: con error grande el control drena/rellena
+  al doble de velocidad. El rango soportado pasa de **±1.5 % a ~±2.5-3 %** de
+  desajuste de reloj (los episodios reales medidos eran ~1.9 %: el ring se
+  sobrellenaba -> descartes + huecos + latencia creciente).
+- **Anti-windup del acumulador de deriva**: un error grande sostenido ya no
+  hace que al recuperar el ring se vacíe de golpe (hueco).
+- **Ring 0.35 -> 0.5 s**: más margen para absorber ráfagas del reloj/dispositivo
+  sin desbordar (especialmente a 100 ms de consigna, que sonaba peor por esto).
+
+### Medido (simulacion de reloj)
+- Skew de reloj soportado: **±1.5 % -> ±2.5-3 %** sin huecos ni descartes.
+- Test de deriva ampliado a ±3 % (`tests/test_engine.py`).
+
 ## [1.5.12] - 2026-10-07
 
 Optimización del DSP (menos CPU -> menos riesgo de cortes bajo carga).

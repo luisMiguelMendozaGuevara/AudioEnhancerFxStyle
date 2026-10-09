@@ -11,7 +11,7 @@ import sys
 logger = logging.getLogger("audio_enhancer.constants")
 
 APP_NAME = "Audio Enhancer FxStyle"
-APP_VERSION = "1.5.12"
+APP_VERSION = "1.5.13"
 # (C4) APP_DIR eliminado: duplicaba EXE_DIR y nadie lo usaba.
 
 # Título de ventana/bandeja. Se usa también en "traer al frente" de instancia
@@ -23,9 +23,9 @@ SAMPLE_RATE = 48000
 CHUNK = 1024
 # (La captura usa el mismo CHUNK: el callback solo copia al ring crudo y el
 # DSP va en hilo dedicado, así que el flujo es suave bloque a bloque.)
-# 0.35 s de ring con consigna de 100 ms deja ~250 ms de margen por encima para
-# absorber ráfagas del reloj/carga sin desbordar (antes 0.2 s -> solo ~100 ms).
-RING_SECONDS = 0.35
+# 0.5 s de ring con consigna de 100 ms deja ~400 ms de margen por encima para
+# absorber ráfagas del reloj/carga sin desbordar (antes 0.35 s -> ~250 ms).
+RING_SECONDS = 0.5
 # Latencia objetivo del ring (ms): el punto de consigna del control de deriva.
 # Antes era RING_SECONDS/2 = 100 ms fijos. 60 ms es el compromiso
 # estabilidad/latencia; la UI ofrece 40/60/100 ms.

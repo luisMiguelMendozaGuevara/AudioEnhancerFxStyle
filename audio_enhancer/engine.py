@@ -728,11 +728,23 @@ class AudioEngine:
                 self._drift_accum *= 0.95
                 n_adj = 0
             else:
+                # Autoridad ADAPTATIVA: con error grande (reloj del productor
+                # bastante más rápido/lento que el control normal alcanza) se
+                # permite drenar/rellenar más rápido, para acotar la latencia
+                # en vez de desbordar el ring (descartes) o vaciarlo (huecos).
+                limit = self._max_drift_frames
+                if abs(error) > self._drift_deadband * 4:
+                    limit = self._max_drift_frames * 2
                 # Acumulador fraccionario: una diferencia de reloj de 100 ppm
                 # se reparte como un frame ocasional, no como un salto fijo.
                 self._drift_accum += error * self._drift_gain
+                # Anti-windup: si el control se satura (error grande sostenido)
+                # el acumulador creceria sin limite y al recuperar drenaria el
+                # ring de golpe (hueco). Se acota a unas pocas veces el limite.
+                acc_limit = float(limit) * 2.0
+                self._drift_accum = max(-acc_limit, min(acc_limit, self._drift_accum))
                 n_adj = int(np.trunc(self._drift_accum))
-                n_adj = max(-self._max_drift_frames, min(self._max_drift_frames, n_adj))
+                n_adj = max(-limit, min(limit, n_adj))
                 self._drift_accum -= n_adj
             if n_adj:
                 self._stats["drift_adjust_frames"] += abs(n_adj)
