@@ -10,7 +10,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     # 6.11.x provoca crashes 0xC0000005 en Windows (bug de Qt); 6.8 es LTS.
-    "PySide6>=6.8,<6.9",
+    "PySide6>=6.8,<6.12",
     "PyAudioWPatch>=0.2.12.8",
 ]
 
