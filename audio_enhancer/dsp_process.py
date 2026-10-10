@@ -15,6 +15,7 @@ Interfaz:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -100,6 +101,7 @@ def child_main(
     telemetry=None,
     spectrum_buf=None,
     spec_needed=None,
+    child_stats=None,
 ) -> None:
     """Bucle del proceso hijo: crudo -> DSP -> procesado.
 
@@ -111,11 +113,20 @@ def child_main(
     - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr].
     - ``spectrum_buf``: 64 barras de espectro (dB), escritas por el hilo visual.
     - ``spec_needed``: bandera (padre -> hijo) de si la UI mira el espectro.
+    - ``child_stats``: [raw_empty, blocks, backlog_sum, clipped] (diagnóstico).
     """
     from .dsp import Enhancer
 
     enhancer = Enhancer()
     _drain_params(enhancer, params_q)
+    # Pre-importar scipy AQUÍ, antes del primer bloque: si no, la primera
+    # llamada a process() importa scipy.signal/ndimage DENTRO del bucle de
+    # audio y retrasa el primer bloque varios segundos (huecos al iniciar).
+    with contextlib.suppress(Exception):
+        from .dsp import _scipy_ndimage, _scipy_signal
+
+        _scipy_signal()
+        _scipy_ndimage()
     logger.info("Proceso DSP (hijo) iniciado")
     viz = threading.Thread(
         target=_viz_loop,
@@ -124,18 +135,33 @@ def child_main(
         daemon=True,
     )
     viz.start()
+    # Diagnóstico (Paso 0): contadores locales que se publican junto a la
+    # telemetría (así no se toma el lock del array compartido dos veces).
+    raw_empty = 0
+    blocks = 0
+    backlog_sum = 0
+    clipped = 0
     while not stop_event.is_set():
         try:
             item = raw_q.get(timeout=0.1)
         except Exception:
+            # Sin crudo: el hijo va al día. Si esto se repite, el hijo se queda
+            # sin alimentar (bomba lenta o productor parado): diagnóstico.
+            raw_empty += 1
             _drain_params(enhancer, params_q)
             continue
         if item is None:  # centinela de parada
             break
         _drain_params(enhancer, params_q)
         try:
+            with contextlib.suppress(Exception):
+                backlog_sum += raw_q.qsize()
             data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
             y = enhancer.process(data)
+            blocks += 1
+            # Recorte: muestras que superan ±1.0 (posible recorte del driver
+            # cuando no hay limitador/techo). Barato y fuera del audio crítico.
+            clipped += int(np.count_nonzero(np.abs(y) > 1.0))
         except Exception:
             logger.exception("Error en el proceso DSP")
             continue
@@ -148,10 +174,22 @@ def child_main(
                 telemetry[4] = enhancer.level_peak_l
                 telemetry[5] = enhancer.level_peak_r
                 telemetry[6] = enhancer.level_gr
+        if child_stats is not None:
+            with child_stats.get_lock():
+                child_stats[0] = raw_empty
+                child_stats[1] = blocks
+                child_stats[2] = backlog_sum
+                child_stats[3] = clipped
         if gr_value is not None:
             with gr_value.get_lock():
                 gr_value.value = float(enhancer.level_gr)
         out_q.put(np.asarray(y, dtype=np.float32).tobytes())
+    if child_stats is not None:
+        with contextlib.suppress(Exception), child_stats.get_lock():
+            child_stats[0] = raw_empty
+            child_stats[1] = blocks
+            child_stats[2] = backlog_sum
+            child_stats[3] = clipped
     stop_event.set()
     viz.join(timeout=1.0)
     logger.info("Proceso DSP (hijo) detenido")

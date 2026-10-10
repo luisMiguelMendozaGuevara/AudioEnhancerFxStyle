@@ -487,3 +487,58 @@ def test_snapshot_params_incluye_eq_gains():
     snap = snapshot_params(e)
     assert snap["eq_gains"] == [1.0, -2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     assert "volume" in snap and "limiter" in snap
+
+
+# ---------- Diagnóstico de pipeline (Paso 0) ----------
+
+
+class _FakeSharedArray:
+    """Array compartido de mentira para tests (solo lo que usa stats_snapshot)."""
+
+    def __init__(self, values):
+        self.values = list(values)
+
+    def get_lock(self):
+        import contextlib
+
+        return contextlib.nullcontext()
+
+    def __getitem__(self, i):
+        return self.values[i]
+
+    def __setitem__(self, i, v):
+        self.values[i] = v
+
+
+def test_put_raw_cuenta_frames_descartados(engine):
+    """El desborde del ring crudo ya no es silencioso: cuenta los frames."""
+    engine.configure_ring(48000)
+    nframes = len(engine._raw_ring)
+    bloques = nframes // 1024 + 2  # más de la capacidad
+    for _ in range(bloques):
+        engine._put_raw(np.zeros((1024, 2), dtype=np.float32))
+    assert engine.stats_snapshot()["raw_ring_drops"] > 0
+
+
+def test_out_callback_cuenta_salida_y_deriva_con_signo(engine):
+    """La salida cuenta los frames que consume y el SIGNO del ajuste de deriva."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
+    engine._warmup_until = 0.0
+    # Ring por encima de la consigna -> n_adj positivo (drena leyendo más).
+    engine._put(np.zeros((engine.drift_target + 600, 2), dtype=np.float32))
+    before = engine.stats_snapshot()
+    engine._out_callback(None, 1024, None, 0)
+    after = engine.stats_snapshot()
+    assert after["out_frames"] - before["out_frames"] == 1024
+    assert after["drift_signed_frames"] - before["drift_signed_frames"] > 0
+
+
+def test_stats_snapshot_fusiona_contadores_del_hijo(engine):
+    """stats_snapshot añade los contadores del proceso hijo si existen."""
+    engine._child_stats = _FakeSharedArray([5, 100, 42, 7])
+    snap = engine.stats_snapshot()
+    assert snap["child_raw_empty"] == 5
+    assert snap["child_blocks"] == 100
+    assert snap["child_backlog"] == 42
+    assert snap["child_clipped"] == 7

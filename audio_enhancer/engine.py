@@ -11,6 +11,7 @@ import contextlib
 import logging
 import multiprocessing as mp
 import os
+import queue
 import threading
 import time
 from functools import lru_cache
@@ -140,6 +141,9 @@ class AudioEngine:
         # Bandera (padre -> hijo): la UI necesita el espectro (visible). El hijo
         # solo calcula el FFT cuando está a 1; así la gráfica no toca el audio.
         self._spec_needed: Any = None
+        # Diagnóstico (Paso 0): contadores del hijo [raw_empty, blocks,
+        # backlog_sum, clipped] publicados por memoria compartida.
+        self._child_stats: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -164,6 +168,22 @@ class AudioEngine:
             # no hubo descartes ni overflows ni bajada del ring, el hueco no se
             # debe a un pico del DSP ni a sobrecarga de captura.
             "gap_frames": 0,
+            # ---- Diagnóstico de pipeline (Paso 0) ----
+            # Frames realmente consumidos por la salida. Comparado con
+            # `captured_frames`: si difieren de forma sostenida hay pérdida en
+            # el camino o un desajuste de reloj real captura<->salida.
+            "out_frames": 0,
+            # Frames perdidos al desbordar el ring crudo (captura -> DSP).
+            "raw_ring_drops": 0,
+            # Bloques perdidos al enviarlos al hijo (cola llena, put_nowait).
+            "raw_q_drops": 0,
+            # Veces que la bomba no encontró crudo / salida procesada.
+            "raw_q_empty": 0,
+            "out_q_empty": 0,
+            # Suma CON SIGNO de los ajustes de deriva (sesgo del integrador):
+            # negativo = el control lee menos frames de los que consume la
+            # salida (productor por debajo del consumo o frames perdidos).
+            "drift_signed_frames": 0,
         }
 
     @property
@@ -172,9 +192,20 @@ class AudioEngine:
         return self._drift_target
 
     def stats_snapshot(self) -> dict[str, int]:
-        """Copia de las métricas en vivo (segura para el hilo de UI)."""
+        """Copia de las métricas en vivo (segura para el hilo de UI).
+
+        Incluye, si hay proceso hijo, sus contadores de diagnóstico (hambre de
+        cola, bloques procesados, backlog y samples recortados)."""
         with self.lock:
-            return dict(self._stats)
+            snap = dict(self._stats)
+        cs = self._child_stats
+        if cs is not None:
+            with contextlib.suppress(Exception), cs.get_lock():
+                snap["child_raw_empty"] = int(cs[0])
+                snap["child_blocks"] = int(cs[1])
+                snap["child_backlog"] = int(cs[2])
+                snap["child_clipped"] = int(cs[3])
+        return snap
 
     def configure_ring(self, rate: int, drift_target_ms: float | None = None) -> None:
         """Configura el ring para la tasa dada (tamaño, fundidos, deriva).
@@ -471,6 +502,7 @@ class AudioEngine:
                 # El hilo DSP no da abasto: descartar lo más viejo del crudo.
                 drop = avail + n - nframes
                 self._raw_read += drop
+                self._stats["raw_ring_drops"] += drop  # diagnóstico (Paso 0)
             idx = self._raw_write % nframes
             if idx + n <= nframes:
                 raw[idx : idx + n] = data
@@ -534,6 +566,9 @@ class AudioEngine:
         self._telemetry = ctx.Array("f", 7)
         self._spectrum_buf = ctx.Array("f", 64)
         self._spec_needed = ctx.Value("b", 0)
+        # Diagnóstico (Paso 0) del hijo: [raw_empty, blocks, backlog_sum,
+        # clipped_samples]. "d" (double) para acumular sin desbordar.
+        self._child_stats = ctx.Array("d", 4)
         self._params_q.put(snapshot_params(self.enhancer))
         self._dsp_proc = ctx.Process(
             target=child_main,
@@ -546,6 +581,7 @@ class AudioEngine:
                 self._telemetry,
                 self._spectrum_buf,
                 self._spec_needed,
+                self._child_stats,
             ),
             name="dsp-proc",
             daemon=True,
@@ -627,8 +663,16 @@ class AudioEngine:
                 # put_nowait: si el hijo va atrasado, descartar en vez de
                 # bloquear. Bloquear aquí frenaría la entrega a la salida y
                 # provocaría un hueco; el backlog queda acotado por maxsize.
-                with contextlib.suppress(Exception):
+                # Los descartes se CUENTAN (diagnóstico Paso 0): antes eran
+                # silenciosos y podían explicar cortes sin rastro en métricas.
+                try:
                     self._raw_q.put_nowait(block.tobytes())
+                except queue.Full:
+                    self._stats["raw_q_drops"] += 1
+                except Exception:
+                    pass
+            else:
+                self._stats["raw_q_empty"] += 1
             got = False
             try:
                 item = self._out_q.get_nowait()
@@ -641,6 +685,8 @@ class AudioEngine:
                 # el padre solo los copia (sin numpy/FFT que compitan).
                 self._sync_telemetry()
                 self._put(data)
+            else:
+                self._stats["out_q_empty"] += 1
             if block is None and not got:
                 time.sleep(0.001)
 
@@ -748,8 +794,12 @@ class AudioEngine:
                 self._drift_accum -= n_adj
             if n_adj:
                 self._stats["drift_adjust_frames"] += abs(n_adj)
+                self._stats["drift_signed_frames"] += n_adj  # diagnóstico (Paso 0)
             if status & getattr(self._pa_mod, "paOutputUnderflow", 0x4):
                 self._stats["output_underruns"] += 1
+            # Diagnóstico (Paso 0): frames consumidos por la salida (comparar
+            # con capturados: separa pérdida interna de desajuste de reloj).
+            self._stats["out_frames"] += frame_count
             raw = self._read(max(1, frame_count + n_adj))
             tail = self._interp_tail
         # Remuestreo fraccional con memoria de frontera (fuera del lock: solo

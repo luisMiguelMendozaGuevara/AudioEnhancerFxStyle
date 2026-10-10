@@ -4,6 +4,27 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.5.14] - 2026-10-10
+
+Diagnóstico de pipeline (Paso 0) + un bug real de arranque.
+
+### Añadido (diagnóstico)
+- **Contadores de pipeline en el log de métricas**: `salida` (frames que
+  consume la salida), `rdrop`/`qdrop` (descartes silenciosos del ring crudo y
+  de la cola al hijo), `qemp`/`oemp` (bomba ociosa), `dsg` (ajuste de deriva
+  CON signo), `hijos`/`hblk`/`hclip` (hambre del hijo, bloques procesados y
+  muestras que superan ±1.0 = posible recorte del driver).
+- Con `capturados` vs `salida` + `dsg` se puede comprobar si el pipeline es
+  sin pérdidas; `rdrop`/`qdrop`>0 delata descartes que antes eran invisibles.
+
+### Corregido
+- **Primer bloque del hijo lento (~10 s)**: la primera llamada a `process()`
+  importaba `scipy.signal`/`scipy.ndimage` DENTRO del bucle de audio del hijo,
+  retrasando el primer bloque varios segundos (microcortes al iniciar). Ahora
+  se precargan al arrancar el hijo, antes del bucle.
+- El test del hijo ya no se cuelga (usa `queue.Queue` en vez de `mp.Queue`) y
+  precarga scipy.
+
 ## [1.5.13] - 2026-10-08
 
 Control de deriva con más rango (arregla los episodios de cortes/lag con

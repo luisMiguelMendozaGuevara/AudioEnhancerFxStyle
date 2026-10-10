@@ -1119,15 +1119,25 @@ class NewMainWindow(QMainWindow):
 
                 logger.info(
                     "metricas(10s): unders=%d huecos=%d frames_hueco=%d gracias=%d "
-                    "deriva=%d descartes=%d overflows=%d capturados=%d fill=%d/%d",
+                    "deriva=%d dsg=%+d descartes=%d overflows=%d capturados=%d salida=%d "
+                    "rdrop=%d qdrop=%d qemp=%d oemp=%d hijos=%d hblk=%d hclip=%d fill=%d/%d",
                     delta("output_underruns"),
                     delta("gap_blocks"),
                     delta("gap_frames"),
                     delta("grace_stretches"),
                     delta("drift_adjust_frames"),
+                    delta("drift_signed_frames"),
                     delta("dropped_frames"),
                     delta("input_overflows"),
                     delta("captured_frames"),
+                    delta("out_frames"),
+                    delta("raw_ring_drops"),
+                    delta("raw_q_drops"),
+                    delta("raw_q_empty"),
+                    delta("out_q_empty"),
+                    delta("child_raw_empty"),
+                    delta("child_blocks"),
+                    delta("child_clipped"),
                     self.engine.fill(),
                     self.engine.drift_target,
                 )

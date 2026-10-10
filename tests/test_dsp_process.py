@@ -49,3 +49,43 @@ def test_viz_loop_calcula_espectro():
 def test_viz_loop_no_trabaja_si_no_se_necesita():
     vals = _run_viz(needed_value=0, seconds=0.4)
     assert all(v == 0.0 for v in vals), "no debería calcular espectro si no se necesita"
+
+
+def test_child_main_procesa_y_publica_contadores():
+    """El bucle del hijo procesa bloques y publica sus contadores (Paso 0)."""
+    import queue as _queue
+
+    from audio_enhancer.dsp import _scipy_ndimage, _scipy_signal
+    from audio_enhancer.dsp_process import child_main
+
+    # Pre-calentar scipy: sin esto la primera llamada a process() importa
+    # scipy (~segundos) y el test expira antes de ver bloques.
+    _scipy_signal()
+    _scipy_ndimage()
+    raw_q = _queue.Queue()
+    out_q = _queue.Queue()
+    params_q = _queue.Queue()
+    stop = threading.Event()
+    stats = mp.Array("d", 4)
+    t = threading.Thread(
+        target=child_main,
+        args=(raw_q, out_q, params_q, stop, None, None, None, None, stats),
+        daemon=True,
+    )
+    t.start()
+    block = (0.1 * np.ones((1024, 2), dtype=np.float32)).tobytes()
+    raw_q.put(block)
+    raw_q.put(block)
+    deadline = time.time() + 20.0
+    blocks = 0
+    while time.time() < deadline:
+        with stats.get_lock():
+            blocks = int(stats[1])
+        if blocks >= 2:
+            break
+        time.sleep(0.05)
+    stop.set()
+    t.join(timeout=2.0)
+    assert blocks >= 2, "el hijo no procesó los bloques"
+    out = out_q.get_nowait()
+    assert len(out) == 1024 * 2 * 4  # 1024 frames estéreo float32
