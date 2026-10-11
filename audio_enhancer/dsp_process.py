@@ -69,6 +69,8 @@ def snapshot_params(enhancer) -> dict:
         if value is not None:
             snap[name] = value
     snap["eq_gains"] = [float(g) for g in enhancer.eq_gains]
+    # Fase 5: frecuencias centrales por banda (el Q global va en PARAM_ATTRS).
+    snap["eq_bands"] = [float(f) for f in enhancer.eq_bands]
     # Copia del dict de efectos (nunca la referencia viva: la UI lo muta).
     snap["effects"] = {str(k): float(v) for k, v in dict(getattr(enhancer, "effects", {})).items()}
     return snap
@@ -77,9 +79,12 @@ def snapshot_params(enhancer) -> dict:
 def _apply(enhancer, snap: dict) -> None:
     rate_changed = snap.get("sample_rate") is not None and snap["sample_rate"] != enhancer.sample_rate
     for name, value in snap.items():
-        if name in ("eq_gains", "effects"):
+        if name in ("eq_gains", "eq_bands", "effects"):
             continue
         setattr(enhancer, name, value)
+    bands = snap.get("eq_bands")
+    if bands:
+        enhancer.set_eq_bands(bands)
     gains = snap.get("eq_gains")
     if gains is not None:
         enhancer.eq_gains = [float(g) for g in gains]

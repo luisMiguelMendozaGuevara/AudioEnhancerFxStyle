@@ -248,7 +248,7 @@ def test_config_con_tipos_raros_no_tumba_el_arranque(window):
         "latency_pref": "rapida",
         "limiter": "sí",
         "custom_presets": {
-            "malo": [1.0, 2.0, 3.0, [0.0] * 10],  # 10 ganancias: longitud incorrecta
+            "malo": [1.0, 2.0, 3.0, [0.0] * 8],  # 8 ganancias: longitud no soportada
             "malo2": "no soy un preset",
             "bueno": [1.5, 4.0, -2.0, [1.0] * 9],
         },
@@ -274,10 +274,12 @@ def test_config_con_tipos_raros_no_tumba_el_arranque(window):
 
 
 def test_preset_de_longitud_incorrecta_es_rechazado(window):
-    """(C2) seleccionar un preset con 10 ganancias no desalinea el DSP."""
-    window.custom_presets["roto"] = (1.0, 0.0, 0.0, [2.0] * 10)
+    """(C2/F5) seleccionar un preset con una longitud NO soportada (8) no
+    desalinea el DSP."""
+    antes = list(window.enhancer.eq_gains)
+    window.custom_presets["roto"] = (1.0, 0.0, 0.0, [2.0] * 8)
     window._on_preset_selected("roto")
-    assert len(window.enhancer.eq_gains) == 9  # el DSP queda intacto
+    assert window.enhancer.eq_gains == antes  # el DSP queda intacto
     del window.custom_presets["roto"]
 
 
@@ -512,6 +514,17 @@ def test_efectos_enhancer_conectados_al_motor(window):
     assert window.enhancer.effects.get("dynamic_boost") == pytest.approx(4.0)
     window.state.leveling = 6.0
     assert window.enhancer.effects.get("leveling") == pytest.approx(6.0)
+
+
+def test_eq_avanzado_conectado_al_motor(window):
+    """(F5) nº de bandas, frecuencia central y Q llegan al DSP."""
+    window._on_eq_band_count(5)
+    assert len(window.enhancer.eq_bands) == 5
+    window._on_eq_q(3.0)
+    assert window.enhancer.eq_q == pytest.approx(3.0)
+    window._on_eq_freq(0, 90.0)
+    assert window.enhancer.eq_bands[0] == pytest.approx(90.0, rel=0.01)
+    window._on_eq_band_count(9)  # restaurar el estado para el resto de tests
 
 
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):

@@ -43,6 +43,9 @@ class AudioState(QObject):
     bass_changed = Signal(float)
     treble_changed = Signal(float)
     eq_changed = Signal(object)
+    # Fase 5 (EQ avanzado): bandas y Q.
+    eq_bands_changed = Signal(object)
+    eq_q_changed = Signal(float)
     limiter_changed = Signal(bool)
     # (enabled, preset, cut_hz, feed_db): un solo dict/objeto para no encadenar
     # 4 argumentos ni perder el modo Avanzado al emitir.
@@ -92,6 +95,9 @@ class AudioState(QObject):
         self._bass: float = 0.0
         self._treble: float = 0.0
         self._eq_gains: list[float] = [0.0] * 9
+        # Fase 5: frecuencias centrales (se sincronizan con el motor) y Q global.
+        self._eq_bands: list[float] = []
+        self._eq_q: float = 1.4
         self._limiter: bool = True
         self._compressor: bool = True
         # True-peak: limitador con sobremuestreo x4 (caza picos inter-muestra).
@@ -293,6 +299,28 @@ class AudioState(QObject):
     def eq_gains(self, value: list[float]) -> None:
         self._eq_gains = list(value)
         self.eq_changed.emit(self._eq_gains)
+
+    @property
+    def eq_bands(self) -> list[float]:
+        return self._eq_bands
+
+    @eq_bands.setter
+    def eq_bands(self, value: list[float]) -> None:
+        bands = [float(f) for f in value]
+        if bands != self._eq_bands:
+            self._eq_bands = bands
+            self.eq_bands_changed.emit(list(bands))
+
+    @property
+    def eq_q(self) -> float:
+        return self._eq_q
+
+    @eq_q.setter
+    def eq_q(self, value: float) -> None:
+        v = float(value)
+        if self._eq_q != v:
+            self._eq_q = v
+            self.eq_q_changed.emit(v)
 
     @property
     def limiter(self) -> bool:
@@ -507,6 +535,8 @@ class AudioState(QObject):
         self.bass = float(enhancer.bass)
         self.treble = float(enhancer.treble)
         self.eq_gains = [float(g) for g in enhancer.eq_gains]
+        self.eq_bands = [float(f) for f in enhancer.eq_bands]
+        self.eq_q = float(enhancer.eq_q)
         self.limiter = bool(enhancer.limiter)
         self.compressor = bool(enhancer.compressor)
         self.true_peak = bool(enhancer.true_peak)

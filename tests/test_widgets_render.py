@@ -97,12 +97,18 @@ def test_spectrum_agrega_y_pinta(qapp):
 
 
 def test_eq_freq_to_band_mapea_centros(qapp):
+    """(F5) El mapa de espectro asigna cada bin a su banda más cercana en log;
+    las bandas por defecto van en orden creciente."""
+    import numpy as np
+
     from audio_enhancer.ui.new.pages.equalizer import EQCurveWidget
 
     w = EQCurveWidget()
-    # Cada frecuencia central debe mapear a su propia banda
-    for i, center in enumerate(w.EQ_BANDS):
-        assert w._freq_to_band(center) == i
+    assert len(w._bands) == 9 and w._bands == sorted(w._bands)
+    bins = EQCurveWidget.FREQ_MIN * (1000.0 ** (np.arange(w.SPECTRUM_BINS) / (w.SPECTRUM_BINS - 1)))
+    for i, center in enumerate(w._bands):
+        k = int(np.argmin(np.abs(bins - center)))
+        assert w._bin_band[k] == i
 
 
 def test_eq_y_to_gain_es_inverso_de_gain_to_y(qapp):

@@ -494,6 +494,11 @@ class NewMainWindow(QMainWindow):
         settings.watchdog_pref_changed.connect(self._on_watchdog_changed)
         settings.native_capture_pref_changed.connect(self._on_native_capture_changed)
         settings.diagnostics_requested.connect(self._export_diagnostics)
+        # (Fase 5) EQ avanzado: nº de bandas, frecuencia central y Q.
+        eq_page = self._pages["equalizer"]
+        eq_page.band_count_selected.connect(self._on_eq_band_count)
+        eq_page.freq_selected.connect(self._on_eq_freq)
+        eq_page.q_selected.connect(self._on_eq_q)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
@@ -888,6 +893,8 @@ class NewMainWindow(QMainWindow):
                 bass=float(preset["bass"]),
                 treble=float(preset["treble"]),
                 eq_gains=tuple(preset["eq_gains"]),
+                eq_bands=tuple(preset.get("eq_bands") or ()),
+                eq_q=float(preset.get("eq_q") or 1.4),
                 limiter=bool(self.enhancer.limiter),
                 compressor=bool(self.enhancer.compressor),
                 true_peak=bool(self.enhancer.true_peak),
@@ -913,6 +920,8 @@ class NewMainWindow(QMainWindow):
             "bass": float(self.enhancer.bass),
             "treble": float(self.enhancer.treble),
             "eq_gains": [float(g) for g in self.enhancer.eq_gains],
+            "eq_bands": [float(f) for f in self.enhancer.eq_bands],
+            "eq_q": float(self.enhancer.eq_q),
             "effects": {k: float(v) for k, v in self.enhancer.effects.items()},
             "balance_db": float(self.enhancer.balance_db),
             "master_gain_db": float(self.enhancer.master_gain_db),
@@ -966,6 +975,8 @@ class NewMainWindow(QMainWindow):
         home = self._pages["home"]
         home.set_volume(self.enhancer.volume)
         self._pages["equalizer"].set_gains(self.enhancer.eq_gains)
+        self._pages["equalizer"].set_bands(self.enhancer.eq_bands)
+        self._pages["equalizer"].set_q(float(self.enhancer.eq_q))
         self._pages["effects"].set_bass(self.enhancer.bass)
         self._pages["effects"].set_treble(self.enhancer.treble)
         self._pages["effects"].set_limiter(self.enhancer.limiter)
@@ -997,6 +1008,20 @@ class NewMainWindow(QMainWindow):
         # que emite volume_edited): tocar el privado aquí era redundante y
         # rompía el contrato R3-C3.
         self.enhancer.volume = raw / 100.0
+
+    def _on_eq_band_count(self, count: int) -> None:
+        """(Fase 5) Cambia el nº de bandas del EQ (set por defecto de ese n)."""
+        self.enhancer.set_eq_band_count(count)
+        self._sync_ui_from_state()
+
+    def _on_eq_freq(self, index: int, freq: float) -> None:
+        """(Fase 5) Mueve la frecuencia central de una banda (acotada)."""
+        self.enhancer.set_eq_band_freq(index, freq)
+        self._pages["equalizer"].set_bands(self.enhancer.eq_bands)
+
+    def _on_eq_q(self, q: float) -> None:
+        """(Fase 5) Q global del EQ (ancho de campana)."""
+        self.enhancer.eq_q = float(q)
 
     def toggle_ab(self) -> None:
         self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0
@@ -1196,6 +1221,8 @@ class NewMainWindow(QMainWindow):
                 bass=cfg["bass"],
                 treble=cfg["treble"],
                 eq_gains=tuple(cfg["eq_gains"]) if cfg["eq_gains"] is not None else tuple(self.enhancer.eq_gains),
+                eq_bands=tuple(cfg["eq_bands"]) if cfg["eq_bands"] is not None else (),
+                eq_q=float(cfg["eq_q"]),
                 limiter=cfg["limiter"],
                 compressor=cfg["compressor"],
                 true_peak=cfg["true_peak"],
@@ -1240,6 +1267,8 @@ class NewMainWindow(QMainWindow):
             "bass": float(self.enhancer.bass),
             "treble": float(self.enhancer.treble),
             "eq_gains": [float(g) for g in self.enhancer.eq_gains],
+            "eq_bands": [float(f) for f in self.enhancer.eq_bands],
+            "eq_q": float(self.enhancer.eq_q),
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
             "true_peak": bool(self.enhancer.true_peak),

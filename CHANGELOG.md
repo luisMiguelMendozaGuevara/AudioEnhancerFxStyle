@@ -81,6 +81,22 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
 - **Tests**: 0 = passthrough; ±20 mutea un canal; +6 dB duplica y −6 dB reduce a
   la mitad; un salto del master no produce escalón (rampa por muestra).
 
+### Fase 5 — EQ avanzado (2026-10-10)
+- **Bandas dinámicas**: nº de bandas 5/9/10/15/31 (`EQ_BAND_SETS`; el de 9 es el
+  histórico y el de 31 es ISO 1/3 de octava). `Enhancer.set_eq_band_count`.
+- **Frecuencia central editable** por banda (`set_eq_band_freq`, acotada entre
+  las vecinas para que la curva siga siendo monótona).
+- **Q global** expuesto en la UI (0.2-10; `eq_q` ya existía en el DSP).
+- **UI**: la curva pasa a N bandas con eje X logarítmico (20 Hz-20 kHz);
+  arrastrar una banda cambia ganancia (vertical) y frecuencia (horizontal, con
+  zona muerta de 4 px); combo de bandas + slider de Q; etiquetas adaptativas.
+- **Presets v2**: `eq_bands` y `eq_q` (migración: los presets sin bandas usan el
+  set por defecto del nº de ganancias; longitudes no soportadas se rechazan).
+- **Config**: `eq_bands`/`eq_q` se persisten.
+- **Tests**: redimensión de bandas, ganancias conservadas por índice, frecuencia
+  acotada entre vecinas, EQ de 5 bandas filtrando, round-trip de params, presets
+  con bandas/Q, longitudes no soportadas rechazadas y UI→motor.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

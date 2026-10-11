@@ -1321,3 +1321,66 @@ def test_master_cambio_suave_sin_clic():
     ratio = np.abs(y[:, 0]) / np.maximum(np.abs(x[:, 0]), 1e-6)
     assert float(ratio[0]) < 1.5  # al inicio sigue ~1.0 (sin escalón)
     assert float(ratio[-1]) > 2.0  # al final del bloque ya subió
+
+
+# ---------- EQ avanzado (Fase 5) ----------
+
+
+def test_set_eq_band_count_redimensiona():
+    e = Enhancer()
+    assert len(e.eq_bands) == 9
+    e.set_eq_band_count(5)
+    assert len(e.eq_bands) == 5
+    assert len(e.eq_gains) == 5
+    assert len(e.eq_q_values) == 5
+    e.set_eq_band_count(31)
+    assert len(e.eq_bands) == 31
+    assert len(e.eq_gains) == 31
+
+
+def test_set_eq_band_count_conserva_ganancias_por_indice():
+    e = Enhancer()
+    gains = [float(i) for i in range(9)]
+    e.eq_gains = gains
+    e.set_eq_band_count(5)
+    assert e.eq_gains == gains[:5]
+
+
+def test_set_eq_band_freq_acota_entre_vecinas():
+    e = Enhancer()
+    e.set_eq_bands([100.0, 1000.0, 5000.0])
+    e.set_eq_band_freq(1, 99999.0)  # intenta pasarse de la siguiente
+    assert e.eq_bands[1] < 5000.0
+    e.set_eq_band_freq(1, 1.0)  # intenta pasarse de la anterior
+    assert e.eq_bands[1] > 100.0
+    assert e.eq_bands == sorted(e.eq_bands)
+
+
+def test_eq_avanzado_procesa_y_filtra():
+    """Con 5 bandas y +6 dB en la banda de 1 kHz, esa zona se realza."""
+    e = Enhancer()
+    e.set_eq_band_count(5)
+    e.limiter = False
+    e.compressor = False
+    e.dc_block_enabled = False
+    x = _stereo(0.2, 1000.0)  # el set de 5 bandas tiene 1000 Hz
+    e.eq_gains = [0.0, 0.0, 6.0, 0.0, 0.0]
+    warm(e, x, blocks=60)
+    y = e.process(x.copy())
+    assert _rms(y) > _rms(x) * 1.2
+
+
+def test_params_round_trip_eq_avanzado():
+    from audio_enhancer.dsp import EnhancerParams
+
+    e = Enhancer()
+    e.set_eq_bands([50.0, 500.0, 5000.0])
+    e.eq_gains = [1.0, -2.0, 3.0]
+    e.eq_q = 2.5
+    snap = e.snapshot_params()
+    e2 = Enhancer()
+    e2.apply_params(snap)
+    assert e2.eq_bands == [50.0, 500.0, 5000.0]
+    assert e2.eq_gains == [1.0, -2.0, 3.0]
+    assert e2.eq_q == pytest.approx(2.5)
+    assert isinstance(snap, EnhancerParams)

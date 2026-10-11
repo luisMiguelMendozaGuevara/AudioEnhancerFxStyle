@@ -95,6 +95,50 @@ SECTION_EXIT_DB = 0.05
 
 EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
 
+# Sets de frecuencias centrales por número de bandas (Fase 5: EQ avanzado).
+# El de 9 es el histórico (compatibilidad); el resto son estándar (31 = ISO 1/3
+# de octava). El usuario puede mover cada frecuencia dentro de [20, 20000].
+EQ_BAND_SETS: dict[int, list[float]] = {
+    5: [60, 250, 1000, 4000, 12000],
+    9: list(EQ_BANDS),
+    10: [31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000],
+    15: [20, 31.5, 50, 80, 125, 200, 315, 500, 800, 1250, 2000, 3150, 5000, 8000, 12500],
+    31: [
+        20,
+        25,
+        31.5,
+        40,
+        50,
+        63,
+        80,
+        100,
+        125,
+        160,
+        200,
+        250,
+        315,
+        400,
+        500,
+        630,
+        800,
+        1000,
+        1250,
+        1600,
+        2000,
+        2500,
+        3150,
+        4000,
+        5000,
+        6300,
+        8000,
+        10000,
+        12500,
+        16000,
+        20000,
+    ],
+}
+EQ_FREQ_MIN, EQ_FREQ_MAX = 20.0, 20000.0
+
 # Capa "enhancer" (paridad FxSound): 5 efectos con escala 0-10 en la UI.
 # Los nombres siguen a FxSound para que la UI sea familiar.
 EFFECT_KEYS = ("fidelity", "ambience", "surround", "dynamic_boost", "bass")
@@ -181,6 +225,9 @@ class EnhancerParams:
     bass: float = 0.0
     treble: float = 0.0
     eq_gains: tuple[float, ...] = ()
+    # Fase 5 (EQ avanzado): frecuencias centrales por banda y Q global.
+    eq_bands: tuple[float, ...] = ()
+    eq_q: float = 1.4
     limiter: bool = True
     compressor: bool = True
     true_peak: bool = True
@@ -415,6 +462,51 @@ class Enhancer:
         self._eq_q_default = v
         self.eq_q_values = [v] * len(self.eq_bands)
 
+    def set_eq_bands(self, freqs) -> None:
+        """Cambia las frecuencias centrales del EQ (redimensiona ganancias/Q).
+
+        Valida: frecuencias dentro de [20, 20000] y ordenadas; si llegan menos
+        de 2, se usa el set por defecto. Las ganancias y los Q existentes se
+        conservan por índice (los nuevos quedan a 0/1.4). Limpia los estados de
+        filtro: las secciones han cambiado."""
+        f = sorted(min(EQ_FREQ_MAX, max(EQ_FREQ_MIN, float(x))) for x in freqs)
+        if len(f) < 2:
+            f = list(EQ_BANDS)
+        n = len(f)
+        gains = (list(self._eq_gains) + [0.0] * n)[:n]
+        qs = (list(self.eq_q_values) + [self._eq_q_default] * n)[:n]
+        self.eq_bands = f
+        self.eq_q_values = qs
+        self.eq_gains = gains  # el setter reconstruye _eq_target y redimensiona rampas
+        self._section_on = {}
+        self._states = {}
+        self._sos_cache = {}
+        self._coeff_cache = {}
+
+    def set_eq_band_count(self, count: int) -> None:
+        """Fija el número de bandas usando el set por defecto de ese número."""
+        self.set_eq_bands(EQ_BAND_SETS.get(int(count), EQ_BANDS))
+
+    def set_eq_band_freq(self, index: int, freq: float) -> None:
+        """Mueve la frecuencia central de una banda, acotada entre sus vecinas.
+
+        Se mantiene el orden (cada banda queda entre la anterior y la
+        siguiente) para que la curva siga siendo monótona."""
+        n = len(self.eq_bands)
+        if not (0 <= index < n):
+            return
+        lo = EQ_FREQ_MIN if index == 0 else self.eq_bands[index - 1] * 1.02
+        hi = EQ_FREQ_MAX if index == n - 1 else self.eq_bands[index + 1] * 0.98
+        bands = list(self.eq_bands)
+        bands[index] = min(max(float(freq), lo), hi)
+        self.eq_bands = bands
+        # La sección cambió de frecuencia: invalidar su estado y sus cachés.
+        key = "eq_%d" % index
+        self._section_on.pop(key, None)
+        self._states.pop(key, None)
+        self._sos_cache.pop(key, None)
+        self._coeff_cache.pop(key, None)
+
     def apply_params(self, params: "EnhancerParams") -> None:
         """Aplica una instantánea de parámetros de forma atómica.
 
@@ -425,7 +517,12 @@ class Enhancer:
         self.volume = float(params.volume)
         self.bass = float(params.bass)
         self.treble = float(params.treble)
+        # Fase 5: las bandas primero (redimensiona), luego las ganancias y el Q.
+        if params.eq_bands:
+            self.set_eq_bands(params.eq_bands)
         self.eq_gains = [float(g) for g in params.eq_gains]
+        if params.eq_q:
+            self.eq_q = float(params.eq_q)
         self.limiter = bool(params.limiter)
         self.compressor = bool(params.compressor)
         self.true_peak = bool(params.true_peak)
@@ -446,6 +543,8 @@ class Enhancer:
             bass=float(self.bass),
             treble=float(self.treble),
             eq_gains=tuple(self._eq_gains),
+            eq_bands=tuple(self.eq_bands),
+            eq_q=float(self._eq_q_default),
             limiter=bool(self.limiter),
             compressor=bool(self.compressor),
             true_peak=bool(self.true_peak),

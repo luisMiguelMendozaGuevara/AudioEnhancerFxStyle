@@ -24,6 +24,9 @@ from .dsp import (
     EFFECT_KEYS,
     EFFECT_MAX,
     EFFECT_MIN,
+    EQ_BAND_SETS,
+    EQ_FREQ_MAX,
+    EQ_FREQ_MIN,
     MASTER_DB_MAX,
     MASTER_DB_MIN,
 )
@@ -76,13 +79,15 @@ class ConfigManager:
     # ---------- presets ----------
 
     # Esquema de preset v2 (dict). Campos: volume, bass, treble, eq_gains,
-    # effects{5}, balance_db, master_gain_db, leveling. El esquema v1 (tupla de
-    # 4) se migra automáticamente a v2 con los campos nuevos a 0.
+    # eq_bands, eq_q, effects{5}, balance_db, master_gain_db, leveling. El
+    # esquema v1 (tupla de 4) se migra automáticamente a v2.
     PRESET_V2_KEYS = (
         "volume",
         "bass",
         "treble",
         "eq_gains",
+        "eq_bands",
+        "eq_q",
         "effects",
         "balance_db",
         "master_gain_db",
@@ -92,20 +97,24 @@ class ConfigManager:
     def _preset_v1_to_v2(self, value: Any) -> dict[str, Any] | None:
         """Migra un preset v1 (vol, bass, treble, gains) al esquema v2.
 
-        Los campos nuevos se rellenan a 0 (apagados): un preset viejo conserva
+        Los campos nuevos se rellenan a 0 (apagados) y las bandas con el set
+        por defecto del número de ganancias: un preset viejo conserva
         EXACTAMENTE el sonido que tenía."""
         if (
             not isinstance(value, (list, tuple))
             or len(value) != 4
             or not isinstance(value[3], (list, tuple))
-            or len(value[3]) != self._eq_count
+            or len(value[3]) not in EQ_BAND_SETS
         ):
             return None
+        n = len(value[3])
         return {
             "volume": value[0],
             "bass": value[1],
             "treble": value[2],
             "eq_gains": list(value[3]),
+            "eq_bands": list(EQ_BAND_SETS[n]),
+            "eq_q": 1.4,
             "effects": {},
             "balance_db": 0.0,
             "master_gain_db": 0.0,
@@ -115,8 +124,8 @@ class ConfigManager:
     def sanitize_preset(self, value: Any) -> dict[str, Any] | None:
         """Valida un preset (v1 tupla o v2 dict) y lo normaliza a v2; None si inválido.
 
-        Un preset con ganancias de otra longitud desalinearía _c_eq del DSP
-        (broadcasting roto dentro del callback); mejor fuera en la puerta."""
+        Un preset con ganancias de longitud no soportada desalinearía _c_eq del
+        DSP (broadcasting roto dentro del callback); mejor fuera en la puerta."""
         if isinstance(value, (list, tuple)):
             value = self._preset_v1_to_v2(value)
             if value is None:
@@ -124,8 +133,17 @@ class ConfigManager:
         if not isinstance(value, dict):
             return None
         gains = value.get("eq_gains")
-        if not isinstance(gains, (list, tuple)) or len(gains) != self._eq_count:
+        if not isinstance(gains, (list, tuple)) or len(gains) not in EQ_BAND_SETS:
             return None
+        n = len(gains)
+        bands_raw = value.get("eq_bands")
+        try:
+            if isinstance(bands_raw, (list, tuple)) and len(bands_raw) == n:
+                bands = sorted(_clamp(float(f), EQ_FREQ_MIN, EQ_FREQ_MAX) for f in bands_raw)
+            else:
+                bands = list(EQ_BAND_SETS[n])
+        except (TypeError, ValueError):
+            bands = list(EQ_BAND_SETS[n])
         try:
             effects_raw = value.get("effects")
             effects: dict[str, float] = {}
@@ -138,6 +156,8 @@ class ConfigManager:
                 "bass": _clamp(float(value.get("bass", 0.0)), BASS_MIN, BASS_MAX),
                 "treble": _clamp(float(value.get("treble", 0.0)), TREBLE_MIN, TREBLE_MAX),
                 "eq_gains": [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in gains],
+                "eq_bands": bands,
+                "eq_q": _clamp(self.as_float(value.get("eq_q"), 1.4), 0.2, 10.0),
                 "effects": effects,
                 "balance_db": _clamp(self.as_float(value.get("balance_db"), 0.0), BALANCE_DB_MIN, BALANCE_DB_MAX),
                 "master_gain_db": _clamp(self.as_float(value.get("master_gain_db"), 0.0), MASTER_DB_MIN, MASTER_DB_MAX),
@@ -184,15 +204,27 @@ class ConfigManager:
         if not raw:
             raw = {}
 
-        # EQ: lista de la longitud exacta y floats; si no, None (el caller
-        # conserva las ganancias actuales del DSP).
+        # EQ: lista de una longitud soportada (5/9/10/15/31) y floats; si no,
+        # None (el caller conserva las ganancias actuales del DSP). Con las
+        # bandas (Fase 5): si faltan o no cuadran, se usa el set por defecto.
         eq_gains = None
+        eq_bands = None
         candidate = raw.get("eq_gains")
-        if isinstance(candidate, list) and len(candidate) == self._eq_count:
+        if isinstance(candidate, list) and len(candidate) in EQ_BAND_SETS:
             try:
                 eq_gains = [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in candidate]
             except (TypeError, ValueError):
                 eq_gains = None
+        if eq_gains is not None:
+            n = len(eq_gains)
+            bands_raw = raw.get("eq_bands")
+            if isinstance(bands_raw, list) and len(bands_raw) == n:
+                try:
+                    eq_bands = sorted(_clamp(float(f), EQ_FREQ_MIN, EQ_FREQ_MAX) for f in bands_raw)
+                except (TypeError, ValueError):
+                    eq_bands = None
+            if eq_bands is None:
+                eq_bands = list(EQ_BAND_SETS[n])
 
         # Latencia: solo los valores ofrecidos por la UI (40/60/100).
         try:
@@ -222,6 +254,8 @@ class ConfigManager:
             "bass": _clamp(self.as_float(raw.get("bass"), 0.0), BASS_MIN, BASS_MAX),
             "treble": _clamp(self.as_float(raw.get("treble"), 0.0), TREBLE_MIN, TREBLE_MAX),
             "eq_gains": eq_gains,
+            "eq_bands": eq_bands,
+            "eq_q": _clamp(self.as_float(raw.get("eq_q"), 1.4), 0.2, 10.0),
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),
             "true_peak": self.as_bool(raw.get("true_peak"), True),

@@ -239,3 +239,34 @@ def test_sanitize_presets_acepta_mezcla_v1_y_v2(tmp_path):
     assert set(out) == {"viejo", "nuevo"}
     assert out["viejo"]["effects"] == {}
     assert out["nuevo"]["effects"] == {"surround": 4.0}
+
+
+# ---------- EQ avanzado (Fase 5): bandas y Q ----------
+
+
+def test_preset_con_bandas_y_q_round_trip(tmp_path):
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    p = mgr.sanitize_preset(
+        {
+            "volume": 1.0,
+            "eq_gains": [0.0] * 5,
+            "eq_bands": [100.0, 400.0, 1000.0, 4000.0, 10000.0],
+            "eq_q": 3.0,
+        }
+    )
+    assert p is not None
+    assert p["eq_bands"] == [100.0, 400.0, 1000.0, 4000.0, 10000.0]
+    assert p["eq_q"] == 3.0
+
+
+def test_preset_con_longitud_no_soportada_se_rechaza(tmp_path):
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    assert mgr.sanitize_preset([1.0, 0.0, 0.0, [0.0] * 8]) is None
+    assert mgr.sanitize_preset({"eq_gains": [0.0] * 8}) is None
+
+
+def test_preset_sin_bandas_usa_el_set_por_defecto(tmp_path):
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    p = mgr.sanitize_preset({"eq_gains": [0.0] * 5})
+    assert p is not None and len(p["eq_bands"]) == 5
+    assert p["eq_bands"] == sorted(p["eq_bands"])
