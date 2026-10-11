@@ -440,14 +440,16 @@ PRESETS = {
         "effects": {"bass": 6.0, "dynamic_boost": 3.0},
     },
     # Medidos con señal tipo música (pink noise): V suave (+2.7 graves,
-    # +2.3 agudos), +0.8 dB de loudness, sin dureza y con headroom.
+    # +2.3 agudos), +0.8 dB de loudness, sin dureza y con headroom. Leveling 2
+    # (no 4): con 4 bajaba la música fuerte ~1.7 dB y obligaba a subir el
+    # volumen, y el techo acababa aplastando los picos ("recortes").
     "Recomendado (altavoces)": {
         "volume": 1.0,
         "bass": 2.0,
         "treble": 1.0,
         "eq_gains": [0.5, 0.5, 0.0, -0.5, 0.0, 0.0, 0.5, 0.5, 0.5],
         "effects": {"dynamic_boost": 5.0, "fidelity": 4.0, "bass": 3.0, "ambience": 1.0, "surround": 2.0},
-        "leveling": 4.0,
+        "leveling": 2.0,
     },
     # Neutro + crossfeed: para auriculares (no realza los extremos).
     "Recomendado (auriculares)": {
