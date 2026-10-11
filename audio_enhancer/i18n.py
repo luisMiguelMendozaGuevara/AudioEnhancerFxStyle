@@ -50,6 +50,8 @@ TRANSLATIONS = {
     "Juegos (enhancer)": "Gaming (enhancer)",
     "Voz (enhancer)": "Voice (enhancer)",
     "Graves (enhancer)": "Bass (enhancer)",
+    "Recomendado (altavoces)": "Recommended (speakers)",
+    "Recomendado (auriculares)": "Recommended (headphones)",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -436,6 +438,25 @@ PRESETS = {
         "treble": 0.0,
         "eq_gains": [4.0, 3.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
         "effects": {"bass": 6.0, "dynamic_boost": 3.0},
+    },
+    # Medidos con señal tipo música (pink noise): V suave (+2.7 graves,
+    # +2.3 agudos), +0.8 dB de loudness, sin dureza y con headroom.
+    "Recomendado (altavoces)": {
+        "volume": 1.0,
+        "bass": 2.0,
+        "treble": 1.0,
+        "eq_gains": [0.5, 0.5, 0.0, -0.5, 0.0, 0.0, 0.5, 0.5, 0.5],
+        "effects": {"dynamic_boost": 5.0, "fidelity": 4.0, "bass": 3.0, "ambience": 1.0, "surround": 2.0},
+        "leveling": 4.0,
+    },
+    # Neutro + crossfeed: para auriculares (no realza los extremos).
+    "Recomendado (auriculares)": {
+        "volume": 1.0,
+        "bass": 1.0,
+        "treble": 0.5,
+        "eq_gains": [0.0] * 9,
+        "effects": {"dynamic_boost": 3.0, "fidelity": 3.0, "bass": 2.0, "ambience": 2.0, "surround": 3.0},
+        "leveling": 2.0,
     },
 }
 
