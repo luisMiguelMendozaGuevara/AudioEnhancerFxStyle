@@ -216,6 +216,19 @@ class NewMainWindow(QMainWindow):
         state.safety_ceiling_changed.connect(lambda on: setattr(self.enhancer, "safety_ceiling_enabled", bool(on)))
         state.final_clip_changed.connect(lambda on: setattr(self.enhancer, "final_clip_enabled", bool(on)))
 
+        def _set_effect(key: str):
+            """Fija un efecto de la capa enhancer (dict copiado, no mutado)."""
+
+            def _apply(v) -> None:
+                eff = dict(self.enhancer.effects)
+                eff[key] = float(v)
+                self.enhancer.effects = eff
+
+            return _apply
+
+        state.dynamic_boost_changed.connect(_set_effect("dynamic_boost"))
+        state.leveling_changed.connect(_set_effect("leveling"))
+
         def _apply_crossfeed(cfg: dict) -> None:
             self.enhancer.crossfeed = bool(cfg["enabled"])
             self.enhancer.crossfeed_preset = str(cfg["preset"])
@@ -954,6 +967,8 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_true_peak(self.enhancer.true_peak)
         self._pages["effects"].set_safety_ceiling(self.enhancer.safety_ceiling_enabled)
         self._pages["effects"].set_final_clip(self.enhancer.final_clip_enabled)
+        self._pages["effects"].set_dynamic_boost(float(self.enhancer.effects.get("dynamic_boost", 0.0)))
+        self._pages["effects"].set_leveling(float(self.enhancer.effects.get("leveling", 0.0)))
         self._pages["effects"].set_crossfeed(
             self.enhancer.crossfeed,
             self.enhancer.crossfeed_preset,

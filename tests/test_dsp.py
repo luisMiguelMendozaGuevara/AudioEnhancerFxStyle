@@ -984,3 +984,92 @@ def test_dc_blocker_se_puede_aislar_en_tests():
     warm(e, x)
     y = e.process(x.copy())
     assert np.allclose(y, x, atol=1e-4)
+
+
+# ---------- Dynamic Boost y Leveling (Fase 1) ----------
+
+
+def _fx(amount: dict, blocks: int = 90):
+    """Enhancer aislado (sin comp/limit/DC) con efectos enhancer configurados."""
+    e = Enhancer()
+    e.compressor = False
+    e.limiter = False
+    e.dc_block_enabled = False
+    e.effects = dict(amount)
+    return e, blocks
+
+
+def test_dynamic_boost_apagado_es_passthrough():
+    e, blocks = _fx({"dynamic_boost": 0.0})
+    x = _stereo(0.05, 440.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_dynamic_boost_sube_senal_debil():
+    """Señal débil (-29 dBFS) con boost 10: sube de forma clara."""
+    x = _stereo(0.05, 440.0)
+    e_off, blocks = _fx({"dynamic_boost": 0.0})
+    warm(e_off, x, blocks=blocks)
+    rms_off = _rms(e_off.process(x.copy()))
+    e_on, _ = _fx({"dynamic_boost": 10.0})
+    warm(e_on, x, blocks=blocks)
+    rms_on = _rms(e_on.process(x.copy()))
+    assert rms_on > rms_off * 1.5
+
+
+def test_dynamic_boost_no_toca_senal_fuerte():
+    """Señal ya alta (-5 dBFS): el boost no la toca (0 dB de subida)."""
+    x = _stereo(0.8, 440.0)
+    e, blocks = _fx({"dynamic_boost": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_dynamic_boost_ganancia_estable_sin_bombeo():
+    """En régimen estable la ganancia no oscila (sin pumping audible)."""
+    x = _stereo(0.05, 440.0)
+    e, blocks = _fx({"dynamic_boost": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    m = np.abs(x[:, 0]) > 0.01  # evitar divisiones cerca de los cruces por cero
+    g = y[m, 0] / x[m, 0]
+    assert float(g.std()) < 0.01
+
+
+def test_dynamic_boost_silencio_no_produce_nan():
+    e, _ = _fx({"dynamic_boost": 10.0})
+    x = np.zeros((1024, 2), dtype=np.float32)
+    y = e.process(x.copy())
+    assert np.all(np.isfinite(y))
+    assert np.allclose(y, 0.0)
+
+
+def test_leveling_apagado_es_passthrough():
+    e, blocks = _fx({"leveling": 0.0})
+    x = _stereo(0.2, 440.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_leveling_sube_debil_y_baja_fuerte():
+    """AGC: la señal débil sube hacia el objetivo y la fuerte baja."""
+    x_debil = _stereo(0.05, 440.0)
+    e1, blocks = _fx({"leveling": 10.0})
+    warm(e1, x_debil, blocks=blocks)
+    assert _rms(e1.process(x_debil.copy())) > _rms(x_debil) * 1.3
+
+    x_fuerte = _stereo(0.8, 440.0)
+    e2, _ = _fx({"leveling": 10.0})
+    warm(e2, x_fuerte, blocks=blocks)
+    assert _rms(e2.process(x_fuerte.copy())) < _rms(x_fuerte)
+
+
+def test_leveling_silencio_no_produce_nan():
+    e, _ = _fx({"leveling": 10.0})
+    x = np.zeros((512, 2), dtype=np.float32)
+    y = e.process(x.copy())
+    assert np.all(np.isfinite(y))

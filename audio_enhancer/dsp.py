@@ -111,6 +111,18 @@ def default_effects() -> dict[str, float]:
     return {k: 0.0 for k in EFFECT_KEYS}
 
 
+# Dynamic Boost (compresor ascendente): objetivo de loudness (dBFS RMS) y tope
+# del boost. Sube los pasajes bajos sin tocar los picos.
+DYNAMIC_BOOST_TARGET_DB = -18.0
+DYNAMIC_BOOST_MAX_DB = 12.0
+# Leveling (AGC lento): objetivo y tope de la corrección (sube/baja).
+LEVELING_TARGET_DB = -18.0
+LEVELING_MAX_DB = 9.0
+# Tiempos de la envolvente (segundos): ataque rápido y release lento.
+ENV_ATTACK_S = 0.005
+ENV_RELEASE_S = 0.35
+
+
 @lru_cache(maxsize=8)
 def _smooth_kernel(k: int) -> np.ndarray:
     """Kernel Hann normalizado para el suavizado de ganancia del limitador.
@@ -260,6 +272,9 @@ class Enhancer:
         self._dc_state: np.ndarray | None = None
         self._dc_R: float = 0.0
         self._dc_src_rate: int = 0
+        # Estados (zi) de las envolventes de las etapas enhancer (Dynamic
+        # Boost, Leveling): dict slot -> zi, persistente entre bloques.
+        self._env_zi: dict[str, np.ndarray] = {}
         # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
         # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
         # global); los _l/_r alimentan los medidores estéreo de la UI.
@@ -329,6 +344,7 @@ class Enhancer:
         self._c_balance_db = 0.0
         self._c_effects = default_effects()
         self._dc_state = None
+        self._env_zi = {}
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -730,8 +746,13 @@ class Enhancer:
         # realmente sale: antes el volumen se aplicaba antes del compresor y
         # el limitador "suave" dejaba pasar ~70% del exceso por encima de su
         # umbral.
+        # Capa enhancer: Dynamic Boost (compresor ascendente) tras el EQ.
+        y = self._dynamic_boost(y, block_sec)
         if self.compressor:
             y = self._compress(y, block_sec)
+        # Leveling (AGC lento) antes del volumen del usuario (normaliza el
+        # material, no el ajuste manual del usuario).
+        y = self._leveling(y, block_sec)
         y = self._apply_volume(y, block_sec)
         if self.limiter:
             y = self._limit(y)
@@ -843,6 +864,66 @@ class Enhancer:
         red_db = np.where(over > 0.0, -over * (1.0 - 1.0 / self.comp_ratio), 0.0)
         gain = (10.0 ** (red_db / 20.0)) * self.comp_makeup
         return (y * gain[:, None].astype(np.float32)).astype(np.float32, copy=False)
+
+    # ---------- capa enhancer: Dynamic Boost y Leveling (Fase 1) ----------
+
+    def _rms_envelope(self, y: np.ndarray, slot: str) -> np.ndarray:
+        """Envolvente RMS por muestra (link estéreo), ataque rápido/release lento.
+
+        Reutiliza el truco dual de ``_compress``: dos one-pole sobre la potencia
+        (rápido para subidas, lento para caídas) y se toma el máximo. El estado
+        persiste por ``slot`` entre bloques (no se reinicia cada bloque)."""
+        sig = _scipy_signal()
+        a_att = 1.0 - math.exp(-1.0 / (self.sample_rate * ENV_ATTACK_S))
+        a_rel = 1.0 - math.exp(-1.0 / (self.sample_rate * ENV_RELEASE_S))
+        p = np.mean(np.asarray(y, dtype=np.float64) ** 2, axis=1)
+        zi_att = self._env_zi.get(slot + "_att")
+        zi_rel = self._env_zi.get(slot + "_rel")
+        zi_att = np.zeros(1) if zi_att is None else zi_att
+        zi_rel = np.zeros(1) if zi_rel is None else zi_rel
+        fast, self._env_zi[slot + "_att"] = sig.lfilter([a_att], [1.0, a_att - 1.0], p, zi=zi_att)
+        slow, self._env_zi[slot + "_rel"] = sig.lfilter([a_rel], [1.0, a_rel - 1.0], p, zi=zi_rel)
+        return np.sqrt(np.maximum(np.maximum(fast, slow), 0.0))
+
+    @staticmethod
+    def _env_db(env: np.ndarray) -> np.ndarray:
+        return 20.0 * np.log10(np.maximum(env, 1e-9))
+
+    def _dynamic_boost(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Compresor ASCENDENTE: sube los pasajes bajos sin tocar los picos.
+
+        Envolvente RMS (ataque 5 ms / release 350 ms) -> boost = k*(objetivo-env)
+        acotado a [0, +12] dB. ``amount`` 0-10 (0 = apagado)."""
+        amount = float(self.effects.get("dynamic_boost", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0:
+            self._env_zi.pop("db_att", None)
+            self._env_zi.pop("db_rel", None)
+            return y
+        env_db = self._env_db(self._rms_envelope(y, "db"))
+        k = (amount / EFFECT_MAX) * 1.5
+        boost_db = np.clip(k * (DYNAMIC_BOOST_TARGET_DB - env_db), 0.0, DYNAMIC_BOOST_MAX_DB)
+        if float(boost_db.max()) <= 1e-3:
+            return y  # material ya alto: nada que subir, sin alocar
+        gain = (10.0 ** (boost_db / 20.0)).astype(np.float32)
+        return (y * gain[:, None]).astype(np.float32, copy=False)
+
+    def _leveling(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """AGC lento: iguala el volumen del material hacia un objetivo.
+
+        Envolvente RMS lenta -> corrección (objetivo - env) acotada a ±9 dB,
+        escalada por ``amount`` 0-10 (0 = apagado). Va ANTES del volumen del
+        usuario: normaliza el material, no su ajuste manual."""
+        amount = float(self.effects.get("leveling", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0:
+            self._env_zi.pop("lv_att", None)
+            self._env_zi.pop("lv_rel", None)
+            return y
+        env_db = self._env_db(self._rms_envelope(y, "lv"))
+        corr_db = np.clip(LEVELING_TARGET_DB - env_db, -LEVELING_MAX_DB, LEVELING_MAX_DB) * (amount / EFFECT_MAX)
+        if float(np.abs(corr_db).max()) <= 1e-3:
+            return y
+        gain = (10.0 ** (corr_db / 20.0)).astype(np.float32)
+        return (y * gain[:, None]).astype(np.float32, copy=False)
 
     def _limit(self, y, thr=None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).

@@ -37,6 +37,8 @@ TRANSLATIONS = {
     "Techo de seguridad": "Safety ceiling",
     "Recorte final (±1.0)": "Final clip (±1.0)",
     "Crossfeed (auriculares)": "Crossfeed (headphones)",
+    "Refuerzo dinámico": "Dynamic Boost",
+    "Nivelación (volumen)": "Leveling (volume)",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -254,6 +256,14 @@ EXPLAIN = {
     "opuesto (con filtro) para que el estéreo se sienta 'fuera de la cabeza', "
     "como con altavoces. NO es una mejora universal: compacta la imagen "
     "estéreo. Ajusta el perfil (Natural/Moderate/Strong) a tu gusto.",
+    "dynamic_boost": "Refuerzo dinámico: compresor ASCENDENTE. Sube los pasajes "
+    "bajos (hasta +12 dB) sin tocar los picos, para que todo suene más lleno "
+    "y 'cerca' sin subir el volumen. Un exceso puede reducir la dinámica "
+    "percibida; empieza por 3-5 y sube poco a poco.",
+    "leveling": "Nivelación de volumen: iguala el volumen ENTRE pistas con un "
+    "AGC muy lento (objetivo ~-18 dBFS, corrección ±9 dB). Una canción bajita "
+    "sube y una muy fuerte baja un poco: dejas de tocar el volumen entre "
+    "canciones. En música clásica puede aplanar los contrastes.",
 }
 
 EXPLAIN_EN = {
@@ -283,6 +293,12 @@ EXPLAIN_EN = {
     "opposite one (filtered) so stereo feels 'out of your head', like speakers. "
     "It is NOT a universal improvement: it narrows the stereo image. Pick the "
     "profile (Natural/Moderate/Strong) to taste.",
+    "dynamic_boost": "Dynamic Boost: an UPWARD compressor. It raises quiet "
+    "passages (up to +12 dB) without touching peaks, so everything sounds "
+    "fuller and 'closer' without raising the volume. Start at 3-5.",
+    "leveling": "Volume leveling: evens out loudness BETWEEN tracks with a very "
+    "slow AGC (target ~-18 dBFS, ±9 dB correction). Quiet songs come up, very "
+    "loud ones come down a bit, so you stop touching the volume between songs.",
 }
 
 EQ_EXPLAIN = {

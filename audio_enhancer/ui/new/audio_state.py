@@ -51,6 +51,9 @@ class AudioState(QObject):
     true_peak_changed = Signal(bool)
     safety_ceiling_changed = Signal(bool)
     final_clip_changed = Signal(bool)
+    # Capa enhancer (Fase 1): escalas 0-10.
+    dynamic_boost_changed = Signal(float)
+    leveling_changed = Signal(float)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -87,6 +90,9 @@ class AudioState(QObject):
         self._true_peak: bool = True
         self._safety_ceiling: bool = True
         self._final_clip: bool = True
+        # Capa enhancer (Fase 1): 0-10.
+        self._dynamic_boost: float = 0.0
+        self._leveling: float = 0.0
         # Crossfeed BS2B (auriculares): OFF por defecto + preset.
         self._crossfeed: bool = False
         self._crossfeed_preset: str = "Natural"
@@ -320,6 +326,28 @@ class AudioState(QObject):
             self._final_clip = value
             self.final_clip_changed.emit(value)
 
+    @property
+    def dynamic_boost(self) -> float:
+        return self._dynamic_boost
+
+    @dynamic_boost.setter
+    def dynamic_boost(self, value: float) -> None:
+        v = float(value)
+        if self._dynamic_boost != v:
+            self._dynamic_boost = v
+            self.dynamic_boost_changed.emit(v)
+
+    @property
+    def leveling(self) -> float:
+        return self._leveling
+
+    @leveling.setter
+    def leveling(self, value: float) -> None:
+        v = float(value)
+        if self._leveling != v:
+            self._leveling = v
+            self.leveling_changed.emit(v)
+
     def _emit_crossfeed(self) -> None:
         self.crossfeed_changed.emit(
             {
@@ -404,4 +432,6 @@ class AudioState(QObject):
         self._crossfeed_feed_db = float(enhancer.crossfeed_feed_db)
         self.crossfeed = bool(enhancer.crossfeed)
         self.final_clip = bool(enhancer.final_clip_enabled)
+        self.dynamic_boost = float(enhancer.effects.get("dynamic_boost", 0.0))
+        self.leveling = float(enhancer.effects.get("leveling", 0.0))
         self.ab_enabled = float(enhancer.blend) > 0.5

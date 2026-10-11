@@ -506,6 +506,14 @@ def test_exportar_presets_a_json(window, tmp_path, monkeypatch):
     assert data["Exportado"]["eq_gains"] == [0.0] * 9
 
 
+def test_efectos_enhancer_conectados_al_motor(window):
+    """Fase 1: los sliders de la capa enhancer llegan al DSP (dict effects)."""
+    window.state.dynamic_boost = 4.0
+    assert window.enhancer.effects.get("dynamic_boost") == pytest.approx(4.0)
+    window.state.leveling = 6.0
+    assert window.enhancer.effects.get("leveling") == pytest.approx(6.0)
+
+
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
     """R3-B2: la FFT solo corre si la ventana es visible, la página activa es
     Home y la app no se está cerrando (offscreen: isVisible() es False)."""

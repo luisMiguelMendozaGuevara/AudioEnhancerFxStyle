@@ -24,6 +24,22 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
 - Tests: DC blocker (ON por defecto, quita continua, transparente >1 kHz),
   migración v1→v2 (config y JSON importado), saneo v2, y suite completa verde.
 
+### Fase 1 — Dynamic Boost + Leveling (2026-10-10)
+- **Dynamic Boost** (`effects["dynamic_boost"]`, 0-10): compresor ASCENDENTE.
+  Envolvente RMS por muestra (ataque 5 ms / release 350 ms, link estéreo) →
+  `boost = k·(objetivo − env)` acotado a [0, +12] dB (objetivo −18 dBFS RMS).
+  Sube los pasajes bajos sin tocar los picos.
+- **Leveling** (`effects["leveling"]`, 0-10): AGC lento hacia −18 dBFS con
+  corrección ±9 dB, colocado ANTES del volumen del usuario (normaliza el
+  material, no el ajuste manual).
+- Ambos a 0 por defecto (apagados = passthrough). Coste medido: ~30-70 µs por
+  bloque cada uno (~0.2 % de tiempo real).
+- **UI**: tarjetas "Refuerzo dinámico" y "Nivelación (volumen)" 0-10 con toggle;
+  señales `dynamic_boost_changed`/`leveling_changed` en `AudioState`, cableadas
+  al dict `effects` del motor; textos ES/EN (`explain`).
+- **Tests**: apagado = passthrough; sube señal débil; señal fuerte intacta;
+  ganancia estable (sin pumping); silencio sin NaN; conexión UI→motor.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

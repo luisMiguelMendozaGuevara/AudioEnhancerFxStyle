@@ -144,6 +144,24 @@ class EffectsPage(QWidget):
             self._treble_card._toggle.toggled.connect(self._on_treble_toggle)
         layout.addWidget(self._treble_card)
 
+        # Capa enhancer (Fase 1): Dynamic Boost (sube los pasajes bajos sin
+        # tocar los picos) y Leveling (AGC lento que iguala el volumen).
+        self._dynamic_boost_card = EffectCard(
+            self._t("Refuerzo dinámico"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("dynamic_boost")
+        )
+        self._dynamic_boost_card._slider.valueChanged.connect(lambda v: self._on_dynamic_boost(v / 100))
+        if self._dynamic_boost_card._toggle:
+            self._dynamic_boost_card._toggle.toggled.connect(self._on_dynamic_boost_toggle)
+        layout.addWidget(self._dynamic_boost_card)
+
+        self._leveling_card = EffectCard(
+            self._t("Nivelación (volumen)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("leveling")
+        )
+        self._leveling_card._slider.valueChanged.connect(lambda v: self._on_leveling(v / 100))
+        if self._leveling_card._toggle:
+            self._leveling_card._toggle.toggled.connect(self._on_leveling_toggle)
+        layout.addWidget(self._leveling_card)
+
         self._limiter_card = EffectCard(
             self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
         )
@@ -296,6 +314,22 @@ class EffectsPage(QWidget):
             self._treble_card._toggle.setText("ON" if on else "OFF")
         self._state.treble = self._treble_card.value() if on else 0.0
 
+    def _on_dynamic_boost(self, v) -> None:
+        self._state.dynamic_boost = v
+
+    def _on_leveling(self, v) -> None:
+        self._state.leveling = v
+
+    def _on_dynamic_boost_toggle(self, on) -> None:
+        if self._dynamic_boost_card._toggle is not None:
+            self._dynamic_boost_card._toggle.setText("ON" if on else "OFF")
+        self._state.dynamic_boost = self._dynamic_boost_card.value() if on else 0.0
+
+    def _on_leveling_toggle(self, on) -> None:
+        if self._leveling_card._toggle is not None:
+            self._leveling_card._toggle.setText("ON" if on else "OFF")
+        self._state.leveling = self._leveling_card.value() if on else 0.0
+
     def _on_limiter_toggle(self, on) -> None:
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setText("ON" if on else "OFF")
@@ -350,6 +384,12 @@ class EffectsPage(QWidget):
 
     def set_treble(self, v) -> None:
         self._treble_card.set_value(v)
+
+    def set_dynamic_boost(self, v) -> None:
+        self._dynamic_boost_card.set_value(v)
+
+    def set_leveling(self, v) -> None:
+        self._leveling_card.set_value(v)
 
     def set_limiter(self, on) -> None:
         self._limiter_card.set_enabled(on)
