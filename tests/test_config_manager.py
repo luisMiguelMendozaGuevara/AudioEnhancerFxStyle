@@ -32,7 +32,9 @@ def test_as_bool_estricto():
 def test_sanitize_preset_valido_e_invalido():
     mgr = ConfigManager(eq_band_count=9)
     ok = mgr.sanitize_preset([0.8, 2.0, 1.0, [0] * 9])
-    assert ok == (0.8, 2.0, 1.0, [0.0] * 9)
+    assert ok is not None  # v1 migrado a v2 (dict)
+    assert ok["volume"] == 0.8 and ok["bass"] == 2.0 and ok["treble"] == 1.0
+    assert ok["eq_gains"] == [0.0] * 9
     # Longitud de ganancias equivocada: fuera.
     assert mgr.sanitize_preset([0.8, 2.0, 1.0, [0] * 8]) is None
     # Tipos basura: fuera.
@@ -52,7 +54,7 @@ def test_sanitize_presets_filtra_invalidos():
         }
     )
     assert list(out) == ["bueno"]
-    assert out["bueno"] == (0.9, 2.0, 1.0, [0.0] * 9)
+    assert out["bueno"]["volume"] == 0.9 and out["bueno"]["eq_gains"] == [0.0] * 9
     # No-dict no lanza y devuelve vacío (JSON importado hostil).
     assert mgr.sanitize_presets(None) == {}
     assert mgr.sanitize_presets([1, 2, 3]) == {}
@@ -103,7 +105,11 @@ def test_load_acota_valores_al_rango_de_la_ui(tmp_path):
     assert cfg["bass"] == 12.0  # tope del slider
     assert cfg["treble"] == 0.0  # el slider no baja de 0
     assert cfg["eq_gains"][0] == 12.0 and cfg["eq_gains"][1] == -12.0
-    assert cfg["custom_presets"]["bestia"] == (2.0, 12.0, 0.0, [12.0] * 9)
+    # Preset v1 (tupla) migrado a v2 (dict) con los campos nuevos a 0.
+    bestia = cfg["custom_presets"]["bestia"]
+    assert bestia["volume"] == 2.0 and bestia["bass"] == 12.0 and bestia["treble"] == 0.0
+    assert bestia["eq_gains"] == [12.0] * 9
+    assert bestia["effects"] == {}
 
 
 def test_load_defaults_sin_archivo(tmp_path):
@@ -156,7 +162,9 @@ def test_load_presets_validos_pasran(tmp_path):
     assert cfg["eq_gains"] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
     assert cfg["latency_pref"] == 40
     assert cfg["language"] == "en" and cfg["theme"] == "dark"
-    assert cfg["custom_presets"]["Noche"] == (0.9, 1.0, 0.0, [0.0] * 9)
+    noche = cfg["custom_presets"]["Noche"]
+    assert noche["volume"] == 0.9 and noche["bass"] == 1.0 and noche["treble"] == 0.0
+    assert noche["eq_gains"] == [0.0] * 9
 
 
 def test_migrate_es_punto_de_extensión(tmp_path):
@@ -178,3 +186,56 @@ def test_true_peak_default_y_explicito(tmp_path):
     # valor no-bool -> default
     p.write_text(json.dumps({"true_peak": "no"}), encoding="utf-8")
     assert ConfigManager(eq_band_count=9, path=str(p)).load()["true_peak"] is True
+
+
+# ---------- presets v2 (Fase 0) ----------
+
+
+def test_sanitize_preset_migra_v1_a_v2(tmp_path):
+    """Un preset v1 (tupla) se migra a v2 (dict) con los campos nuevos a 0."""
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    v2 = mgr.sanitize_preset((1.2, 3.0, 1.5, [1, 2, 3, 4, 5, 6, 7, 8, 9]))
+    assert v2 is not None
+    assert v2["volume"] == 1.2 and v2["bass"] == 3.0 and v2["treble"] == 1.5
+    assert v2["eq_gains"] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    assert v2["effects"] == {}  # migrado: nada activado
+    assert v2["balance_db"] == 0.0 and v2["master_gain_db"] == 0.0 and v2["leveling"] == 0.0
+
+
+def test_sanitize_preset_v2_acota_y_sanea(tmp_path):
+    """Un preset v2 se acota a los rangos de la UI y descarta claves raras."""
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    v2 = mgr.sanitize_preset(
+        {
+            "volume": 9.0,
+            "bass": -5.0,
+            "treble": 99.0,
+            "eq_gains": [0] * 9,
+            "effects": {"bass": 99.0, "fidelity": -3.0, "raro": 5.0},
+            "balance_db": 50.0,
+            "master_gain_db": -50.0,
+            "leveling": 99.0,
+        }
+    )
+    assert v2 is not None
+    assert v2["volume"] == 2.0  # tope
+    assert v2["bass"] == 0.0  # suelo
+    assert v2["treble"] == 12.0  # tope
+    assert v2["effects"] == {"bass": 10.0, "fidelity": 0.0}  # acotado y sin "raro"
+    assert v2["balance_db"] == 20.0 and v2["master_gain_db"] == -20.0
+    assert v2["leveling"] == 10.0
+
+
+def test_sanitize_presets_acepta_mezcla_v1_y_v2(tmp_path):
+    """Un mapa con presets v1 y v2 se normaliza entero a v2."""
+    mgr = ConfigManager(eq_band_count=9, path=str(tmp_path / "x.json"))
+    out = mgr.sanitize_presets(
+        {
+            "viejo": (1.0, 1.0, 1.0, [0] * 9),
+            "nuevo": {"volume": 1.0, "eq_gains": [0] * 9, "effects": {"surround": 4.0}},
+            "malo": (1.0, 1.0),  # longitud inválida -> fuera
+        }
+    )
+    assert set(out) == {"viejo", "nuevo"}
+    assert out["viejo"]["effects"] == {}
+    assert out["nuevo"]["effects"] == {"surround": 4.0}

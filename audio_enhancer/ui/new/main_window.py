@@ -860,19 +860,23 @@ class NewMainWindow(QMainWindow):
         preset = self._config.sanitize_preset(raw) if raw is not None else None
         if preset is None:
             return
-        vol, bass, treble, gains = preset
         # Cambio EN BLOQUE via instantánea inmutable: el DSP ve un conjunto
-        # coherente de parámetros, nunca una mezcla a medias (H5/H6).
+        # coherente de parámetros, nunca una mezcla a medias (H5/H6). El preset
+        # ya llega normalizado a v2 (dict) por ConfigManager.
         self.enhancer.apply_params(
             EnhancerParams(
-                volume=vol,
-                bass=bass,
-                treble=treble,
-                eq_gains=tuple(gains),
+                volume=float(preset["volume"]),
+                bass=float(preset["bass"]),
+                treble=float(preset["treble"]),
+                eq_gains=tuple(preset["eq_gains"]),
                 limiter=bool(self.enhancer.limiter),
                 compressor=bool(self.enhancer.compressor),
                 true_peak=bool(self.enhancer.true_peak),
                 blend=float(self.enhancer.blend),
+                effects=dict(preset.get("effects") or {}),
+                balance_db=float(preset.get("balance_db") or 0.0),
+                master_gain_db=float(preset.get("master_gain_db") or 0.0),
+                leveling=float(preset.get("leveling") or 0.0),
             )
         )
         self._sync_ui_from_state()
@@ -884,12 +888,17 @@ class NewMainWindow(QMainWindow):
         if not name:
             self._status_bar.set_status_text(self._t("Escribe un nombre para el preset."), WARN)
             return
-        self.custom_presets[name] = (
-            float(self.enhancer.volume),
-            float(self.enhancer.bass),
-            float(self.enhancer.treble),
-            [float(g) for g in self.enhancer.eq_gains],
-        )
+        # Preset v2 (dict): incluye la capa enhancer además de volumen/EQ.
+        self.custom_presets[name] = {
+            "volume": float(self.enhancer.volume),
+            "bass": float(self.enhancer.bass),
+            "treble": float(self.enhancer.treble),
+            "eq_gains": [float(g) for g in self.enhancer.eq_gains],
+            "effects": {k: float(v) for k, v in self.enhancer.effects.items()},
+            "balance_db": float(self.enhancer.balance_db),
+            "master_gain_db": float(self.enhancer.master_gain_db),
+            "leveling": float(self.enhancer.leveling),
+        }
         presets_page.clear_name_entry()
         self._refresh_preset_list(name)
         self._save_config()
@@ -904,7 +913,7 @@ class NewMainWindow(QMainWindow):
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({n: list(v) for n, v in self.custom_presets.items()}, f, ensure_ascii=False, indent=2)
+                json.dump({n: dict(v) for n, v in self.custom_presets.items()}, f, ensure_ascii=False, indent=2)
         except OSError:
             logger.exception("No se pudieron exportar los presets")
             self._status_bar.set_status_text(self._t("No se pudieron exportar los presets."), DANGER)
@@ -1220,7 +1229,7 @@ class NewMainWindow(QMainWindow):
             "notifications": bool(self.notifications_enabled),
             "watchdog": bool(self.watchdog_enabled),
             "native_capture": bool(self.native_capture),
-            "custom_presets": {n: list(v) for n, v in self.custom_presets.items()},
+            "custom_presets": {n: dict(v) for n, v in self.custom_presets.items()},
         }
         if not self._config.save(config):
             logger.warning("Failed to save config")

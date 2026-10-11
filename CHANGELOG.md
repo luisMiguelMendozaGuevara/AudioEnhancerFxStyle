@@ -4,6 +4,26 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [Unreleased] — rama `feat-enhancer-fx`
+
+Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
+
+### Fase 0 — Fundaciones (2026-10-10)
+- **Capa enhancer**: `EnhancerParams`/`Enhancer` ganan `effects` (5 efectos
+  0-10: fidelity, ambience, surround, dynamic_boost, bass), `balance_db`,
+  `master_gain_db` y `leveling`; se replican al proceso hijo (`PARAM_ATTRS` +
+  copia explícita del dict). Todos a 0 por defecto.
+- **DC blocker** (~10 Hz, 1 polo) al inicio de la cadena: quita la componente
+  continua (más headroom, menos trabajo del compresor/exciters). Coste medido:
+  **+114 µs/bloque (~0.5 % de tiempo real)**. Interruptor interno
+  `dc_block_enabled` (ON en producción) para aislarlo en los tests.
+- **Presets v2 (dict)** con **migración automática v1→v2**: los presets viejos
+  conservan su sonido (campos nuevos a 0). Saneo extendido y aplicado a config,
+  import y export; `main_window` aplica/guarda/exporta v2.
+- Helper `_onepole(block_sec, tau)` (alpha de 1 polo) para las etapas siguientes.
+- Tests: DC blocker (ON por defecto, quita continua, transparente >1 kHz),
+  migración v1→v2 (config y JSON importado), saneo v2, y suite completa verde.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

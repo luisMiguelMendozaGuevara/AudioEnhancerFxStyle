@@ -18,6 +18,15 @@ from typing import Any
 
 from .config import load_config, save_config
 from .constants import CONFIG_PATH, DEFAULT_PRESET, LATENCY_CHOICES_MS
+from .dsp import (
+    BALANCE_DB_MAX,
+    BALANCE_DB_MIN,
+    EFFECT_KEYS,
+    EFFECT_MAX,
+    EFFECT_MIN,
+    MASTER_DB_MAX,
+    MASTER_DB_MIN,
+)
 
 logger = logging.getLogger("audio_enhancer.config_manager")
 
@@ -25,11 +34,12 @@ logger = logging.getLogger("audio_enhancer.config_manager")
 # Se ACOTAN al cargar: un config.json editado a mano no puede colar un boost
 # desmedido al DSP (p. ej. volume=10, bass=50), que sonaría a estática/
 # saturación. Coinciden con los sliders: volumen 0..2x, bass/treble 0..+12 dB,
-# bandas EQ -12..+12 dB.
+# bandas EQ -12..+12 dB, efectos 0..10, balance/master ±20 dB, leveling 0..10.
 VOLUME_MIN, VOLUME_MAX = 0.0, 2.0
 BASS_MIN, BASS_MAX = 0.0, 12.0
 TREBLE_MIN, TREBLE_MAX = 0.0, 12.0
 EQ_GAIN_MIN, EQ_GAIN_MAX = -12.0, 12.0
+LEVELING_MIN, LEVELING_MAX = 0.0, 10.0
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -65,11 +75,25 @@ class ConfigManager:
 
     # ---------- presets ----------
 
-    def sanitize_preset(self, value: Any) -> tuple[float, float, float, list[float]] | None:
-        """Valida (vol, bass, treble, gains) con coerción segura; None si inválido.
+    # Esquema de preset v2 (dict). Campos: volume, bass, treble, eq_gains,
+    # effects{5}, balance_db, master_gain_db, leveling. El esquema v1 (tupla de
+    # 4) se migra automáticamente a v2 con los campos nuevos a 0.
+    PRESET_V2_KEYS = (
+        "volume",
+        "bass",
+        "treble",
+        "eq_gains",
+        "effects",
+        "balance_db",
+        "master_gain_db",
+        "leveling",
+    )
 
-        Un preset con ganancias de otra longitud desalinearía _c_eq del DSP
-        (broadcasting roto dentro del callback); mejor fuera en la puerta."""
+    def _preset_v1_to_v2(self, value: Any) -> dict[str, Any] | None:
+        """Migra un preset v1 (vol, bass, treble, gains) al esquema v2.
+
+        Los campos nuevos se rellenan a 0 (apagados): un preset viejo conserva
+        EXACTAMENTE el sonido que tenía."""
         if (
             not isinstance(value, (list, tuple))
             or len(value) != 4
@@ -77,23 +101,59 @@ class ConfigManager:
             or len(value[3]) != self._eq_count
         ):
             return None
+        return {
+            "volume": value[0],
+            "bass": value[1],
+            "treble": value[2],
+            "eq_gains": list(value[3]),
+            "effects": {},
+            "balance_db": 0.0,
+            "master_gain_db": 0.0,
+            "leveling": 0.0,
+        }
+
+    def sanitize_preset(self, value: Any) -> dict[str, Any] | None:
+        """Valida un preset (v1 tupla o v2 dict) y lo normaliza a v2; None si inválido.
+
+        Un preset con ganancias de otra longitud desalinearía _c_eq del DSP
+        (broadcasting roto dentro del callback); mejor fuera en la puerta."""
+        if isinstance(value, (list, tuple)):
+            value = self._preset_v1_to_v2(value)
+            if value is None:
+                return None
+        if not isinstance(value, dict):
+            return None
+        gains = value.get("eq_gains")
+        if not isinstance(gains, (list, tuple)) or len(gains) != self._eq_count:
+            return None
         try:
-            return (
-                _clamp(float(value[0]), VOLUME_MIN, VOLUME_MAX),
-                _clamp(float(value[1]), BASS_MIN, BASS_MAX),
-                _clamp(float(value[2]), TREBLE_MIN, TREBLE_MAX),
-                [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in value[3]],
-            )
+            effects_raw = value.get("effects")
+            effects: dict[str, float] = {}
+            if isinstance(effects_raw, dict):
+                for key in EFFECT_KEYS:
+                    if key in effects_raw:
+                        effects[key] = _clamp(float(effects_raw[key]), EFFECT_MIN, EFFECT_MAX)
+            return {
+                "volume": _clamp(float(value.get("volume", 1.0)), VOLUME_MIN, VOLUME_MAX),
+                "bass": _clamp(float(value.get("bass", 0.0)), BASS_MIN, BASS_MAX),
+                "treble": _clamp(float(value.get("treble", 0.0)), TREBLE_MIN, TREBLE_MAX),
+                "eq_gains": [_clamp(float(g), EQ_GAIN_MIN, EQ_GAIN_MAX) for g in gains],
+                "effects": effects,
+                "balance_db": _clamp(self.as_float(value.get("balance_db"), 0.0), BALANCE_DB_MIN, BALANCE_DB_MAX),
+                "master_gain_db": _clamp(self.as_float(value.get("master_gain_db"), 0.0), MASTER_DB_MIN, MASTER_DB_MAX),
+                "leveling": _clamp(self.as_float(value.get("leveling"), 0.0), LEVELING_MIN, LEVELING_MAX),
+            }
         except (TypeError, ValueError):
             return None
 
-    def sanitize_presets(self, raw: Any) -> dict[str, tuple[float, float, float, list[float]]]:
+    def sanitize_presets(self, raw: Any) -> dict[str, dict[str, Any]]:
         """Sanea un mapa {nombre: preset}; descarta los inválidos.
 
         Se usa al cargar el config y al IMPORTAR un JSON de presets: un archivo
         externo editado a mano no puede colar ganancias de longitud incorrecta
-        (desalinearía el EQ del DSP) ni valores fuera de rango."""
-        out: dict[str, tuple[float, float, float, list[float]]] = {}
+        (desalinearía el EQ del DSP) ni valores fuera de rango. Acepta v1
+        (tupla) y v2 (dict) y devuelve SIEMPRE v2."""
+        out: dict[str, dict[str, Any]] = {}
         if isinstance(raw, dict):
             for name, value in raw.items():
                 preset = self.sanitize_preset(value)

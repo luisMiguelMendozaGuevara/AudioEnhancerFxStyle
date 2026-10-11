@@ -52,6 +52,11 @@ PARAM_ATTRS = (
     "crossfeed_preset",
     "crossfeed_cut_hz",
     "crossfeed_feed_db",
+    # Capa enhancer (Fase 0): balance/master (dB) y leveling (0-10). El dict
+    # `effects` se replica aparte (copia explícita, como eq_gains).
+    "balance_db",
+    "master_gain_db",
+    "leveling",
     "spectrum_enabled",
 )
 
@@ -64,18 +69,23 @@ def snapshot_params(enhancer) -> dict:
         if value is not None:
             snap[name] = value
     snap["eq_gains"] = [float(g) for g in enhancer.eq_gains]
+    # Copia del dict de efectos (nunca la referencia viva: la UI lo muta).
+    snap["effects"] = {str(k): float(v) for k, v in dict(getattr(enhancer, "effects", {})).items()}
     return snap
 
 
 def _apply(enhancer, snap: dict) -> None:
     rate_changed = snap.get("sample_rate") is not None and snap["sample_rate"] != enhancer.sample_rate
     for name, value in snap.items():
-        if name == "eq_gains":
+        if name in ("eq_gains", "effects"):
             continue
         setattr(enhancer, name, value)
     gains = snap.get("eq_gains")
     if gains is not None:
         enhancer.eq_gains = [float(g) for g in gains]
+    effects = snap.get("effects")
+    if isinstance(effects, dict):
+        enhancer.effects = {str(k): float(v) for k, v in effects.items()}
     if rate_changed and hasattr(enhancer, "reset_state"):
         # Cambió la tasa: los estados zi son de otra tasa -> reiniciar.
         enhancer.reset_state()

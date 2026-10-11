@@ -95,6 +95,21 @@ SECTION_EXIT_DB = 0.05
 
 EQ_BANDS = [60, 150, 250, 500, 1000, 2000, 4000, 8000, 12000]
 
+# Capa "enhancer" (paridad FxSound): 5 efectos con escala 0-10 en la UI.
+# Los nombres siguen a FxSound para que la UI sea familiar.
+EFFECT_KEYS = ("fidelity", "ambience", "surround", "dynamic_boost", "bass")
+# Escala de la UI de los efectos y rango interno de los parámetros nuevos.
+EFFECT_MIN, EFFECT_MAX = 0.0, 10.0
+BALANCE_DB_MIN, BALANCE_DB_MAX = -20.0, 20.0
+MASTER_DB_MIN, MASTER_DB_MAX = -20.0, 20.0
+# DC blocker al inicio de la cadena: paso-alto de 1 polo a ~10 Hz.
+DC_BLOCK_HZ = 10.0
+
+
+def default_effects() -> dict[str, float]:
+    """Efectos nuevos a 0 (apagados): la cadena suena igual que antes."""
+    return {k: 0.0 for k in EFFECT_KEYS}
+
 
 @lru_cache(maxsize=8)
 def _smooth_kernel(k: int) -> np.ndarray:
@@ -143,6 +158,12 @@ class EnhancerParams:
     crossfeed_preset: str = "Natural"
     crossfeed_cut_hz: int = 700
     crossfeed_feed_db: float = 4.5
+    # Capa enhancer (Fase 0): efectos 0-10, balance/master en dB y leveling 0-10.
+    # El dict se copia en apply/snapshot (la instantánea no comparte referencia).
+    effects: dict[str, float] = dataclasses.field(default_factory=default_effects)
+    balance_db: float = 0.0
+    master_gain_db: float = 0.0
+    leveling: float = 0.0
 
 
 class Enhancer:
@@ -219,6 +240,26 @@ class Enhancer:
         self._cf_coeffs: tuple | None = None
         self._cf_src: tuple | None = None  # (sample_rate, preset) de _cf_coeffs
         self._cf_state: np.ndarray | None = None  # zi de lfilter
+        # ---- Capa enhancer (Fase 0) ----
+        # 5 efectos (0-10), balance/master (dB) y leveling (0-10). Apagados por
+        # defecto: con todo a 0 la cadena suena igual que antes.
+        self.effects: dict[str, float] = default_effects()
+        self.balance_db: float = 0.0
+        self.master_gain_db: float = 0.0
+        self.leveling: float = 0.0
+        # Valores suavizados (rampas anti-cremallera) de los nuevos controles.
+        self._c_master_db: float = 0.0
+        self._c_balance_db: float = 0.0
+        self._c_effects: dict[str, float] = default_effects()
+        # DC blocker SIEMPRE activo al inicio de la cadena: quita la componente
+        # continua (<~10 Hz) que roba headroom. Estado zi y coeficiente R.
+        # `dc_block_enabled` es un punto de aislamiento para los tests (en
+        # producción va siempre True): permite verificar que el RESTO de la
+        # cadena es transparente sin el paso-alto.
+        self.dc_block_enabled: bool = True
+        self._dc_state: np.ndarray | None = None
+        self._dc_R: float = 0.0
+        self._dc_src_rate: int = 0
         # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
         # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
         # global); los _l/_r alimentan los medidores estéreo de la UI.
@@ -284,6 +325,10 @@ class Enhancer:
         self.level_peak_r = 0.0
         self.level_gr = 0.0
         self._cf_state = None
+        self._c_master_db = 0.0
+        self._c_balance_db = 0.0
+        self._c_effects = default_effects()
+        self._dc_state = None
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -345,6 +390,10 @@ class Enhancer:
         self.crossfeed_preset = str(params.crossfeed_preset)
         self.crossfeed_cut_hz = int(params.crossfeed_cut_hz)
         self.crossfeed_feed_db = float(params.crossfeed_feed_db)
+        self.effects = {str(k): float(v) for k, v in dict(params.effects).items()}
+        self.balance_db = float(params.balance_db)
+        self.master_gain_db = float(params.master_gain_db)
+        self.leveling = float(params.leveling)
 
     def snapshot_params(self) -> "EnhancerParams":
         """Lee el estado actual como instantánea inmutable."""
@@ -361,6 +410,10 @@ class Enhancer:
             crossfeed_preset=str(self.crossfeed_preset),
             crossfeed_cut_hz=int(self.crossfeed_cut_hz),
             crossfeed_feed_db=float(self.crossfeed_feed_db),
+            effects=dict(self.effects),
+            balance_db=float(self.balance_db),
+            master_gain_db=float(self.master_gain_db),
+            leveling=float(self.leveling),
         )
 
     @staticmethod
@@ -522,6 +575,32 @@ class Enhancer:
     def _ramp(cur, target, alpha):
         return cur + (target - cur) * alpha
 
+    @staticmethod
+    def _onepole(block_sec: float, tau: float) -> float:
+        """Coeficiente de suavizado de 1 polo para un tau dado (segundos).
+
+        Aplicar ``_ramp(cur, target, alpha)`` con este alpha cada bloque
+        reproduce un filtro de 1 polo de constante de tiempo ``tau``."""
+        return 1.0 - math.exp(-block_sec / max(tau, 1e-6))
+
+    def _apply_dc_blocker(self, y: np.ndarray) -> np.ndarray:
+        """Paso-alto de 1 polo (~10 Hz) al INICIO de la cadena (siempre activo).
+
+        ``y[n] = x[n] - x[n-1] + R*y[n-1]``: quita la componente continua
+        (offset de algunos drivers/mixes) que roba headroom y hace trabajar de
+        más al compresor y a los exciters. Estado zi persistente entre bloques."""
+        rate = int(self.sample_rate)
+        if self._dc_src_rate != rate:
+            self._dc_R = math.exp(-2.0 * math.pi * DC_BLOCK_HZ / max(rate, 1))
+            self._dc_src_rate = rate
+            self._dc_state = None
+        ch = y.shape[1] if y.ndim > 1 else 1
+        if self._dc_state is None or self._dc_state.shape[1] != ch:
+            self._dc_state = np.zeros((1, ch), dtype=np.float32)
+        out, zf = _scipy_signal().lfilter([1.0, -1.0], [1.0, -self._dc_R], y, axis=0, zi=self._dc_state)
+        self._dc_state = np.asarray(zf, dtype=np.float32)
+        return out
+
     def process(self, data):
         data = np.asarray(data, dtype=np.float32)
         mono = data.ndim == 1
@@ -556,6 +635,10 @@ class Enhancer:
 
     def _process_dsp(self, data, block_sec):
         y = data.copy()
+        # DC blocker (Fase 0): quita la continua antes de filtros y dinámica
+        # (más headroom, menos trabajo inútil). Siempre activo en producción.
+        if self.dc_block_enabled:
+            y = self._apply_dc_blocker(y)
         nyquist = self.sample_rate / 2
         channels = data.shape[1]
         # Crossfeed BS2B al INICIO de la cadena (Input -> Crossfeed -> EQ ->

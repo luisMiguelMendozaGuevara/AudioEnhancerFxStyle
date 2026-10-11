@@ -268,8 +268,9 @@ def test_config_con_tipos_raros_no_tumba_el_arranque(window):
     # Presets: el malformado se descarta, el correcto sobrevive saneado
     assert "malo" not in window.custom_presets
     assert "malo2" not in window.custom_presets
-    vol, bass, treble, gains = window.custom_presets["bueno"]
-    assert vol == pytest.approx(1.5) and gains == [pytest.approx(1.0)] * 9
+    # v1 migrado a v2 (dict)
+    bueno = window.custom_presets["bueno"]
+    assert bueno["volume"] == pytest.approx(1.5) and bueno["eq_gains"] == [pytest.approx(1.0)] * 9
 
 
 def test_preset_de_longitud_incorrecta_es_rechazado(window):
@@ -475,7 +476,9 @@ def test_importar_presets_desde_json(window, tmp_path, monkeypatch):
     monkeypatch.setattr(mw.QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), "JSON (*.json)"))
 
     window._import_presets()
-    assert window.custom_presets["Mi preset"] == (0.9, 3.0, 2.0, [1.0] * 9)
+    mi = window.custom_presets["Mi preset"]
+    assert mi["volume"] == 0.9 and mi["bass"] == 3.0 and mi["treble"] == 2.0
+    assert mi["eq_gains"] == [1.0] * 9
     assert "Invalido" not in window.custom_presets  # descartado por el saneo
 
 
@@ -484,13 +487,23 @@ def test_exportar_presets_a_json(window, tmp_path, monkeypatch):
 
     from audio_enhancer.ui.new import main_window as mw
 
-    window.custom_presets["Exportado"] = (1.0, 1.0, 1.0, [0.0] * 9)
+    window.custom_presets["Exportado"] = {
+        "volume": 1.0,
+        "bass": 1.0,
+        "treble": 1.0,
+        "eq_gains": [0.0] * 9,
+        "effects": {},
+        "balance_db": 0.0,
+        "master_gain_db": 0.0,
+        "leveling": 0.0,
+    }
     dest = tmp_path / "out.json"
     monkeypatch.setattr(mw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(dest), "JSON (*.json)"))
 
     window._export_presets()
     data = json.loads(dest.read_text(encoding="utf-8"))
-    assert data["Exportado"] == [1.0, 1.0, 1.0, [0.0] * 9]
+    assert data["Exportado"]["volume"] == 1.0
+    assert data["Exportado"]["eq_gains"] == [0.0] * 9
 
 
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):

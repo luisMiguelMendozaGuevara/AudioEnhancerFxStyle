@@ -79,6 +79,7 @@ def test_volumen_1_0_passthrough(noise):
     e.volume = 1.0
     e.limiter = False
     e.compressor = False
+    e.dc_block_enabled = False  # aislar: el DC blocker tiene su propio test
     warm(e, noise)
     y = e.process(noise.copy())
     assert np.allclose(y, noise, atol=1e-4)
@@ -228,6 +229,7 @@ def test_compresor_no_toca_senal_debajo_del_umbral():
     e.blend = 1.0
     e.limiter = False
     e.compressor = True
+    e.dc_block_enabled = False  # señal DC a propósito: aislar el DC blocker
     warm(e, quiet)
     y = e.process(quiet.copy())
     assert 0.27 <= _rms(y) <= 0.33
@@ -239,6 +241,7 @@ def test_sin_compresor_passthrough():
     e.blend = 1.0
     e.limiter = False
     e.compressor = False
+    e.dc_block_enabled = False  # señal DC a propósito: aislar el DC blocker
     warm(e, x)
     y = e.process(x.copy())
     assert np.allclose(y, x, atol=1e-4)
@@ -474,6 +477,7 @@ def test_true_peak_desactivado_deja_pasar_el_pico_intermuestra():
     e = Enhancer()
     e.compressor = False
     e.true_peak = False
+    e.dc_block_enabled = False  # aislar: el DC blocker tiene su propio test
     warm(e, x)
     y = e.process(x.copy())
     assert np.allclose(y, x, atol=1e-5)
@@ -582,6 +586,7 @@ def test_compresor_salida_temprana_identica_y_estado_que_decae():
     estados de la envolvente DECAYEN (no se congelan) como lo harían con
     la señal real: el siguiente bloque activo comprime igual."""
     enh = Enhancer()
+    enh.dc_block_enabled = False  # aislar: se prueba el compresor, no el DC
     fs = enh.sample_rate
     t = np.arange(2048) / fs
     # Bloque fuerte sobre el umbral (0.85): activa el compresor.
@@ -812,6 +817,7 @@ def test_crossfeed_off_no_cruza_por_la_ruta_real():
         e.limiter = False
         e.safety_ceiling_enabled = False
         e.crossfeed = crossfeed
+        e.dc_block_enabled = False  # L es DC a propósito: aislar el DC blocker
         for _ in range(30):  # estabilizar la rampa de blend
             out = e.process(x.copy())
         return float(np.abs(out[:, 1]).max())
@@ -936,3 +942,45 @@ def test_coeff_cache_se_invalida_al_cambiar_ganancia():
     out1 = e.process(x).copy()
     assert not np.allclose(out0, out1), "la ganancia nueva no se aplico (cache obsoleta)"
     assert float(np.abs(out1).max()) > float(np.abs(out0).max())
+
+
+# ---------- DC blocker (Fase 0) ----------
+
+
+def test_dc_blocker_activo_por_defecto_y_quita_continua():
+    """El DC blocker va ON por defecto: una señal con componente continua sale
+    con media ~0 (la continua se elimina)."""
+    e = Enhancer()
+    e.compressor = False
+    e.limiter = False
+    assert e.dc_block_enabled is True  # ON por defecto
+    x = np.full((2048, 2), 0.4, dtype=np.float32)  # continua pura
+    for _ in range(40):
+        y = e.process(x.copy())
+    assert abs(float(y.mean())) < 1e-3
+
+
+def test_dc_blocker_no_afecta_audio_sin_continua():
+    """Bien por encima del corte (~10 Hz) el paso-alto es transparente: la
+    amplitud sale intacta y la fase casi igual (a 2 kHz la desviación es ~0.3°)."""
+    e = Enhancer()
+    e.compressor = False
+    e.limiter = False
+    x = _stereo(MILD_AMP, 2000.0)
+    warm(e, x)
+    y = e.process(x.copy())
+    assert abs(_rms(y) / _rms(x) - 1.0) < 0.01  # amplitud intacta
+    assert np.allclose(y, x, atol=5e-3)  # fase casi intacta
+
+
+def test_dc_blocker_se_puede_aislar_en_tests():
+    """El interruptor interno (solo para tests) permite medir el resto de la
+    cadena sin el paso-alto."""
+    e = Enhancer()
+    e.compressor = False
+    e.limiter = False
+    e.dc_block_enabled = False
+    x = np.full((1024, 2), 0.4, dtype=np.float32)
+    warm(e, x)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
