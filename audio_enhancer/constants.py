@@ -28,9 +28,12 @@ CHUNK = 1024
 RING_SECONDS = 0.5
 # Latencia objetivo del ring (ms): el punto de consigna del control de deriva.
 # Antes era RING_SECONDS/2 = 100 ms fijos. 60 ms es el compromiso
-# estabilidad/latencia; la UI ofrece 40/60/100 ms.
+# estabilidad/latencia; la UI ofrece 40/60/100/250 ms.
 DRIFT_TARGET_MS = 60
-LATENCY_CHOICES_MS = (40, 60, 100)
+# 250 ms = "Estabilidad": colchón máximo para equipos con atascos (p. ej. el
+# proceso DSP suspendido por el sistema); a 48 kHz son 12000 frames, dentro
+# del límite seguro del ring (nframes - 4*CHUNK).
+LATENCY_CHOICES_MS = (40, 60, 100, 250)
 # Al abrir la salida, el dispositivo físico tarda en alcanzar su reloj real
 # (~20 s en algunos drivers): durante ese lapso la captura va más rápido y el
 # motor descartaría audio a golpes (glitches audibles). Se silencia y descarta

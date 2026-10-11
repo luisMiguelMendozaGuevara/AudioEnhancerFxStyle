@@ -136,7 +136,10 @@ class AudioPage(QWidget):
         rl.addWidget(lbl_lat)
         self._latency_combo = QComboBox()
         for ms in LATENCY_CHOICES_MS:
-            self._latency_combo.addItem(f"{ms} ms", ms)
+            # La opción de 250 ms (colchón máximo anti-atascos) lleva etiqueta
+            # propia traducible; el resto, su valor en ms.
+            text = self._t("Estabilidad (250 ms)") if ms == 250 else f"{ms} ms"
+            self._latency_combo.addItem(text, ms)
         self._latency_combo.setCurrentIndex(1)  # 60 ms por defecto
         rl.addWidget(self._latency_combo)
 

@@ -153,6 +153,7 @@ TRANSLATIONS = {
     "Tasa de muestreo": "Sample rate",
     "Latencia": "Latency",
     "LATENCIA": "LATENCY",
+    "Estabilidad (250 ms)": "Stability (250 ms)",
     "Estado": "Status",
     "Restablecer todo": "Reset all",
     "Selecciona una fuente y una salida.": "Select a source and an output.",

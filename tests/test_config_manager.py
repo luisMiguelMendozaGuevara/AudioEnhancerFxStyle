@@ -167,6 +167,16 @@ def test_load_presets_validos_pasran(tmp_path):
     assert noche["eq_gains"] == [0.0] * 9
 
 
+def test_load_acepta_latency_pref_250(tmp_path):
+    """El modo Estabilidad (250 ms) es una preferencia válida de la UI."""
+    import json
+
+    p = tmp_path / "estabilidad.json"
+    p.write_text(json.dumps({"latency_pref": 250}), encoding="utf-8")
+    mgr = ConfigManager(eq_band_count=9, path=str(p))
+    assert mgr.load()["latency_pref"] == 250
+
+
 def test_migrate_es_punto_de_extensión(tmp_path):
     """Hoy la migración es identidad; existe como punto único de extensión."""
     assert ConfigManager._migrate({"a": 1}) == {"a": 1}

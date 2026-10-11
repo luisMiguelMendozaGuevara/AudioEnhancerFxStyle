@@ -230,7 +230,7 @@ class ConfigManager:
             if eq_bands is None:
                 eq_bands = list(EQ_BAND_SETS[n])
 
-        # Latencia: solo los valores ofrecidos por la UI (40/60/100).
+        # Latencia: solo los valores ofrecidos por la UI (40/60/100/250).
         try:
             latency = int(raw.get("latency_pref", 60) or 60)
         except (TypeError, ValueError):

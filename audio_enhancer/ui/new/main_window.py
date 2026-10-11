@@ -1202,7 +1202,7 @@ class NewMainWindow(QMainWindow):
                     delta("child_blocks"),
                     delta("child_clipped"),
                     self.engine.fill(),
-                    self.engine.drift_target,
+                    self.engine.drift_target_effective,
                 )
                 self._last_stats = dict(s)
         else:

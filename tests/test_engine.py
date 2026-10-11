@@ -12,7 +12,7 @@ import pytest
 
 import audio_enhancer.engine as engine_mod
 from audio_enhancer.constants import CHUNK, RING_SECONDS
-from audio_enhancer.engine import AudioEngine
+from audio_enhancer.engine import BOOST_HOLD_S, AudioEngine
 
 
 class FakeStream:
@@ -242,7 +242,7 @@ def test_underrun_pequeno_se_rellena_sin_hueco(engine):
     _capture(engine, np.zeros((960, 2), dtype=np.float32).tobytes(), 960)
     assert engine.fill() == 960
     before = engine.stats_snapshot()
-    out = engine._read(CHUNK)  # pide 1024, hay 960 (ratio 0.94 >= 0.9)
+    out = engine._read(CHUNK)  # pide 1024, hay 960 (ratio 0.94 >= 0.5)
     assert out.shape[0] == CHUNK  # bloque completo (rellenado por repeticion)
     after = engine.stats_snapshot()
     assert after["gap_blocks"] == before["gap_blocks"]  # NO es hueco
@@ -256,9 +256,25 @@ def test_underrun_grande_sigue_siendo_hueco(engine):
     engine._pa_mod = SimpleNamespace(paContinue=0, paOutputUnderflow=0x4)
     _capture(engine, np.zeros((400, 2), dtype=np.float32).tobytes(), 400)
     before = engine.stats_snapshot()
-    out = engine._read(CHUNK)  # ratio 0.39 < 0.9
+    out = engine._read(CHUNK)  # ratio 0.39 < 0.5
     assert out.shape[0] == CHUNK  # bloque completo con silencio
     assert engine.stats_snapshot()["gap_blocks"] == before["gap_blocks"] + 1
+
+
+def test_underrun_medio_ratio_0_6_se_resuelve_con_gracia(engine):
+    """Con el umbral en 0.5, un underrun que deja algo más de la mitad del
+    bloque (ratio ~0.6) se rellena repitiendo material: grace_stretches++ y
+    sin hueco (gap_blocks intacto)."""
+    engine.configure_ring(48000, drift_target_ms=60)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    _capture(engine, np.zeros((620, 2), dtype=np.float32).tobytes(), 620)
+    assert engine.fill() == 620
+    before = engine.stats_snapshot()
+    out = engine._read(CHUNK)  # pide 1024, hay 620 (ratio ~0.61 >= 0.5)
+    after = engine.stats_snapshot()
+    assert out.shape[0] == CHUNK  # bloque completo (rellenado por repeticion)
+    assert after["grace_stretches"] == before["grace_stretches"] + 1
+    assert after["gap_blocks"] == before["gap_blocks"]
 
 
 def test_set_drift_target_ms_en_caliente(engine):
@@ -270,6 +286,46 @@ def test_set_drift_target_ms_en_caliente(engine):
     assert engine.drift_target == int(48000 * 0.100)
     engine.set_drift_target_ms(40)
     assert engine.drift_target == int(48000 * 0.040)
+
+
+def test_latencia_250_fija_consigna_12000_frames(engine):
+    """El modo Estabilidad (250 ms) fija la consigna en 12000 frames a 48 kHz,
+    dentro del límite seguro de configure_ring (nframes - 4*CHUNK)."""
+    engine.configure_ring(48000, drift_target_ms=250)
+    assert engine.drift_target == 12000
+    assert engine.drift_target <= engine.nframes - 4 * CHUNK
+    # También en caliente (cambio desde el selector de la UI).
+    engine.configure_ring(48000, drift_target_ms=60)
+    engine.set_drift_target_ms(250)
+    assert engine.drift_target == 12000
+
+
+def test_boost_tras_hueco_sube_a_12000_y_vuelve_al_nominal(engine, monkeypatch):
+    """Un hueco real activa el margen adaptativo: la consigna EFECTIVA pasa a
+    12000 frames (250 ms) durante BOOST_HOLD_S y, sin nuevos huecos, vuelve al
+    nominal. Reloj inyectado por monkeypatch: el test no duerme."""
+    engine.configure_ring(48000, drift_target_ms=60)
+    nominal = engine.drift_target
+    reloj = [1000.0]
+    monkeypatch.setattr(engine_mod.time, "monotonic", lambda: reloj[0])
+    engine._warmup_until = 0.0
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    assert engine.drift_target_effective == nominal  # aún sin boost
+
+    out = engine._read(CHUNK)  # ring vacío: hueco real
+    assert out.shape == (CHUNK, 2)
+    assert engine.in_gap is True
+    assert engine.drift_target_effective == 12000
+
+    # El callback de salida usa la consigna efectiva: con el ring vacío y la
+    # consigna al alza, drena (ajuste con signo negativo).
+    engine._out_callback(None, CHUNK, None, 0)
+    assert engine.stats_snapshot()["drift_signed_frames"] < 0
+
+    reloj[0] += BOOST_HOLD_S - 1.0
+    assert engine.drift_target_effective == 12000  # dentro de la ventana
+    reloj[0] += 2.0  # ventana vencida sin nuevos huecos
+    assert engine.drift_target_effective == nominal
 
 
 def test_deriva_se_acota_a_max_drift_frames_por_callback(engine):
@@ -487,6 +543,82 @@ def test_snapshot_params_incluye_eq_gains():
     snap = snapshot_params(e)
     assert snap["eq_gains"] == [1.0, -2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     assert "volume" in snap and "limiter" in snap
+
+
+class _FakeSharedValue:
+    """Value compartido de mentira (solo .value; la bomba no lo toca)."""
+
+    def __init__(self, v):
+        self.value = v
+
+
+def test_pump_no_descarta_si_la_cola_del_hijo_esta_llena(engine):
+    """Con la cola del hijo llena la bomba NO consume el ring crudo ni
+    descarta (raw_q_drops=0): el bloque queda como reserva y se entrega en
+    cuanto la cola se libera."""
+    engine.configure_ring(48000)
+    engine._pa_mod = SimpleNamespace(paContinue=0)
+    engine._put_raw(np.full((CHUNK, 2), 0.25, dtype=np.float32))
+    engine._raw_q = queue.Queue(maxsize=1)
+    engine._raw_q.put(b"ocupado")  # cola llena antes de arrancar la bomba
+    engine._out_q = queue.Queue()
+    engine._dsp_running = True
+    t = threading.Thread(target=engine._pump, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.05)  # varios ciclos de la bomba con la cola llena
+        assert engine.stats_snapshot()["raw_q_drops"] == 0
+        # No se tocó el ring crudo: el bloque sigue íntegro como reserva.
+        assert engine._raw_read == 0
+        assert engine._raw_write - engine._raw_read == CHUNK
+        engine._raw_q.get_nowait()  # liberar la cola
+        # Al liberarse, la bomba entrega el bloque (sin pérdida).
+        entregado = None
+        deadline = time.monotonic() + 2.0
+        while entregado is None and time.monotonic() < deadline:
+            try:
+                entregado = engine._raw_q.get_nowait()
+            except queue.Empty:
+                time.sleep(0.005)
+        assert entregado is not None
+        assert np.frombuffer(entregado, dtype=np.float32).size == CHUNK * 2
+        assert engine._raw_write - engine._raw_read == 0
+    finally:
+        engine._dsp_running = False
+        t.join(timeout=2.0)
+    assert not t.is_alive()
+    assert engine.stats_snapshot()["raw_q_drops"] == 0
+
+
+def test_start_dsp_process_crea_colas_profundas(engine, monkeypatch):
+    """Colas del hijo más profundas (crudo 128 bloques ~2.7 s, salida 32):
+    absorben atascos breves del proceso DSP sin obligar a descartar."""
+    from audio_enhancer import dsp_process
+
+    monkeypatch.setattr(dsp_process, "snapshot_params", lambda enhancer: {"fake": True})
+    fake_ctx = SimpleNamespace(
+        Queue=lambda maxsize=0: queue.Queue(maxsize),
+        Event=threading.Event,
+        Value=lambda typecode, v: _FakeSharedValue(v),
+        Array=lambda typecode, n: _FakeSharedArray([0.0] * n),
+        Process=lambda **kw: SimpleNamespace(
+            start=lambda: None,
+            pid=0,
+            join=lambda timeout=None: None,
+            is_alive=lambda: False,
+            terminate=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(engine_mod.mp, "get_context", lambda name: fake_ctx)
+    monkeypatch.setattr(engine, "_set_child_priority", lambda: None)
+    engine.configure_ring(48000)
+    engine._start_dsp_process()
+    try:
+        assert engine._raw_q.maxsize == 128
+        assert engine._out_q.maxsize == 32
+        assert engine._params_q.maxsize == 8
+    finally:
+        engine._dsp_running = False
 
 
 # ---------- Diagnóstico de pipeline (Paso 0) ----------

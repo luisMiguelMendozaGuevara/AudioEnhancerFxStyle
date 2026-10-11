@@ -24,13 +24,23 @@ from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, STARTUP_MUTE_S
 logger = logging.getLogger("audio_enhancer.engine")
 
 # Degradación elegante en underrun: si al pedir n frames al ring faltan pocos
-# (ratio >= este umbral), se devuelven los disponibles y el remuestreador los
-# ESTIRA al bloque pedido, en vez de insertar silencio (hueco audible de unos
-# ms). Medido en el caso real del CABLE: los huecos eran de ~63 frames sobre
-# 1024 (~6%), dentro de la zona. El estirado por bloque queda acotado por este
-# ratio (0.9 = hasta ~11% de pitch en un bloque); por debajo se trata como
-# hueco real y se aplica el silencio con fundidos.
-UNDERFLOW_GRACE_RATIO = 0.9
+# (ratio disponibles/pedidos >= este umbral), se rellena el bloque REPITIENDO
+# con crossfade el material disponible, en vez de insertar silencio (hueco
+# audible de unos ms). Medido en el caso real del CABLE: los huecos eran de
+# ~63 frames sobre 1024 (~6%). Con 0.5 hasta la mitad de un bloque se resuelve
+# repitiendo (mantiene el tono); por debajo se trata como hueco real y se
+# aplica el silencio con fundidos.
+UNDERFLOW_GRACE_RATIO = 0.5
+
+# Margen adaptativo anti-huecos: al ocurrir un hueco real, la consigna
+# EFECTIVA del control sube a BOOST_TARGET_FRAMES (250 ms a 48 kHz) durante
+# BOOST_HOLD_S sin nuevos huecos (cada hueco renueva la ventana). Un colchón
+# mayor absorbe atascos del sistema (p. ej. el proceso DSP suspendido decenas
+# de ms) sin que el ring vuelva a vaciarse. Ataque/retorno graduales: el
+# control mueve el ring a lo sumo ~32 frames/bloque (~1.5 %), así que cubrir
+# de 60->250 ms (~9120 frames) tarda ~6 s, sin glitch audible.
+BOOST_TARGET_FRAMES = 12000
+BOOST_HOLD_S = 20.0
 
 _pa_mod = None
 
@@ -149,6 +159,9 @@ class AudioEngine:
         # descartar audio a golpes mientras el dispositivo físico alcanza su
         # reloj real (>0 => no activo; se fija en open_output).
         self._warmup_until: float = 0.0
+        # Fin del boost temporal de consigna activado por un hueco real
+        # (ver BOOST_TARGET_FRAMES/BOOST_HOLD_S y _effective_drift_target).
+        self._boost_until: float = 0.0
         # Contexto del remuestreador fraccional: 2 últimas muestras del bloque
         # de entrada anterior (interpolación continua entre callbacks).
         self._interp_tail: np.ndarray | None = None
@@ -175,7 +188,8 @@ class AudioEngine:
             "out_frames": 0,
             # Frames perdidos al desbordar el ring crudo (captura -> DSP).
             "raw_ring_drops": 0,
-            # Bloques perdidos al enviarlos al hijo (cola llena, put_nowait).
+            # Bloques perdidos al enviarlos al hijo (histórico: la bomba ya NO
+            # descarta con la cola llena; en operación normal debe quedar en 0).
             "raw_q_drops": 0,
             # Veces que la bomba no encontró crudo / salida procesada.
             "raw_q_empty": 0,
@@ -243,6 +257,7 @@ class AudioEngine:
         self._drift_target = max(CHUNK, min(target, upper))
         self._drift_accum = 0.0
         self._warmup_until = 0.0
+        self._boost_until = 0.0
 
     def set_drift_target_ms(self, drift_target_ms: float) -> None:
         """Cambia la latencia objetivo EN CALIENTE (sin vaciar el ring).
@@ -255,6 +270,28 @@ class AudioEngine:
         upper = max(CHUNK, self.nframes - 4 * CHUNK)
         target = int(self.rate * drift_target_ms / 1000.0)
         self._drift_target = max(CHUNK, min(target, upper))
+
+    def _effective_drift_target(self) -> int:
+        """Consigna EFECTIVA del control de deriva (nominal o boost temporal).
+
+        Tras un hueco real sube a BOOST_TARGET_FRAMES durante BOOST_HOLD_S
+        (cada hueco renueva la ventana): un colchón de 250 ms absorbe los
+        atascos del sistema sin que el ring vuelva a vaciarse. El retorno al
+        nominal es gradual: el control drena a lo sumo ~32 frames/bloque, así
+        que bajar 250->60 ms (~9120 frames) tarda ~6 s sin glitch."""
+        base = self._drift_target
+        if self._boost_until and time.monotonic() < self._boost_until:
+            upper = max(CHUNK, self.nframes - 4 * CHUNK)
+            return min(max(base, BOOST_TARGET_FRAMES), upper)
+        return base
+
+    @property
+    def drift_target_effective(self) -> int:
+        """Consigna efectiva actual en frames (nominal, o boost si está activo).
+
+        La UI/log la usan para mostrar el punto de operación real; el nominal
+        interno sigue siendo ``drift_target``."""
+        return self._effective_drift_target()
 
     def _open_capture_stream(self, pa, in_idx: int, rate: int, channels: int):
         # Mismo tamaño que la salida (CHUNK): el callback SOLO copia al ring
@@ -460,6 +497,9 @@ class AudioEngine:
         self.fadein_frames = max(self.fadein_frames, self._fade)
         self._stats["gap_blocks"] += 1  # métrica en vivo (lock tomado)
         self._stats["gap_frames"] += n - m  # frames de silencio insertados
+        # Margen adaptativo: un hueco real amplía la consigna durante
+        # BOOST_HOLD_S (ver _effective_drift_target / BOOST_TARGET_FRAMES).
+        self._boost_until = time.monotonic() + BOOST_HOLD_S
         return out
 
     # ---------- callbacks ----------
@@ -552,11 +592,12 @@ class AudioEngine:
         from .dsp_process import child_main, snapshot_params
 
         ctx = mp.get_context("spawn")
-        # Colas ACOTADAS (8 bloques ~ 170 ms): si el hijo se atrasa no se
-        # acumula un backlog de segundos que luego vuelca en ráfaga sobre el
-        # ring (desborde + huecos); se descarta el exceso.
-        self._raw_q = ctx.Queue(maxsize=8)
-        self._out_q = ctx.Queue(maxsize=8)
+        # Colas ACOTADAS pero profundas: 128 bloques crudos (~2.7 s a 48 kHz)
+        # absorben atascos breves del hijo sin acumular backlog indefinido. La
+        # bomba ya NO descarta si se llenan: retiene el bloque y reintenta;
+        # solo el desborde del ring crudo (1 s) puede descartar audio.
+        self._raw_q = ctx.Queue(maxsize=128)
+        self._out_q = ctx.Queue(maxsize=32)
         self._params_q = ctx.Queue(maxsize=8)
         self._mp_stop = ctx.Event()
         self._gr = ctx.Value("f", 0.0)  # GR del limitador (hijo -> padre)
@@ -655,23 +696,41 @@ class AudioEngine:
 
         Antes eran dos hilos + los hilos "feeder" de las multiprocessing.Queue:
         demasiados hilos Python compitiendo por el GIL con los callbacks de
-        audio (retrasaban la salida -> descartes)."""
+        audio (retrasaban la salida -> descartes).
+
+        Sin descartes hacia el hijo: si su cola está llena NO se saca del ring
+        crudo (los datos quedan ahí como reserva y el hijo los recibe en cuanto
+        drena) y se reintenta a los pocos ms. Así ``raw_q_drops`` queda en 0
+        en operación normal: solo el desborde del ring crudo (~1 s de margen,
+        ``raw_ring_drops``) puede descartar audio."""
         self._set_thread_priority()
+        pending = None  # bloque ya leído que no pudo entregarse (cola llena)
         while self._dsp_running:
-            block = self._read_raw()
-            if block is not None:
-                # put_nowait: si el hijo va atrasado, descartar en vez de
-                # bloquear. Bloquear aquí frenaría la entrega a la salida y
-                # provocaría un hueco; el backlog queda acotado por maxsize.
-                # Los descartes se CUENTAN (diagnóstico Paso 0): antes eran
-                # silenciosos y podían explicar cortes sin rastro en métricas.
-                try:
-                    self._raw_q.put_nowait(block.tobytes())
-                except queue.Full:
-                    self._stats["raw_q_drops"] += 1
-                except Exception:
-                    pass
+            raw_q = self._raw_q
+            stalled = False
+            if pending is not None:
+                block, pending = pending, None
+                stalled = True  # reintento de un bloque retenido
+            elif raw_q is not None and raw_q.full():
+                # Cola del hijo llena: esperar SIN tocar el ring crudo.
+                block = None
+                stalled = True
             else:
+                block = self._read_raw()
+            if block is not None:
+                try:
+                    raw_q.put_nowait(block.tobytes())
+                    stalled = False
+                except queue.Full:
+                    # Carrera con full() (o se llenó de nuevo): conservar el
+                    # bloque y reintentarlo; NUNCA descartarlo.
+                    pending = block
+                    stalled = True
+                except Exception:
+                    # Cola cerrada o error inesperado (p. ej. durante stop()):
+                    # mismo comportamiento que antes (se pierde el bloque).
+                    pass
+            elif not stalled:
                 self._stats["raw_q_empty"] += 1
             got = False
             try:
@@ -687,7 +746,9 @@ class AudioEngine:
                 self._put(data)
             else:
                 self._stats["out_q_empty"] += 1
-            if block is None and not got:
+            if stalled:
+                time.sleep(0.002)  # hijo atrasado: reintentar sin quemar CPU
+            elif block is None and not got:
                 time.sleep(0.001)
 
     def _sync_telemetry(self) -> None:
@@ -768,7 +829,10 @@ class AudioEngine:
             return (np.zeros((frame_count, 2), dtype=np.float32).tobytes(), self._pa_mod.paContinue)
         with self.lock:
             fill = self.write_pos - self.read_pos
-            error = fill - self._drift_target
+            # Consigna efectiva (nominal o boost tras un hueco): el error de
+            # deriva se mide contra ella para que el colchón extra se recargue
+            # gradualmente (ver _effective_drift_target).
+            error = fill - self._effective_drift_target()
             if abs(error) <= self._drift_deadband:
                 # El ruido normal del ring no debe provocar resampling.
                 self._drift_accum *= 0.95
