@@ -53,9 +53,9 @@ class ConfigManager:
     """Esquema del config.json + coerción segura + defaults."""
 
     def __init__(self, eq_band_count: int, path: str | None = None) -> None:
-        self._eq_count = int(eq_band_count)
-        # None = resolver CONFIG_PATH en CADA operación (no al importar): así
-        # los tests pueden redirigir la ruta parcheando el módulo.
+        # `eq_band_count` se mantiene por compatibilidad de la API: desde la
+        # Fase 5 la validación acepta cualquier nº de bandas soportado
+        # (5/9/10/15/31, ver EQ_BAND_SETS), así que no se usa aquí.
         self.path = path
 
     def _resolve_path(self) -> str:

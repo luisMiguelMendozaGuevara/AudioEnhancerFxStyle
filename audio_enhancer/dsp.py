@@ -328,7 +328,6 @@ class Enhancer:
         # Valores suavizados (rampas anti-cremallera) de los nuevos controles.
         self._c_master: float = 1.0
         self._c_balance_db: float = 0.0
-        self._c_effects: dict[str, float] = default_effects()
         # DC blocker SIEMPRE activo al inicio de la cadena: quita la componente
         # continua (<~10 Hz) que roba headroom. Estado zi y coeficiente R.
         # `dc_block_enabled` es un punto de aislamiento para los tests (en
@@ -414,7 +413,6 @@ class Enhancer:
         self._cf_state = None
         self._c_master = 1.0
         self._c_balance_db = 0.0
-        self._c_effects = default_effects()
         self._dc_state = None
         self._env_zi = {}
         self._exc_zi = {}
