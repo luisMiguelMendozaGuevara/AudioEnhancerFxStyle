@@ -54,6 +54,9 @@ class AudioState(QObject):
     # Capa enhancer (Fase 1): escalas 0-10.
     dynamic_boost_changed = Signal(float)
     leveling_changed = Signal(float)
+    # Exciters (Fase 2): 0-10.
+    fidelity_changed = Signal(float)
+    bass_exciter_changed = Signal(float)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -93,6 +96,9 @@ class AudioState(QObject):
         # Capa enhancer (Fase 1): 0-10.
         self._dynamic_boost: float = 0.0
         self._leveling: float = 0.0
+        # Exciters (Fase 2): 0-10.
+        self._fidelity: float = 0.0
+        self._bass_exciter: float = 0.0
         # Crossfeed BS2B (auriculares): OFF por defecto + preset.
         self._crossfeed: bool = False
         self._crossfeed_preset: str = "Natural"
@@ -348,6 +354,28 @@ class AudioState(QObject):
             self._leveling = v
             self.leveling_changed.emit(v)
 
+    @property
+    def fidelity(self) -> float:
+        return self._fidelity
+
+    @fidelity.setter
+    def fidelity(self, value: float) -> None:
+        v = float(value)
+        if self._fidelity != v:
+            self._fidelity = v
+            self.fidelity_changed.emit(v)
+
+    @property
+    def bass_exciter(self) -> float:
+        return self._bass_exciter
+
+    @bass_exciter.setter
+    def bass_exciter(self, value: float) -> None:
+        v = float(value)
+        if self._bass_exciter != v:
+            self._bass_exciter = v
+            self.bass_exciter_changed.emit(v)
+
     def _emit_crossfeed(self) -> None:
         self.crossfeed_changed.emit(
             {
@@ -434,4 +462,6 @@ class AudioState(QObject):
         self.final_clip = bool(enhancer.final_clip_enabled)
         self.dynamic_boost = float(enhancer.effects.get("dynamic_boost", 0.0))
         self.leveling = float(enhancer.effects.get("leveling", 0.0))
+        self.fidelity = float(enhancer.effects.get("fidelity", 0.0))
+        self.bass_exciter = float(enhancer.effects.get("bass", 0.0))
         self.ab_enabled = float(enhancer.blend) > 0.5

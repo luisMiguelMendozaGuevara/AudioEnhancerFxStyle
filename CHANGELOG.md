@@ -40,6 +40,20 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
 - **Tests**: apagado = passthrough; sube señal débil; señal fuerte intacta;
   ganancia estable (sin pumping); silencio sin NaN; conexión UI→motor.
 
+### Fase 2 — Exciters Clarity y Bass (2026-10-10)
+- **Clarity (Fidelity)** (`effects["fidelity"]`, 0-10): paso-alto 3 kHz →
+  **2º armónico** (rectificar + paso-alto 20 Hz que quita la continua) → mezcla
+  (`g = amount/10·0.5`). Restaura presencia sin subir esa banda de volumen
+  (contenido NUEVO, no EQ).
+- **Bass exciter** (`effects["bass"]`, 0-10): paso-bajo 100 Hz → 2º armónico →
+  mezcla (`g = amount/10·0.6`). "Punch" en altavoces pequeños sin retumbar.
+- **Corrección de diseño**: `banda·|banda|` NO genera 2º armónico (es impar:
+  1º/3º). Se rectifica la banda y se quita la continua (verificado por FFT).
+- **UI**: tarjetas "Claridad (Fidelity)" y "Exciter de graves" 0-10 con toggle;
+  señales `fidelity_changed`/`bass_exciter_changed`; textos ES/EN.
+- **Tests**: apagado = passthrough; 2º armónico medido por FFT (5k→10k y
+  80→160 Hz) ×5; sin continua añadida; sin recorte nuevo con señal normal.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

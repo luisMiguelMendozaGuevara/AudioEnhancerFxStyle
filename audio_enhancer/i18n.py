@@ -39,6 +39,8 @@ TRANSLATIONS = {
     "Crossfeed (auriculares)": "Crossfeed (headphones)",
     "Refuerzo dinámico": "Dynamic Boost",
     "Nivelación (volumen)": "Leveling (volume)",
+    "Claridad (Fidelity)": "Clarity (Fidelity)",
+    "Exciter de graves": "Bass exciter",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -264,6 +266,14 @@ EXPLAIN = {
     "AGC muy lento (objetivo ~-18 dBFS, corrección ±9 dB). Una canción bajita "
     "sube y una muy fuerte baja un poco: dejas de tocar el volumen entre "
     "canciones. En música clásica puede aplanar los contrastes.",
+    "fidelity": "Claridad (Fidelity): exciter de presencia. Filtra 3 kHz+ y "
+    "genera su 2º armónico para recuperar el detalle que el streaming se comió "
+    "(voces, platos, 'aire') sin subir esa banda de volumen. Sube poco a poco: "
+    "un exceso produce sibilancias.",
+    "bass_exciter": "Exciter de graves: filtra <100 Hz y genera su 2º armónico "
+    "(el oído lo interpreta como grave real). Da 'punch' en altavoces pequeños "
+    "sin retumbar. El 'Refuerzo de graves' de arriba es otra cosa: aquel sube "
+    "el volumen de la banda; este crea contenido nuevo.",
 }
 
 EXPLAIN_EN = {
@@ -299,6 +309,13 @@ EXPLAIN_EN = {
     "leveling": "Volume leveling: evens out loudness BETWEEN tracks with a very "
     "slow AGC (target ~-18 dBFS, ±9 dB correction). Quiet songs come up, very "
     "loud ones come down a bit, so you stop touching the volume between songs.",
+    "fidelity": "Clarity (Fidelity): presence exciter. Filters 3 kHz+ and "
+    "generates its 2nd harmonic to restore detail lost to streaming (voices, "
+    "cymbals, 'air') without raising that band's volume. Raise it slowly.",
+    "bass_exciter": "Bass exciter: filters <100 Hz and generates its 2nd "
+    "harmonic (the ear reads it as real bass). Adds punch on small speakers "
+    "without boom. The 'Bass boost' shelf above is different: it raises the "
+    "band's volume; this creates new content.",
 }
 
 EQ_EXPLAIN = {

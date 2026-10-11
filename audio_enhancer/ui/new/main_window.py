@@ -228,6 +228,8 @@ class NewMainWindow(QMainWindow):
 
         state.dynamic_boost_changed.connect(_set_effect("dynamic_boost"))
         state.leveling_changed.connect(_set_effect("leveling"))
+        state.fidelity_changed.connect(_set_effect("fidelity"))
+        state.bass_exciter_changed.connect(_set_effect("bass"))
 
         def _apply_crossfeed(cfg: dict) -> None:
             self.enhancer.crossfeed = bool(cfg["enabled"])
@@ -969,6 +971,8 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_final_clip(self.enhancer.final_clip_enabled)
         self._pages["effects"].set_dynamic_boost(float(self.enhancer.effects.get("dynamic_boost", 0.0)))
         self._pages["effects"].set_leveling(float(self.enhancer.effects.get("leveling", 0.0)))
+        self._pages["effects"].set_clarity(float(self.enhancer.effects.get("fidelity", 0.0)))
+        self._pages["effects"].set_bass_exciter(float(self.enhancer.effects.get("bass", 0.0)))
         self._pages["effects"].set_crossfeed(
             self.enhancer.crossfeed,
             self.enhancer.crossfeed_preset,

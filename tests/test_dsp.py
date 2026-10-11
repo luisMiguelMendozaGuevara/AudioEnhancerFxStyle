@@ -1073,3 +1073,78 @@ def test_leveling_silencio_no_produce_nan():
     x = np.zeros((512, 2), dtype=np.float32)
     y = e.process(x.copy())
     assert np.all(np.isfinite(y))
+
+
+# ---------- Exciters Clarity y Bass (Fase 2) ----------
+
+
+def _tone_energy(x, freq, rate=FS):
+    """Magnitud espectral alrededor de `freq` (para medir armónicos)."""
+    n = x.shape[0]
+    sp = np.abs(np.fft.rfft(x[:, 0] * np.hanning(n)))
+    fr = np.fft.rfftfreq(n, 1.0 / rate)
+    i = int(np.argmin(np.abs(fr - freq)))
+    return float(sp[max(0, i - 1) : i + 2].max())
+
+
+def test_clarity_apagado_es_passthrough():
+    e, blocks = _fx({"fidelity": 0.0})
+    x = _stereo(0.2, 5000.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_clarity_genera_segundo_armonico():
+    """A 5 kHz, activar Clarity crea contenido en 10 kHz (2º armónico)."""
+    x = _stereo(0.2, 5000.0)
+    e_off, blocks = _fx({"fidelity": 0.0})
+    warm(e_off, x, blocks=blocks)
+    y_off = e_off.process(x.copy())
+    e_on, _ = _fx({"fidelity": 10.0})
+    warm(e_on, x, blocks=blocks)
+    y_on = e_on.process(x.copy())
+    assert _tone_energy(y_on, 10000.0) > _tone_energy(y_off, 10000.0) * 5
+
+
+def test_bass_exciter_apagado_es_passthrough():
+    e, blocks = _fx({"bass": 0.0})
+    x = _stereo(0.3, 80.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_bass_exciter_genera_segundo_armonico():
+    """A 80 Hz, activar el exciter crea contenido en 160 Hz (2º armónico)."""
+    x = _stereo(0.3, 80.0)
+    e_off, blocks = _fx({"bass": 0.0})
+    warm(e_off, x, blocks=blocks)
+    y_off = e_off.process(x.copy())
+    e_on, _ = _fx({"bass": 10.0})
+    warm(e_on, x, blocks=blocks)
+    y_on = e_on.process(x.copy())
+    assert _tone_energy(y_on, 160.0) > _tone_energy(y_off, 160.0) * 5
+
+
+def test_exciters_no_anaden_continua():
+    """El 2º armónico se genera sin AÑADIR continua (se rectifica y se filtra).
+
+    Se compara la media de salida con la de entrada: un bloque de 2048 muestras
+    de un seno de 80 Hz no tiene media exactamente 0, así que lo que importa es
+    que el exciter no AÑADA continua."""
+    for key, freq in (("fidelity", 5000.0), ("bass", 80.0)):
+        e, blocks = _fx({key: 10.0})
+        x = _stereo(0.3, freq)
+        warm(e, x, blocks=blocks)
+        y = e.process(x.copy())
+        assert abs(float(y.mean()) - float(x.mean())) < 1e-3, f"continua añadida con {key}"
+
+
+def test_exciters_no_recortan_senal_normal():
+    """Con una señal normal, los exciters no llevan la salida a recorte."""
+    e, blocks = _fx({"fidelity": 10.0, "bass": 10.0})
+    x = _stereo(0.5, 200.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert float(np.abs(y).max()) < 1.0

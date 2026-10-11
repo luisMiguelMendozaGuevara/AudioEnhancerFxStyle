@@ -162,6 +162,24 @@ class EffectsPage(QWidget):
             self._leveling_card._toggle.toggled.connect(self._on_leveling_toggle)
         layout.addWidget(self._leveling_card)
 
+        # Exciters (Fase 2): 2º armónico de presencia (Clarity) y de graves
+        # (Bass). Contenido NUEVO, no realce del EQ.
+        self._clarity_card = EffectCard(
+            self._t("Claridad (Fidelity)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("fidelity")
+        )
+        self._clarity_card._slider.valueChanged.connect(lambda v: self._on_clarity(v / 100))
+        if self._clarity_card._toggle:
+            self._clarity_card._toggle.toggled.connect(self._on_clarity_toggle)
+        layout.addWidget(self._clarity_card)
+
+        self._bass_exciter_card = EffectCard(
+            self._t("Exciter de graves"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("bass_exciter")
+        )
+        self._bass_exciter_card._slider.valueChanged.connect(lambda v: self._on_bass_exciter(v / 100))
+        if self._bass_exciter_card._toggle:
+            self._bass_exciter_card._toggle.toggled.connect(self._on_bass_exciter_toggle)
+        layout.addWidget(self._bass_exciter_card)
+
         self._limiter_card = EffectCard(
             self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
         )
@@ -330,6 +348,22 @@ class EffectsPage(QWidget):
             self._leveling_card._toggle.setText("ON" if on else "OFF")
         self._state.leveling = self._leveling_card.value() if on else 0.0
 
+    def _on_clarity(self, v) -> None:
+        self._state.fidelity = v
+
+    def _on_bass_exciter(self, v) -> None:
+        self._state.bass_exciter = v
+
+    def _on_clarity_toggle(self, on) -> None:
+        if self._clarity_card._toggle is not None:
+            self._clarity_card._toggle.setText("ON" if on else "OFF")
+        self._state.fidelity = self._clarity_card.value() if on else 0.0
+
+    def _on_bass_exciter_toggle(self, on) -> None:
+        if self._bass_exciter_card._toggle is not None:
+            self._bass_exciter_card._toggle.setText("ON" if on else "OFF")
+        self._state.bass_exciter = self._bass_exciter_card.value() if on else 0.0
+
     def _on_limiter_toggle(self, on) -> None:
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setText("ON" if on else "OFF")
@@ -390,6 +424,12 @@ class EffectsPage(QWidget):
 
     def set_leveling(self, v) -> None:
         self._leveling_card.set_value(v)
+
+    def set_clarity(self, v) -> None:
+        self._clarity_card.set_value(v)
+
+    def set_bass_exciter(self, v) -> None:
+        self._bass_exciter_card.set_value(v)
 
     def set_limiter(self, on) -> None:
         self._limiter_card.set_enabled(on)

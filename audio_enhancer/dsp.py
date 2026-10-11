@@ -121,6 +121,15 @@ LEVELING_MAX_DB = 9.0
 # Tiempos de la envolvente (segundos): ataque rápido y release lento.
 ENV_ATTACK_S = 0.005
 ENV_RELEASE_S = 0.35
+# Clarity (Fidelity) y Bass exciter: generación de 2º armónico.
+#   banda = filtro (HP de presencia / LP de graves); h = banda*|banda| (2f, sin
+#   DC); se mezcla una fracción. Restaura detalle/punch sin subir esa banda de
+#   volumen (es contenido NUEVO, no un realce del EQ).
+CLARITY_HP_HZ = 3000.0
+CLARITY_MIX = 0.5
+BASS_EXCITER_LP_HZ = 100.0
+BASS_EXCITER_MIX = 0.6
+EXCITER_Q = 0.707
 
 
 @lru_cache(maxsize=8)
@@ -275,6 +284,8 @@ class Enhancer:
         # Estados (zi) de las envolventes de las etapas enhancer (Dynamic
         # Boost, Leveling): dict slot -> zi, persistente entre bloques.
         self._env_zi: dict[str, np.ndarray] = {}
+        # Estados (zi) de los filtros de banda de los exciters (Clarity/Bass).
+        self._exc_zi: dict[str, np.ndarray] = {}
         # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
         # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
         # global); los _l/_r alimentan los medidores estéreo de la UI.
@@ -345,6 +356,7 @@ class Enhancer:
         self._c_effects = default_effects()
         self._dc_state = None
         self._env_zi = {}
+        self._exc_zi = {}
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -469,6 +481,36 @@ class Enhancer:
         a0 = 1.0 + alpha / A
         a1 = -2.0 * cw
         a2 = 1.0 - alpha / A
+        return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
+
+    @staticmethod
+    def _highpass(freq, fs, q=EXCITER_Q):
+        """Biquad RBJ paso-alto (banda de presencia de los exciters)."""
+        w0 = 2.0 * np.pi * freq / fs
+        cw = math.cos(w0)
+        sw = math.sin(w0)
+        alpha = sw / (2.0 * q)
+        b0 = (1.0 + cw) / 2.0
+        b1 = -(1.0 + cw)
+        b2 = (1.0 + cw) / 2.0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
+        return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
+
+    @staticmethod
+    def _lowpass(freq, fs, q=EXCITER_Q):
+        """Biquad RBJ paso-bajo (banda de graves de los exciters)."""
+        w0 = 2.0 * np.pi * freq / fs
+        cw = math.cos(w0)
+        sw = math.sin(w0)
+        alpha = sw / (2.0 * q)
+        b0 = (1.0 - cw) / 2.0
+        b1 = 1.0 - cw
+        b2 = (1.0 - cw) / 2.0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
         return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
 
     def _section(self, key, b0, b1, b2, a1, a2):
@@ -746,6 +788,9 @@ class Enhancer:
         # realmente sale: antes el volumen se aplicaba antes del compresor y
         # el limitador "suave" dejaba pasar ~70% del exceso por encima de su
         # umbral.
+        # Exciters (Fase 2): armónicos de graves y de presencia tras el EQ.
+        y = self._bass_exciter(y, block_sec)
+        y = self._clarity(y, block_sec)
         # Capa enhancer: Dynamic Boost (compresor ascendente) tras el EQ.
         y = self._dynamic_boost(y, block_sec)
         if self.compressor:
@@ -924,6 +969,68 @@ class Enhancer:
             return y
         gain = (10.0 ** (corr_db / 20.0)).astype(np.float32)
         return (y * gain[:, None]).astype(np.float32, copy=False)
+
+    # ---------- capa enhancer: exciters Clarity y Bass (Fase 2) ----------
+
+    def _apply_biquad(self, y: np.ndarray, slot: str, coeffs: tuple) -> np.ndarray:
+        """Aplica un biquad con estado zi persistente por ``slot`` (float64)."""
+        b0, b1, b2, a1, a2 = coeffs
+        ch = y.shape[1] if y.ndim > 1 else 1
+        zi = self._exc_zi.get(slot)
+        if zi is None or zi.shape[1] != ch:
+            zi = np.zeros((2, ch), dtype=np.float64)
+        out, zf = _scipy_signal().lfilter([b0, b1, b2], [1.0, a1, a2], np.asarray(y, dtype=np.float64), axis=0, zi=zi)
+        self._exc_zi[slot] = np.asarray(zf, dtype=np.float64)
+        return out
+
+    def _harmonic_2nd(self, band: np.ndarray, slot: str, hz: float = 20.0) -> np.ndarray:
+        """Genera el 2º armónico de ``band`` SIN continua.
+
+        Rectificar (``|band|``) produce un 2º armónico fuerte, pero también una
+        componente continua (2·a/π); se elimina con un paso-alto de 1 polo
+        (~20 Hz) con estado por ``slot``. Un simple ``band·|band|`` NO serviría:
+        es impar y genera 1º/3º, no 2º."""
+        rect = np.abs(band)
+        R = math.exp(-2.0 * math.pi * hz / max(int(self.sample_rate), 1))
+        ch = rect.shape[1] if rect.ndim > 1 else 1
+        zi = self._exc_zi.get(slot)
+        if zi is None or zi.shape[1] != ch:
+            zi = np.zeros((1, ch), dtype=np.float64)
+        out, zf = _scipy_signal().lfilter([1.0, -1.0], [1.0, -R], rect, axis=0, zi=zi)
+        self._exc_zi[slot] = np.asarray(zf, dtype=np.float64)
+        return out
+
+    def _clarity(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Exciter de presencia (Fidelity/Clarity): 2º armónico de 3 kHz+.
+
+        Filtra la banda de presencia y añade su 2º armónico (rectificado, sin
+        continua): restaura detalle sin subir esa banda de volumen (contenido
+        NUEVO, no EQ). 0-10."""
+        amount = float(self.effects.get("fidelity", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0:
+            self._exc_zi.pop("cl_hp", None)
+            self._exc_zi.pop("cl_h2", None)
+            return y
+        hp = self._apply_biquad(y, "cl_hp", self._highpass(CLARITY_HP_HZ, self.sample_rate))
+        h = self._harmonic_2nd(hp, "cl_h2")
+        g = (amount / EFFECT_MAX) * CLARITY_MIX
+        return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
+
+    def _bass_exciter(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Exciter de graves (Bass): 2º armónico de <100 Hz.
+
+        Filtra la banda de graves y añade su 2º armónico (rectificado, sin
+        continua): más 'punch' en altavoces pequeños (el oído interpreta el
+        armónico como grave real). 0-10."""
+        amount = float(self.effects.get("bass", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0:
+            self._exc_zi.pop("bx_lp", None)
+            self._exc_zi.pop("bx_h2", None)
+            return y
+        lp = self._apply_biquad(y, "bx_lp", self._lowpass(BASS_EXCITER_LP_HZ, self.sample_rate))
+        h = self._harmonic_2nd(lp, "bx_h2")
+        g = (amount / EFFECT_MAX) * BASS_EXCITER_MIX
+        return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
 
     def _limit(self, y, thr=None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).
