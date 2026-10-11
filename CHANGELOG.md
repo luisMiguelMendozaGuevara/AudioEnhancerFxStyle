@@ -4,9 +4,9 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
-## [Unreleased] — rama `feat-enhancer-fx`
+## [1.6.0] — rama `feat-enhancer-fx`
 
-Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
+Paridad "enhancer" estilo FxSound, por fases.
 
 ### Fase 0 — Fundaciones (2026-10-10)
 - **Capa enhancer**: `EnhancerParams`/`Enhancer` ganan `effects` (5 efectos
