@@ -1252,3 +1252,72 @@ def test_surround_guard_reduce_con_senal_muy_ancha():
     warm(e, x, blocks=blocks)
     y = e.process(x.copy())
     assert _side_rms(y) < _side_rms(x) * 1.15
+
+
+# ---------- Balance y Master (Fase 4) ----------
+
+
+def test_balance_cero_es_passthrough():
+    e, blocks = _fx({})
+    x = _stereo_phase(440.0, 0.3)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_balance_derecha_mutea_izquierda():
+    x = _stereo_phase(440.0, 0.3)
+    e, blocks = _fx({})
+    e.balance_db = 20.0
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert float(np.abs(y[:, 0]).max()) < 1e-4  # L mudo
+    assert float(np.abs(y[:, 1]).max()) > float(np.abs(x[:, 1]).max())  # R sube
+
+
+def test_balance_izquierda_mutea_derecha():
+    x = _stereo_phase(440.0, 0.3)
+    e, blocks = _fx({})
+    e.balance_db = -20.0
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert float(np.abs(y[:, 1]).max()) < 1e-4  # R mudo
+    assert float(np.abs(y[:, 0]).max()) > float(np.abs(x[:, 0]).max())
+
+
+def test_master_cero_es_passthrough():
+    e, blocks = _fx({})
+    x = _stereo(0.2, 440.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_master_mas_6db_duplica():
+    x = _stereo(0.2, 440.0)
+    e, blocks = _fx({})
+    e.master_gain_db = 6.0206
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x * 2.0, atol=2e-3)
+
+
+def test_master_menos_6db_reduce_a_la_mitad():
+    x = _stereo(0.2, 440.0)
+    e, blocks = _fx({})
+    e.master_gain_db = -6.0206
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x * 0.5, atol=2e-3)
+
+
+def test_master_cambio_suave_sin_clic():
+    """Un salto del master no produce un escalón: la rampa es por muestra."""
+    x = _stereo(0.2, 440.0)
+    e, blocks = _fx({})
+    warm(e, x, blocks=blocks)
+    e.master_gain_db = 20.0  # salto fuerte
+    y = e.process(x.copy())
+    ratio = np.abs(y[:, 0]) / np.maximum(np.abs(x[:, 0]), 1e-6)
+    assert float(ratio[0]) < 1.5  # al inicio sigue ~1.0 (sin escalón)
+    assert float(ratio[-1]) > 2.0  # al final del bloque ya subió

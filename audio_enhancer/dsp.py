@@ -279,7 +279,7 @@ class Enhancer:
         self.master_gain_db: float = 0.0
         self.leveling: float = 0.0
         # Valores suavizados (rampas anti-cremallera) de los nuevos controles.
-        self._c_master_db: float = 0.0
+        self._c_master: float = 1.0
         self._c_balance_db: float = 0.0
         self._c_effects: dict[str, float] = default_effects()
         # DC blocker SIEMPRE activo al inicio de la cadena: quita la componente
@@ -365,7 +365,7 @@ class Enhancer:
         self.level_peak_r = 0.0
         self.level_gr = 0.0
         self._cf_state = None
-        self._c_master_db = 0.0
+        self._c_master = 1.0
         self._c_balance_db = 0.0
         self._c_effects = default_effects()
         self._dc_state = None
@@ -818,6 +818,10 @@ class Enhancer:
         y = self._ambience(y, block_sec)
         y = self._surround(y, block_sec)
         y = self._apply_volume(y, block_sec)
+        # Balance y Master (Fase 4): control estéreo y ganancia final, antes
+        # del limitador (para que el techo siga siendo el último eslabón).
+        y = self._apply_balance(y, block_sec)
+        y = self._apply_master(y, block_sec)
         if self.limiter:
             y = self._limit(y)
         elif y.size:
@@ -1111,6 +1115,43 @@ class Enhancer:
         out[:, 0] = m + s_new
         out[:, 1] = m - s_new
         return out
+
+    # ---------- capa enhancer: Balance y Master (Fase 4) ----------
+
+    def _apply_balance(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Balance L/R con ley equal-power (±20). El centro es unidad (sin cambio).
+
+        A ±20 el canal opuesto queda mudo y el otro sube ~+3 dB; en el centro
+        ambos quedan a 1.0. El valor se suaviza (~50 ms) para no chasquear."""
+        self._c_balance_db = self._ramp(self._c_balance_db, self.balance_db, self._onepole(block_sec, 0.05))
+        if abs(self._c_balance_db) < 1e-4 or y.ndim < 2 or y.shape[1] < 2:
+            return y
+        p = max(-1.0, min(1.0, self._c_balance_db / BALANCE_DB_MAX))
+        theta = (p + 1.0) * math.pi / 4.0
+        gl = math.cos(theta) * math.sqrt(2.0)
+        gr = math.sin(theta) * math.sqrt(2.0)
+        out = y.copy()
+        out[:, 0] *= gl
+        out[:, 1] *= gr
+        return out
+
+    def _apply_master(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Master gain (dB, ±20) con rampa POR MUESTRA (anti-clic).
+
+        Misma recurrencia que ``_apply_volume``: la ganancia se desliza muestra
+        a muestra (tau ~100 ms) para que un salto del slider no se oiga."""
+        target = 10.0 ** (self.master_gain_db / 20.0)
+        start = self._c_master
+        if abs(target - start) < 1e-6:
+            self._c_master = target
+            if abs(target - 1.0) < 1e-9:
+                return y
+            return (y * target).astype(np.float32, copy=False)
+        n = y.shape[0]
+        ramp = _ramp_falling(n, self.sample_rate, 0.10)
+        gain = target + (start - target) * ramp
+        self._c_master = float(gain[-1])
+        return (y * gain[:, None]).astype(np.float32, copy=False)
 
     def _limit(self, y, thr=None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).

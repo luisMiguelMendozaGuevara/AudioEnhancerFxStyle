@@ -69,6 +69,18 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
   surround preserva la suma mono; no afecta contenido mono; ensancha el Side;
   mono-bass protege los graves; guard reduce con señal muy ancha.
 
+### Fase 4 — Balance + Master (2026-10-10)
+- **Balance L/R** (`balance_db`, ±20 dB, ley equal-power): centro = unidad (sin
+  cambio); a ±20 el canal opuesto queda mudo y el otro sube ~+3 dB. Suavizado
+  (~50 ms) para no chasquear.
+- **Master** (`master_gain_db`, ±20 dB): ganancia final con rampa POR MUESTRA
+  (τ ~100 ms, anti-clic), colocada antes del limitador (el techo sigue siendo
+  el último eslabón).
+- **UI**: sliders "Balance L/R" y "Master (ganancia)" (sin toggle: 0 dB = no
+  hace nada); señales `balance_changed`/`master_gain_changed`; textos ES/EN.
+- **Tests**: 0 = passthrough; ±20 mutea un canal; +6 dB duplica y −6 dB reduce a
+  la mitad; un salto del master no produce escalón (rampa por muestra).
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

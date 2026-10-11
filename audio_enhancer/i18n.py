@@ -43,6 +43,8 @@ TRANSLATIONS = {
     "Exciter de graves": "Bass exciter",
     "Ambiente (sala)": "Ambience (room)",
     "Surround (anchura)": "Surround (width)",
+    "Balance L/R": "Balance L/R",
+    "Master (ganancia)": "Master (gain)",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -285,6 +287,13 @@ EXPLAIN = {
     "es muy ancha, se reduce automáticamente para no perder compatibilidad "
     "mono. Nota: si sumas la salida a mono, el ensanchado se cancela (es "
     "normal); con auriculares se nota más.",
+    "balance": "Balance L/R (equal-power): mueve la imagen hacia un lado. En "
+    "0 dB no hace nada; a -20 dB el canal derecho queda mudo (y el izquierdo "
+    "sube ~3 dB), y al revés. Sirve para compensar altavoces o auriculares "
+    "desiguales.",
+    "master": "Master (ganancia): sube o baja ±20 dB la salida ya procesada, "
+    "con rampa por muestra (sin clics). Es el control de nivel final: úsalo "
+    "para igualar con otras apps sin tocar el volumen de Windows.",
 }
 
 EXPLAIN_EN = {
@@ -334,6 +343,12 @@ EXPLAIN_EN = {
     "stays centered (mono-bass) and, if the signal is already very wide, it is "
     "reduced automatically to keep mono compatibility. Note: summing the "
     "output to mono cancels the widening (expected); headphones show it best.",
+    "balance": "Balance L/R (equal-power): moves the image to one side. At "
+    "0 dB it does nothing; at -20 dB the right channel is muted (and the left "
+    "rises ~3 dB), and vice versa. Useful to compensate uneven speakers or "
+    "headphones.",
+    "master": "Master (gain): raises or lowers the already-processed output by "
+    "±20 dB, with a per-sample ramp (no clicks). It is the final level control.",
 }
 
 EQ_EXPLAIN = {

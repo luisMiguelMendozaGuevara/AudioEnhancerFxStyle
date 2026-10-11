@@ -60,6 +60,9 @@ class AudioState(QObject):
     # Ambience/Surround (Fase 3): 0-10.
     ambience_changed = Signal(float)
     surround_changed = Signal(float)
+    # Balance/Master (Fase 4): dB (±20).
+    balance_changed = Signal(float)
+    master_gain_changed = Signal(float)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -105,6 +108,9 @@ class AudioState(QObject):
         # Ambience/Surround (Fase 3): 0-10.
         self._ambience: float = 0.0
         self._surround: float = 0.0
+        # Balance/Master (Fase 4): dB.
+        self._balance_db: float = 0.0
+        self._master_gain_db: float = 0.0
         # Crossfeed BS2B (auriculares): OFF por defecto + preset.
         self._crossfeed: bool = False
         self._crossfeed_preset: str = "Natural"
@@ -404,6 +410,28 @@ class AudioState(QObject):
             self._surround = v
             self.surround_changed.emit(v)
 
+    @property
+    def balance_db(self) -> float:
+        return self._balance_db
+
+    @balance_db.setter
+    def balance_db(self, value: float) -> None:
+        v = float(value)
+        if self._balance_db != v:
+            self._balance_db = v
+            self.balance_changed.emit(v)
+
+    @property
+    def master_gain_db(self) -> float:
+        return self._master_gain_db
+
+    @master_gain_db.setter
+    def master_gain_db(self, value: float) -> None:
+        v = float(value)
+        if self._master_gain_db != v:
+            self._master_gain_db = v
+            self.master_gain_changed.emit(v)
+
     def _emit_crossfeed(self) -> None:
         self.crossfeed_changed.emit(
             {
@@ -494,4 +522,6 @@ class AudioState(QObject):
         self.bass_exciter = float(enhancer.effects.get("bass", 0.0))
         self.ambience = float(enhancer.effects.get("ambience", 0.0))
         self.surround = float(enhancer.effects.get("surround", 0.0))
+        self.balance_db = float(enhancer.balance_db)
+        self.master_gain_db = float(enhancer.master_gain_db)
         self.ab_enabled = float(enhancer.blend) > 0.5

@@ -198,6 +198,20 @@ class EffectsPage(QWidget):
             self._surround_card._toggle.toggled.connect(self._on_surround_toggle)
         layout.addWidget(self._surround_card)
 
+        # Balance/Master (Fase 4): control estéreo y ganancia final (sin toggle:
+        # en 0 dB no hacen nada).
+        self._balance_card = EffectCard(
+            self._t("Balance L/R"), -20.0, 20.0, 0.0, "dB", has_toggle=False, tooltip=self._explain("balance")
+        )
+        self._balance_card._slider.valueChanged.connect(lambda v: self._on_balance(v / 100))
+        layout.addWidget(self._balance_card)
+
+        self._master_card = EffectCard(
+            self._t("Master (ganancia)"), -20.0, 20.0, 0.0, "dB", has_toggle=False, tooltip=self._explain("master")
+        )
+        self._master_card._slider.valueChanged.connect(lambda v: self._on_master(v / 100))
+        layout.addWidget(self._master_card)
+
         self._limiter_card = EffectCard(
             self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
         )
@@ -398,6 +412,12 @@ class EffectsPage(QWidget):
             self._surround_card._toggle.setText("ON" if on else "OFF")
         self._state.surround = self._surround_card.value() if on else 0.0
 
+    def _on_balance(self, v) -> None:
+        self._state.balance_db = v
+
+    def _on_master(self, v) -> None:
+        self._state.master_gain_db = v
+
     def _on_limiter_toggle(self, on) -> None:
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setText("ON" if on else "OFF")
@@ -470,6 +490,12 @@ class EffectsPage(QWidget):
 
     def set_surround(self, v) -> None:
         self._surround_card.set_value(v)
+
+    def set_balance(self, v) -> None:
+        self._balance_card.set_value(v)
+
+    def set_master(self, v) -> None:
+        self._master_card.set_value(v)
 
     def set_limiter(self, on) -> None:
         self._limiter_card.set_enabled(on)
