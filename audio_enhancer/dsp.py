@@ -14,6 +14,7 @@ import dataclasses
 import math
 import threading
 from functools import lru_cache
+from typing import Any
 
 import numpy as np
 
@@ -211,6 +212,53 @@ def _ramp_falling(n: int, sample_rate: int, tau: float) -> np.ndarray:
     return np.power(pole, steps).astype(np.float32, copy=False)
 
 
+@lru_cache(maxsize=64)
+def _onepole_powers(pole: float, n: int) -> np.ndarray:
+    """p^1 .. p^n cacheados (para el filtro de 1 polo vectorizado)."""
+    return pole ** np.arange(1, n + 1, dtype=np.float64)
+
+
+def _onepole_lp(x: np.ndarray, pole: float, y_last, b0=None):
+    """Filtro de 1 polo ``y[n] = b0*x[n] + pole*y[n-1]`` SIN scipy.
+
+    Solución cerrada del filtro: ``y[n] = p^(n+1)*y_last +
+    b0*sum_{k<=n} p^(n-k) x[k]``, calculable con cumsum (sin bucle Python).
+    Evita la llamada a ``scipy.signal.lfilter`` (~150 us de overhead por
+    bloque). Válido para polos cercanos a 1 (nuestros taus van de 5 ms a
+    0.35 s), donde ``p^-k`` no desborda en float64. ``b0`` por defecto es
+    ``1-pole`` (ganancia unitaria en continua, como un low-pass).
+
+    Devuelve ``(y, y_last_nuevo)``."""
+    n = x.shape[0]
+    if n == 0:
+        return x, y_last
+    if b0 is None:
+        b0 = 1.0 - pole
+    powers = _onepole_powers(pole, n)
+    if x.ndim > 1:
+        powers = powers[:, None]
+    cs = np.cumsum(np.asarray(x, dtype=np.float64) / powers, axis=0)
+    y = powers * (b0 * cs + y_last)
+    return y, (y[-1] if y.ndim == 1 else y[-1].copy())
+
+
+def _onepole_hp(x: np.ndarray, pole: float, y_last, x_last):
+    """Paso-alto de 1 polo ``y[n] = x[n]-x[n-1] + pole*y[n-1]`` SIN scipy.
+
+    Diferencia la señal y aplica el filtro de 1 polo con b0=1 (así el
+    numerador es 1 - z^-1: el paso-alto clásico). Devuelve
+    ``(y, y_last_nuevo, x_last_nuevo)``."""
+    n = x.shape[0]
+    if n == 0:
+        return x, y_last, x_last
+    x64 = np.asarray(x, dtype=np.float64)
+    d = np.empty_like(x64)
+    d[0] = x64[0] - x_last
+    d[1:] = x64[1:] - x64[:-1]
+    y, y_last = _onepole_lp(d, pole, y_last, b0=1.0)
+    return y, y_last, (x64[-1] if x64.ndim == 1 else x64[-1].copy())
+
+
 @dataclasses.dataclass(frozen=True)
 class EnhancerParams:
     """Instantánea INMUTABLE de los parámetros controlados por la UI.
@@ -334,14 +382,17 @@ class Enhancer:
         # producción va siempre True): permite verificar que el RESTO de la
         # cadena es transparente sin el paso-alto.
         self.dc_block_enabled: bool = True
-        self._dc_state: np.ndarray | None = None
+        self._dc_state: tuple | None = None
+        self._dc_ch: int = 0
         self._dc_R: float = 0.0
         self._dc_src_rate: int = 0
         # Estados (zi) de las envolventes de las etapas enhancer (Dynamic
         # Boost, Leveling): dict slot -> zi, persistente entre bloques.
         self._env_zi: dict[str, np.ndarray] = {}
-        # Estados (zi) de los filtros de banda de los exciters (Clarity/Bass).
-        self._exc_zi: dict[str, np.ndarray] = {}
+        # Estados de los filtros de banda de los exciters (Clarity/Bass):
+        # arrays zi de scipy para los biquads y tuplas (y_last, x_last) para
+        # los pasos-altos de 1 polo (implementación numpy).
+        self._exc_zi: dict[str, Any] = {}
         # Ambience (Fase 3): historial para las reflexiones tempranas.
         self._amb_hist: np.ndarray | None = None
         # Surround (Fase 3): factor del guard de correlación (suavizado).
@@ -414,6 +465,7 @@ class Enhancer:
         self._c_master = 1.0
         self._c_balance_db = 0.0
         self._dc_state = None
+        self._dc_ch = 0
         self._env_zi = {}
         self._exc_zi = {}
         self._amb_hist = None
@@ -766,10 +818,13 @@ class Enhancer:
             self._dc_src_rate = rate
             self._dc_state = None
         ch = y.shape[1] if y.ndim > 1 else 1
-        if self._dc_state is None or self._dc_state.shape[1] != ch:
-            self._dc_state = np.zeros((1, ch), dtype=np.float32)
-        out, zf = _scipy_signal().lfilter([1.0, -1.0], [1.0, -self._dc_R], y, axis=0, zi=self._dc_state)
-        self._dc_state = np.asarray(zf, dtype=np.float32)
+        if self._dc_state is None or self._dc_ch != ch:
+            z = np.zeros(ch, dtype=np.float64) if y.ndim > 1 else 0.0
+            self._dc_state = (z, z)
+            self._dc_ch = ch
+        y_last, x_last = self._dc_state
+        out, y_last, x_last = _onepole_hp(y, self._dc_R, y_last, x_last)
+        self._dc_state = (y_last, x_last)
         return out
 
     def process(self, data):
@@ -1038,16 +1093,13 @@ class Enhancer:
         Reutiliza el truco dual de ``_compress``: dos one-pole sobre la potencia
         (rápido para subidas, lento para caídas) y se toma el máximo. El estado
         persiste por ``slot`` entre bloques (no se reinicia cada bloque)."""
-        sig = _scipy_signal()
-        a_att = 1.0 - math.exp(-1.0 / (self.sample_rate * ENV_ATTACK_S))
-        a_rel = 1.0 - math.exp(-1.0 / (self.sample_rate * ENV_RELEASE_S))
+        pole_att = math.exp(-1.0 / (self.sample_rate * ENV_ATTACK_S))
+        pole_rel = math.exp(-1.0 / (self.sample_rate * ENV_RELEASE_S))
         p = np.mean(np.asarray(y, dtype=np.float64) ** 2, axis=1)
-        zi_att = self._env_zi.get(slot + "_att")
-        zi_rel = self._env_zi.get(slot + "_rel")
-        zi_att = np.zeros(1) if zi_att is None else zi_att
-        zi_rel = np.zeros(1) if zi_rel is None else zi_rel
-        fast, self._env_zi[slot + "_att"] = sig.lfilter([a_att], [1.0, a_att - 1.0], p, zi=zi_att)
-        slow, self._env_zi[slot + "_rel"] = sig.lfilter([a_rel], [1.0, a_rel - 1.0], p, zi=zi_rel)
+        # Dos one-pole vectorizados (sin scipy: cumsum) y se toma el máximo:
+        # rápido para subidas, lento para caídas. El estado (y_last) persiste.
+        fast, self._env_zi[slot + "_att"] = _onepole_lp(p, pole_att, self._env_zi.get(slot + "_att", 0.0))
+        slow, self._env_zi[slot + "_rel"] = _onepole_lp(p, pole_rel, self._env_zi.get(slot + "_rel", 0.0))
         return np.sqrt(np.maximum(np.maximum(fast, slow), 0.0))
 
     @staticmethod
@@ -1113,11 +1165,12 @@ class Enhancer:
         rect = np.abs(band)
         R = math.exp(-2.0 * math.pi * hz / max(int(self.sample_rate), 1))
         ch = rect.shape[1] if rect.ndim > 1 else 1
-        zi = self._exc_zi.get(slot)
-        if zi is None or zi.shape[1] != ch:
-            zi = np.zeros((1, ch), dtype=np.float64)
-        out, zf = _scipy_signal().lfilter([1.0, -1.0], [1.0, -R], rect, axis=0, zi=zi)
-        self._exc_zi[slot] = np.asarray(zf, dtype=np.float64)
+        state = self._exc_zi.get(slot)
+        if not isinstance(state, tuple):
+            z = np.zeros(ch, dtype=np.float64) if rect.ndim > 1 else 0.0
+            state = (z, z)
+        out, y_last, x_last = _onepole_hp(rect, R, state[0], state[1])
+        self._exc_zi[slot] = (y_last, x_last)
         return out
 
     def _clarity(self, y: np.ndarray, block_sec: float) -> np.ndarray:

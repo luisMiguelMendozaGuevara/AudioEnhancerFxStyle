@@ -1400,3 +1400,34 @@ def test_todas_las_bandas_llegan_al_motor_para_cada_set(n):
     assert e.eq_gains == gains
     assert len(e.eq_q_values) == n
     assert e.snapshot_params().eq_gains == tuple(gains)
+
+
+def test_onepole_vectorizado_coincide_con_la_recurrencia():
+    """(opt) Los filtros de 1 polo en numpy (cumsum) deben coincidir con la
+    recurrencia directa: la optimización no cambia el sonido."""
+    from audio_enhancer.dsp import _onepole_hp, _onepole_lp
+
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(1024)
+    pole = 0.998
+
+    y, z = _onepole_lp(x, pole, 0.0)
+    ref = np.zeros_like(x)
+    last = 0.0
+    for i, v in enumerate(x):
+        last = (1.0 - pole) * v + pole * last
+        ref[i] = last
+    assert np.allclose(y, ref, atol=1e-9)
+    assert abs(z - ref[-1]) < 1e-9
+
+    y2, z2, xl = _onepole_hp(x, pole, 0.0, 0.0)
+    ref2 = np.zeros_like(x)
+    last = 0.0
+    prev = 0.0
+    for i, v in enumerate(x):
+        last = (v - prev) + pole * last
+        ref2[i] = last
+        prev = v
+    assert np.allclose(y2, ref2, atol=1e-9)
+    assert abs(z2 - ref2[-1]) < 1e-9
+    assert abs(xl - x[-1]) < 1e-12
