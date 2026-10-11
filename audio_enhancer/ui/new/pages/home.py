@@ -277,7 +277,14 @@ class HomePage(QWidget):
         self._preset_combo.blockSignals(False)
 
     def set_preset(self, name: str) -> None:
+        # Selección PROGRAMÁTICA: NO debe emitir preset_selected. Antes lo
+        # emitía (setCurrentText dispara currentTextChanged) y al arrancar /
+        # cambiar tema o idioma re-aplicaba el preset, machacando el EQ cargado
+        # del config (p. ej. un EQ de 31 bandas volvía a 9). El usuario sigue
+        # emitiendo con normalidad al usar el combo.
+        self._preset_combo.blockSignals(True)
         self._preset_combo.setCurrentText(name)
+        self._preset_combo.blockSignals(False)
 
     def set_volume(self, value: float) -> None:
         self._volume_slider.blockSignals(True)

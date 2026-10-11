@@ -1018,6 +1018,7 @@ class NewMainWindow(QMainWindow):
     def _on_eq_freq(self, index: int, freq: float) -> None:
         """(Fase 5) Mueve la frecuencia central de una banda (acotada)."""
         self.enhancer.set_eq_band_freq(index, freq)
+        self.state.eq_bands = list(self.enhancer.eq_bands)
         self._pages["equalizer"].set_bands(self.enhancer.eq_bands)
 
     def _on_eq_q(self, q: float) -> None:

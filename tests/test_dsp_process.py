@@ -51,6 +51,24 @@ def test_viz_loop_no_trabaja_si_no_se_necesita():
     assert all(v == 0.0 for v in vals), "no debería calcular espectro si no se necesita"
 
 
+def test_apply_no_resetea_filtros_si_las_bandas_no_cambian():
+    """(fix EQ) _apply con las MISMAS bandas no debe limpiar los estados del EQ.
+
+    Antes llamaba set_eq_bands en cada snapshot (al mover cualquier control),
+    lo que borraba _states/_section_on/_sos_cache/_coeff_cache: transitorios y
+    recomputación inútil."""
+    from audio_enhancer.dsp import Enhancer
+    from audio_enhancer.dsp_process import _apply
+
+    e = Enhancer()
+    e.set_eq_bands([60, 250, 1000, 4000, 12000])
+    e.eq_gains = [0.0, 0.0, 6.0, 0.0, 0.0]
+    e._states["eq_2"] = np.zeros((2, 2), dtype=np.float32)  # simula sección activa
+    _apply(e, {"eq_bands": [60.0, 250.0, 1000.0, 4000.0, 12000.0], "eq_gains": [0.0, 0.0, 3.0, 0.0, 0.0]})
+    assert "eq_2" in e._states  # el estado NO se limpió
+    assert e.eq_gains[2] == 3.0  # pero la ganancia sí se aplicó
+
+
 def test_child_main_procesa_y_publica_contadores():
     """El bucle del hijo procesa bloques y publica sus contadores (Paso 0)."""
     import queue as _queue

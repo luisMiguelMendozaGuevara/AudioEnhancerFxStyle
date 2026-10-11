@@ -1387,3 +1387,16 @@ def test_params_round_trip_eq_avanzado():
     assert e2.eq_gains == [1.0, -2.0, 3.0]
     assert e2.eq_q == pytest.approx(2.5)
     assert isinstance(snap, EnhancerParams)
+
+
+@pytest.mark.parametrize("n", [5, 9, 10, 15, 31])
+def test_todas_las_bandas_llegan_al_motor_para_cada_set(n):
+    """(F5) Para cada set, TODOS los índices llegan al motor (red de seguridad)."""
+    e = Enhancer()
+    e.set_eq_band_count(n)
+    gains = [float((i % 5) + 1) for i in range(n)]
+    e.eq_gains = gains
+    assert len(e.eq_bands) == n
+    assert e.eq_gains == gains
+    assert len(e.eq_q_values) == n
+    assert e.snapshot_params().eq_gains == tuple(gains)

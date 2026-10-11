@@ -553,6 +553,57 @@ def test_aviso_de_recorte_con_efectos_sin_proteccion(window):
     window.state.limiter = True
 
 
+def test_set_preset_no_emite_preset_selected(window):
+    """(fix EQ) set_preset es programático: no debe re-aplicar el preset.
+
+    Antes emitía (setCurrentText dispara currentTextChanged) y al arrancar o
+    cambiar tema/idioma re-aplicaba el preset, machacando el EQ del config."""
+    home = window._pages["home"]
+    llamadas: list[str] = []
+    home.preset_selected.connect(llamadas.append)
+    home.set_preset("Rock")
+    assert llamadas == []  # programático: silencio
+    # El usuario sí emite (setCurrentText solo emite si el texto CAMBIA).
+    home._preset_combo.setCurrentText("Clásica / Acústica")
+    assert llamadas == ["Clásica / Acústica"]
+
+
+def test_eq_multibanda_sobrevive_al_arranque_y_al_rebuild(window):
+    """(fix EQ) Un EQ de 31 bandas configurado NO debe volver a 9 al re-aplicar
+    el preset (arranque / cambio de tema o idioma).
+
+    El preset guardado debe ser distinto del PRIMER item del combo: repoblar
+    deja el combo en el primero, así que si el guardado es ese, set_preset no
+    cambia nada y no emite. El caso real del usuario es 'Recomendado
+    (altavoces)' (no es el primero)."""
+    home = window._pages["home"]
+    home._preset_combo.blockSignals(True)
+    home._preset_combo.setCurrentText("Recomendado (altavoces)")
+    home._preset_combo.blockSignals(False)
+
+    window._on_eq_band_count(31)
+    gains = list(window.state.eq_gains)
+    gains[20] = 6.0
+    window.state.eq_gains = gains
+    window._save_config()
+    assert window._config.load()["preset"] == "Recomendado (altavoces)"
+
+    # Arranque simulado: el combo muestra otro nombre y _apply_config repuebla
+    # con el guardado -> antes re-emitía y machacaba el EQ.
+    home._preset_combo.blockSignals(True)
+    home._preset_combo.setCurrentText("Rock")
+    home._preset_combo.blockSignals(False)
+    window._apply_config()
+    assert len(window.enhancer.eq_bands) == 31
+    assert window.enhancer.eq_gains[20] == pytest.approx(6.0)
+
+    window._rebuild_pages()  # cambio de tema/idioma
+    assert len(window.enhancer.eq_bands) == 31
+    assert window.enhancer.eq_gains[20] == pytest.approx(6.0)
+
+    window._on_eq_band_count(9)  # restaurar para el resto de tests
+
+
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
     """R3-B2: la FFT solo corre si la ventana es visible, la página activa es
     Home y la app no se está cerrando (offscreen: isVisible() es False)."""

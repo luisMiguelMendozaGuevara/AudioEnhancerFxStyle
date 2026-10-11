@@ -135,7 +135,13 @@ class EQCurveWidget(QWidget):
         return self._freq_to_x(self._bands[i], w, ml, mr)
 
     def _x_to_nearest_band(self, x, w, ml, mr):
-        best, best_d = -1, 25
+        """Banda más cercana a ``x`` (SIEMPRE devuelve una banda).
+
+        Antes había un umbral de 25 px que dejaba zonas muertas: con el eje X
+        logarítmico los huecos entre puntos son irregulares (hasta ~150 px con
+        5 bandas), así que muchos clics/arrastres no hacían nada ("algunas
+        bandas no funcionan"). El hover ya resalta qué banda se agarraría."""
+        best, best_d = 0, float("inf")
         for i in range(len(self._bands)):
             d = abs(x - self._band_to_x(i, w, ml, mr))
             if d < best_d:

@@ -111,6 +111,24 @@ def test_eq_freq_to_band_mapea_centros(qapp):
         assert w._bin_band[k] == i
 
 
+def test_eq_click_entre_puntos_agarra_la_banda_mas_cercana(qapp):
+    """(fix EQ) Ya no hay zonas muertas: cualquier x agarra la banda más cercana.
+
+    Antes, con el eje log y el umbral de 25 px, los huecos entre puntos (hasta
+    ~150 px con 5 bandas) no respondían a clics/arrastres."""
+    from audio_enhancer.ui.new.pages.equalizer import EQCurveWidget
+
+    w = EQCurveWidget()
+    w.resize(830, 220)
+    w.set_bands([60, 250, 1000, 4000, 12000])  # set de 5
+    ww, ml, mr = w.width(), 44, 12
+    x0 = w._band_to_x(0, ww, ml, mr)
+    x1 = w._band_to_x(1, ww, ml, mr)
+    assert w._x_to_nearest_band((x0 + x1) / 2, ww, ml, mr) in (0, 1)  # zona muerta eliminada
+    assert w._x_to_nearest_band(5.0, ww, ml, mr) == 0  # extremo izquierdo
+    assert w._x_to_nearest_band(ww - 5.0, ww, ml, mr) == len(w._bands) - 1  # extremo derecho
+
+
 def test_eq_y_to_gain_es_inverso_de_gain_to_y(qapp):
     from audio_enhancer.ui.new.pages.equalizer import EQCurveWidget
 

@@ -84,7 +84,12 @@ def _apply(enhancer, snap: dict) -> None:
         setattr(enhancer, name, value)
     bands = snap.get("eq_bands")
     if bands:
-        enhancer.set_eq_bands(bands)
+        # Solo tocar las bandas si CAMBIARON: set_eq_bands limpia estados y
+        # cachés del EQ, y llamarlo en cada snapshot (al mover CUALQUIER
+        # control) metía transitorios y recomputaba sin motivo.
+        new_bands = [float(f) for f in bands]
+        if new_bands != enhancer.eq_bands:
+            enhancer.set_eq_bands(new_bands)
     gains = snap.get("eq_gains")
     if gains is not None:
         enhancer.eq_gains = [float(g) for g in gains]
