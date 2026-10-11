@@ -57,6 +57,9 @@ class AudioState(QObject):
     # Exciters (Fase 2): 0-10.
     fidelity_changed = Signal(float)
     bass_exciter_changed = Signal(float)
+    # Ambience/Surround (Fase 3): 0-10.
+    ambience_changed = Signal(float)
+    surround_changed = Signal(float)
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
@@ -99,6 +102,9 @@ class AudioState(QObject):
         # Exciters (Fase 2): 0-10.
         self._fidelity: float = 0.0
         self._bass_exciter: float = 0.0
+        # Ambience/Surround (Fase 3): 0-10.
+        self._ambience: float = 0.0
+        self._surround: float = 0.0
         # Crossfeed BS2B (auriculares): OFF por defecto + preset.
         self._crossfeed: bool = False
         self._crossfeed_preset: str = "Natural"
@@ -376,6 +382,28 @@ class AudioState(QObject):
             self._bass_exciter = v
             self.bass_exciter_changed.emit(v)
 
+    @property
+    def ambience(self) -> float:
+        return self._ambience
+
+    @ambience.setter
+    def ambience(self, value: float) -> None:
+        v = float(value)
+        if self._ambience != v:
+            self._ambience = v
+            self.ambience_changed.emit(v)
+
+    @property
+    def surround(self) -> float:
+        return self._surround
+
+    @surround.setter
+    def surround(self, value: float) -> None:
+        v = float(value)
+        if self._surround != v:
+            self._surround = v
+            self.surround_changed.emit(v)
+
     def _emit_crossfeed(self) -> None:
         self.crossfeed_changed.emit(
             {
@@ -464,4 +492,6 @@ class AudioState(QObject):
         self.leveling = float(enhancer.effects.get("leveling", 0.0))
         self.fidelity = float(enhancer.effects.get("fidelity", 0.0))
         self.bass_exciter = float(enhancer.effects.get("bass", 0.0))
+        self.ambience = float(enhancer.effects.get("ambience", 0.0))
+        self.surround = float(enhancer.effects.get("surround", 0.0))
         self.ab_enabled = float(enhancer.blend) > 0.5

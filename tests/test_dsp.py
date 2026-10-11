@@ -1148,3 +1148,107 @@ def test_exciters_no_recortan_senal_normal():
     warm(e, x, blocks=blocks)
     y = e.process(x.copy())
     assert float(np.abs(y).max()) < 1.0
+
+
+# ---------- Ambience y Surround (Fase 3) ----------
+
+
+def _stereo_phase(freq, phase, amp=0.2):
+    t = np.arange(N) / FS
+    left = (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    right = (amp * np.sin(2 * np.pi * freq * t + phase)).astype(np.float32)
+    return np.stack([left, right], axis=1)
+
+
+def _side_rms(x):
+    return float(np.sqrt(np.mean(((x[:, 0] - x[:, 1]) / 2.0) ** 2)))
+
+
+def test_ambience_apagado_es_passthrough():
+    e, blocks = _fx({"ambience": 0.0})
+    x = _stereo(0.2, 440.0)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_ambience_anade_espacio_y_decorrela():
+    """Con entrada mono, las reflexiones suben la energía y decorrelacionan
+    L/R (taps distintos por canal)."""
+    x = _stereo(0.2, 440.0)  # L == R
+    e, blocks = _fx({"ambience": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert _rms(y) > _rms(x) * 1.05
+    assert not np.allclose(y[:, 0], y[:, 1], atol=1e-3)
+
+
+def test_ambience_silencio_no_produce_nan():
+    e, _ = _fx({"ambience": 10.0})
+    x = np.zeros((1024, 2), dtype=np.float32)
+    y = e.process(x.copy())
+    assert np.all(np.isfinite(y))
+    assert np.allclose(y, 0.0)
+
+
+def test_surround_apagado_es_passthrough():
+    e, blocks = _fx({"surround": 0.0})
+    x = _stereo_phase(440.0, 0.3)
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_surround_conserva_la_suma_mono():
+    """Mono-compat: el ensanchado NO debe cambiar la suma L+R (M se preserva)."""
+    x = _stereo_phase(440.0, 0.3)
+    e, blocks = _fx({"surround": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y[:, 0] + y[:, 1], x[:, 0] + x[:, 1], atol=1e-4)
+
+
+def test_surround_no_afecta_contenido_mono():
+    """Si L==R no hay Side que ensanchar: la salida no cambia."""
+    x = _stereo(0.2, 440.0)  # L == R
+    e, blocks = _fx({"surround": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-4)
+
+
+def test_surround_ensancha_el_side():
+    """Con Side presente y correlación alta, el ensanchado sube el Side."""
+    x = _stereo_phase(440.0, 0.3)  # corr ~0.95 -> el guard permite ensanchar
+    e_off, blocks = _fx({"surround": 0.0})
+    warm(e_off, x, blocks=blocks)
+    y_off = e_off.process(x.copy())
+    e_on, _ = _fx({"surround": 10.0})
+    warm(e_on, x, blocks=blocks)
+    y_on = e_on.process(x.copy())
+    assert _side_rms(y_on) > _side_rms(y_off) * 1.3
+
+
+def test_surround_mono_bass_protege_los_graves():
+    """El ensanchado crece mucho menos en graves (80 Hz) que en medios (500 Hz)."""
+
+    def _side_gain(freq):
+        x = _stereo_phase(freq, 0.3, amp=0.3)
+        e, blocks = _fx({"surround": 10.0})
+        warm(e, x, blocks=blocks)
+        y = e.process(x.copy())
+        return _side_rms(y) / max(_side_rms(x), 1e-9)
+
+    assert _side_gain(500.0) > _side_gain(80.0) + 0.1
+
+
+def test_surround_guard_reduce_con_senal_muy_ancha():
+    """Con correlación ~0 (contenido ya muy ancho) el guard evita ensanchar más."""
+    t = np.arange(N) / FS
+    left = (0.2 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    right = (0.2 * np.sin(2 * np.pi * 660.0 * t)).astype(np.float32)
+    x = np.stack([left, right], axis=1)
+    e, blocks = _fx({"surround": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    assert _side_rms(y) < _side_rms(x) * 1.15

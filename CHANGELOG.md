@@ -54,6 +54,21 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
 - **Tests**: apagado = passthrough; 2º armónico medido por FFT (5k→10k y
   80→160 Hz) ×5; sin continua añadida; sin recorte nuevo con señal normal.
 
+### Fase 3 — Ambience + Surround (2026-10-10)
+- **Ambience** (`effects["ambience"]`, 0-10): 3 reflexiones tempranas por canal
+  a retardos primos distintos (L 11/23/37 ms, R 13/27/41 ms) con ganancias
+  decrecientes; historial O(n) (sin allocations por tap); mezcla `amount/10·0.3`.
+- **Surround** (`effects["surround"]`, 0-10): ensanchado Mid/Side
+  (`S *= 1 + amount/10·0.8`) SOLO por encima de 150 Hz (**mono-bass**: los
+  graves quedan al centro) y con **guard de correlación** (si la señal ya es
+  ancha se reduce; factor suavizado ~50 ms). La suma mono (L+R) se preserva
+  exactamente.
+- **UI**: tarjetas "Ambiente (sala)" y "Surround (anchura)" 0-10 con toggle;
+  señales `ambience_changed`/`surround_changed`; textos ES/EN.
+- **Tests**: apagado = passthrough; ambience sube energía y decorrelaciona L/R;
+  surround preserva la suma mono; no afecta contenido mono; ensancha el Side;
+  mono-bass protege los graves; guard reduce con señal muy ancha.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

@@ -180,6 +180,24 @@ class EffectsPage(QWidget):
             self._bass_exciter_card._toggle.toggled.connect(self._on_bass_exciter_toggle)
         layout.addWidget(self._bass_exciter_card)
 
+        # Ambience/Surround (Fase 3): espacio (reflexiones tempranas) y anchura
+        # estéreo (M/S con mono-bass y guard de correlación).
+        self._ambience_card = EffectCard(
+            self._t("Ambiente (sala)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("ambience")
+        )
+        self._ambience_card._slider.valueChanged.connect(lambda v: self._on_ambience(v / 100))
+        if self._ambience_card._toggle:
+            self._ambience_card._toggle.toggled.connect(self._on_ambience_toggle)
+        layout.addWidget(self._ambience_card)
+
+        self._surround_card = EffectCard(
+            self._t("Surround (anchura)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("surround")
+        )
+        self._surround_card._slider.valueChanged.connect(lambda v: self._on_surround(v / 100))
+        if self._surround_card._toggle:
+            self._surround_card._toggle.toggled.connect(self._on_surround_toggle)
+        layout.addWidget(self._surround_card)
+
         self._limiter_card = EffectCard(
             self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
         )
@@ -364,6 +382,22 @@ class EffectsPage(QWidget):
             self._bass_exciter_card._toggle.setText("ON" if on else "OFF")
         self._state.bass_exciter = self._bass_exciter_card.value() if on else 0.0
 
+    def _on_ambience(self, v) -> None:
+        self._state.ambience = v
+
+    def _on_surround(self, v) -> None:
+        self._state.surround = v
+
+    def _on_ambience_toggle(self, on) -> None:
+        if self._ambience_card._toggle is not None:
+            self._ambience_card._toggle.setText("ON" if on else "OFF")
+        self._state.ambience = self._ambience_card.value() if on else 0.0
+
+    def _on_surround_toggle(self, on) -> None:
+        if self._surround_card._toggle is not None:
+            self._surround_card._toggle.setText("ON" if on else "OFF")
+        self._state.surround = self._surround_card.value() if on else 0.0
+
     def _on_limiter_toggle(self, on) -> None:
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setText("ON" if on else "OFF")
@@ -430,6 +464,12 @@ class EffectsPage(QWidget):
 
     def set_bass_exciter(self, v) -> None:
         self._bass_exciter_card.set_value(v)
+
+    def set_ambience(self, v) -> None:
+        self._ambience_card.set_value(v)
+
+    def set_surround(self, v) -> None:
+        self._surround_card.set_value(v)
 
     def set_limiter(self, on) -> None:
         self._limiter_card.set_enabled(on)

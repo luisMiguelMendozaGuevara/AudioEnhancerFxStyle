@@ -130,6 +130,16 @@ CLARITY_MIX = 0.5
 BASS_EXCITER_LP_HZ = 100.0
 BASS_EXCITER_MIX = 0.6
 EXCITER_Q = 0.707
+# Ambience: reflexiones tempranas (retardo en ms, ganancia) por canal; los
+# retardos son primos y distintos por canal (decorrelación L/R).
+AMBIENCE_TAPS_L = ((11.0, 0.35), (23.0, 0.20), (37.0, 0.12))
+AMBIENCE_TAPS_R = ((13.0, 0.35), (27.0, 0.20), (41.0, 0.12))
+AMBIENCE_MIX = 0.3
+# Surround: ensanchado M/S con mono-bass (los graves quedan al centro) y guard
+# de correlación (si la señal ya es ancha, se reduce el ensanchado).
+SURROUND_WIDTH = 0.8
+SURROUND_MONO_BASS_HZ = 150.0
+SURROUND_CORR_MIN = 0.2
 
 
 @lru_cache(maxsize=8)
@@ -286,6 +296,10 @@ class Enhancer:
         self._env_zi: dict[str, np.ndarray] = {}
         # Estados (zi) de los filtros de banda de los exciters (Clarity/Bass).
         self._exc_zi: dict[str, np.ndarray] = {}
+        # Ambience (Fase 3): historial para las reflexiones tempranas.
+        self._amb_hist: np.ndarray | None = None
+        # Surround (Fase 3): factor del guard de correlación (suavizado).
+        self._sr_boost: float = 0.0
         # Medidor. Por canal (L/R) y agregado: level_rms/level_peak son el
         # MAXIMO de ambos canales (compatibilidad con quien los lee como nivel
         # global); los _l/_r alimentan los medidores estéreo de la UI.
@@ -357,6 +371,8 @@ class Enhancer:
         self._dc_state = None
         self._env_zi = {}
         self._exc_zi = {}
+        self._amb_hist = None
+        self._sr_boost = 0.0
         self.spectrum = None
         self._snapshot = None
         self._spec_meta = None
@@ -798,6 +814,9 @@ class Enhancer:
         # Leveling (AGC lento) antes del volumen del usuario (normaliza el
         # material, no el ajuste manual del usuario).
         y = self._leveling(y, block_sec)
+        # Ambience/Surround (Fase 3): espacio y anchura antes del volumen.
+        y = self._ambience(y, block_sec)
+        y = self._surround(y, block_sec)
         y = self._apply_volume(y, block_sec)
         if self.limiter:
             y = self._limit(y)
@@ -1031,6 +1050,67 @@ class Enhancer:
         h = self._harmonic_2nd(lp, "bx_h2")
         g = (amount / EFFECT_MAX) * BASS_EXCITER_MIX
         return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
+
+    # ---------- capa enhancer: Ambience y Surround (Fase 3) ----------
+
+    def _ambience(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Reflexiones tempranas decorreladas (3 taps por canal).
+
+        Historial O(n) (sin allocations por tap): se concatenan el historial y
+        el bloque y se leen los taps a retardos primos distintos por canal
+        (L: 11/23/37 ms, R: 13/27/41 ms) con ganancias decrecientes. Añade
+        sensación de espacio (útil sobre todo con auriculares)."""
+        amount = float(self.effects.get("ambience", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0 or y.ndim < 2 or y.shape[1] < 2:
+            self._amb_hist = None
+            return y
+        rate = int(self.sample_rate)
+        max_delay = max(int(rate * d / 1000.0) for d, _ in AMBIENCE_TAPS_L + AMBIENCE_TAPS_R)
+        hist = self._amb_hist
+        if hist is None or hist.shape != (max_delay, 2):
+            hist = np.zeros((max_delay, 2), dtype=np.float32)
+        n = y.shape[0]
+        ext = np.concatenate([hist, y], axis=0)
+        wet = np.zeros_like(y)
+        for taps, ch in ((AMBIENCE_TAPS_L, 0), (AMBIENCE_TAPS_R, 1)):
+            for ms, gain in taps:
+                d = int(rate * ms / 1000.0)
+                start = max_delay - d
+                wet[:, ch] += gain * ext[start : start + n, ch]
+        self._amb_hist = np.ascontiguousarray(ext[-max_delay:])
+        mix = (amount / EFFECT_MAX) * AMBIENCE_MIX
+        return (y + mix * wet).astype(np.float32, copy=False)
+
+    def _surround(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """Ensanchado M/S con mono-bass y guard de correlación.
+
+        Ensancha la componente Side (``S *= 1 + amount/10·0.8``) SOLO por encima
+        de 150 Hz: los graves quedan al centro (mono-bass) para conservar la
+        compatibilidad mono. Si la señal ya es ancha (correlación L/R < 0.2), el
+        guard reduce el ensanchado. El factor del guard se suaviza (~50 ms)."""
+        amount = float(self.effects.get("surround", 0.0))
+        if amount <= 0.0 or y.shape[0] == 0 or y.ndim < 2 or y.shape[1] < 2:
+            self._exc_zi.pop("sr_hp", None)
+            self._sr_boost = 0.0
+            return y
+        m = 0.5 * (y[:, 0] + y[:, 1])
+        s = 0.5 * (y[:, 0] - y[:, 1])
+        s_hp = self._apply_biquad(s[:, None], "sr_hp", self._highpass(SURROUND_MONO_BASS_HZ, self.sample_rate))[:, 0]
+        s_low = s - s_hp
+        # Guard de correlación (bloque) suavizado con un polo.
+        el = float(np.dot(y[:, 0], y[:, 0]))
+        er = float(np.dot(y[:, 1], y[:, 1]))
+        cross = float(np.dot(y[:, 0], y[:, 1]))
+        denom = math.sqrt(max(el * er, 1e-12))
+        corr = cross / denom if denom > 0 else 1.0
+        target = 1.0 if corr >= SURROUND_CORR_MIN else max(0.0, corr / SURROUND_CORR_MIN)
+        self._sr_boost = self._ramp(self._sr_boost, target, self._onepole(block_sec, 0.05))
+        boost = 1.0 + (amount / EFFECT_MAX) * SURROUND_WIDTH * self._sr_boost
+        s_new = s_low + s_hp * boost
+        out = y.copy()
+        out[:, 0] = m + s_new
+        out[:, 1] = m - s_new
+        return out
 
     def _limit(self, y, thr=None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).

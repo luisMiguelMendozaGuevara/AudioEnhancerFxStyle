@@ -41,6 +41,8 @@ TRANSLATIONS = {
     "Nivelación (volumen)": "Leveling (volume)",
     "Claridad (Fidelity)": "Clarity (Fidelity)",
     "Exciter de graves": "Bass exciter",
+    "Ambiente (sala)": "Ambience (room)",
+    "Surround (anchura)": "Surround (width)",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -274,6 +276,15 @@ EXPLAIN = {
     "(el oído lo interpreta como grave real). Da 'punch' en altavoces pequeños "
     "sin retumbar. El 'Refuerzo de graves' de arriba es otra cosa: aquel sube "
     "el volumen de la banda; este crea contenido nuevo.",
+    "ambience": "Ambiente (sala): añade reflexiones tempranas muy cortas "
+    "(11-41 ms) decorreladas entre canales, como una sala pequeña. Con "
+    "auriculares la música deja de sentirse 'pegada al centro'. Un exceso "
+    "emborrona la imagen; prueba 2-4.",
+    "surround": "Surround (anchura): ensancha la imagen estéreo separando "
+    "Mid/Side. Los graves se quedan al centro (mono-bass) y, si la señal ya "
+    "es muy ancha, se reduce automáticamente para no perder compatibilidad "
+    "mono. Nota: si sumas la salida a mono, el ensanchado se cancela (es "
+    "normal); con auriculares se nota más.",
 }
 
 EXPLAIN_EN = {
@@ -316,6 +327,13 @@ EXPLAIN_EN = {
     "harmonic (the ear reads it as real bass). Adds punch on small speakers "
     "without boom. The 'Bass boost' shelf above is different: it raises the "
     "band's volume; this creates new content.",
+    "ambience": "Ambience (room): adds very short early reflections (11-41 ms) "
+    "decorrelated between channels, like a small room. With headphones the "
+    "music stops feeling 'stuck in the center'. Too much blurs the image.",
+    "surround": "Surround (width): widens the stereo image via Mid/Side. Bass "
+    "stays centered (mono-bass) and, if the signal is already very wide, it is "
+    "reduced automatically to keep mono compatibility. Note: summing the "
+    "output to mono cancels the widening (expected); headphones show it best.",
 }
 
 EQ_EXPLAIN = {

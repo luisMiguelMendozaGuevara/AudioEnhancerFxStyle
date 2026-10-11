@@ -230,6 +230,8 @@ class NewMainWindow(QMainWindow):
         state.leveling_changed.connect(_set_effect("leveling"))
         state.fidelity_changed.connect(_set_effect("fidelity"))
         state.bass_exciter_changed.connect(_set_effect("bass"))
+        state.ambience_changed.connect(_set_effect("ambience"))
+        state.surround_changed.connect(_set_effect("surround"))
 
         def _apply_crossfeed(cfg: dict) -> None:
             self.enhancer.crossfeed = bool(cfg["enabled"])
@@ -973,6 +975,8 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_leveling(float(self.enhancer.effects.get("leveling", 0.0)))
         self._pages["effects"].set_clarity(float(self.enhancer.effects.get("fidelity", 0.0)))
         self._pages["effects"].set_bass_exciter(float(self.enhancer.effects.get("bass", 0.0)))
+        self._pages["effects"].set_ambience(float(self.enhancer.effects.get("ambience", 0.0)))
+        self._pages["effects"].set_surround(float(self.enhancer.effects.get("surround", 0.0)))
         self._pages["effects"].set_crossfeed(
             self.enhancer.crossfeed,
             self.enhancer.crossfeed_preset,
