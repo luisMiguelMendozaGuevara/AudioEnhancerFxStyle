@@ -270,3 +270,36 @@ def test_preset_sin_bandas_usa_el_set_por_defecto(tmp_path):
     p = mgr.sanitize_preset({"eq_gains": [0.0] * 5})
     assert p is not None and len(p["eq_bands"]) == 5
     assert p["eq_bands"] == sorted(p["eq_bands"])
+
+
+# ---------- capa enhancer en el config (Fase 6) ----------
+
+
+def test_load_efectos_y_balance_master(tmp_path):
+    import json
+
+    p = tmp_path / "fx.json"
+    p.write_text(
+        json.dumps(
+            {
+                "effects": {"dynamic_boost": 5.0, "fidelity": 99.0, "raro": 3.0},
+                "balance_db": -5.0,
+                "master_gain_db": 3.0,
+                "leveling": 4.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = ConfigManager(eq_band_count=9, path=str(p)).load()
+    # Claves conocidas y acotadas; "raro" fuera.
+    assert cfg["effects"] == {"dynamic_boost": 5.0, "fidelity": 10.0}
+    assert cfg["balance_db"] == -5.0
+    assert cfg["master_gain_db"] == 3.0
+    assert cfg["leveling"] == 4.0
+
+
+def test_load_efectos_por_defecto_vacios(tmp_path):
+    cfg = ConfigManager(eq_band_count=9, path=str(tmp_path / "no.json")).load()
+    assert cfg["effects"] == {}
+    assert cfg["balance_db"] == 0.0 and cfg["master_gain_db"] == 0.0
+    assert cfg["leveling"] == 0.0

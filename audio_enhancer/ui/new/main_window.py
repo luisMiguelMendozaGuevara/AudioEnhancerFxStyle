@@ -227,7 +227,8 @@ class NewMainWindow(QMainWindow):
             return _apply
 
         state.dynamic_boost_changed.connect(_set_effect("dynamic_boost"))
-        state.leveling_changed.connect(_set_effect("leveling"))
+        # Leveling es un control aparte (no uno de los 5 efectos): va a su campo.
+        state.leveling_changed.connect(lambda v: setattr(self.enhancer, "leveling", float(v)))
         state.fidelity_changed.connect(_set_effect("fidelity"))
         state.bass_exciter_changed.connect(_set_effect("bass"))
         state.ambience_changed.connect(_set_effect("ambience"))
@@ -1237,6 +1238,11 @@ class NewMainWindow(QMainWindow):
         self.enhancer.crossfeed_preset = str(cfg["crossfeed_preset"])
         self.enhancer.crossfeed_cut_hz = int(cfg["crossfeed_cut_hz"])
         self.enhancer.crossfeed_feed_db = float(cfg["crossfeed_feed_db"])
+        # Capa enhancer (Fase 6): efectos + balance/master/leveling persistidos.
+        self.enhancer.effects = dict(cfg.get("effects") or {})
+        self.enhancer.balance_db = float(cfg.get("balance_db") or 0.0)
+        self.enhancer.master_gain_db = float(cfg.get("master_gain_db") or 0.0)
+        self.enhancer.leveling = float(cfg.get("leveling") or 0.0)
         self.watchdog_enabled = bool(cfg["watchdog"])
         self.native_capture = bool(cfg["native_capture"])
         self.controller.set_watchdog_enabled(self.watchdog_enabled)
@@ -1278,6 +1284,11 @@ class NewMainWindow(QMainWindow):
             "crossfeed_preset": str(self.enhancer.crossfeed_preset),
             "crossfeed_cut_hz": int(self.enhancer.crossfeed_cut_hz),
             "crossfeed_feed_db": float(self.enhancer.crossfeed_feed_db),
+            # Capa enhancer (Fase 6): efectos + balance/master/leveling.
+            "effects": {k: float(v) for k, v in self.enhancer.effects.items()},
+            "balance_db": float(self.enhancer.balance_db),
+            "master_gain_db": float(self.enhancer.master_gain_db),
+            "leveling": float(self.enhancer.leveling),
             "theme": Theme.mode,
             "latency_pref": int(self.state.latency_pref),
             "minimize_to_tray": bool(self.minimize_to_tray),

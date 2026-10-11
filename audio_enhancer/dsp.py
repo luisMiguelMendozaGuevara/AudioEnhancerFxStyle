@@ -1080,7 +1080,7 @@ class Enhancer:
         Envolvente RMS lenta -> corrección (objetivo - env) acotada a ±9 dB,
         escalada por ``amount`` 0-10 (0 = apagado). Va ANTES del volumen del
         usuario: normaliza el material, no su ajuste manual."""
-        amount = float(self.effects.get("leveling", 0.0))
+        amount = float(self.leveling)
         if amount <= 0.0 or y.shape[0] == 0:
             self._env_zi.pop("lv_att", None)
             self._env_zi.pop("lv_rel", None)

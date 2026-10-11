@@ -97,6 +97,18 @@ Paridad "enhancer" estilo FxSound, por fases (rama de prueba; `main` intacto).
   acotada entre vecinas, EQ de 5 bandas filtrando, round-trip de params, presets
   con bandas/Q, longitudes no soportadas rechazadas y UI→motor.
 
+### Fase 6 — Persistencia, presets incluidos y aviso (2026-10-10)
+- **Config**: `effects` (5, 0-10), `balance_db`, `master_gain_db` y `leveling`
+  se persisten y se sanean (solo claves conocidas, acotadas a rango).
+- **Presets incluidos nuevos** (esquema v2): "Música/Cine/Juegos/Voz/Graves
+  (enhancer)" con los efectos preajustados.
+- **Aviso de recorte**: la página Efectos avisa cuando hay efectos activos y
+  NINGUNA protección (ni limitador ni techo) → riesgo de recorte en el driver.
+- **Corrección**: `leveling` se leía del dict `effects` pero vivía en un campo
+  aparte (los presets no lo aplicaban al DSP); ahora es un único campo.
+- **Tests**: config con efectos/balance/master/leveling (saneo y acotado),
+  presets v1 y v2 válidos, y el aviso de recorte.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.

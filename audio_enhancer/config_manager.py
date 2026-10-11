@@ -76,6 +76,15 @@ class ConfigManager:
         """bool estricto: solo JSON true/false; cualquier otra cosa -> default."""
         return value if isinstance(value, bool) else default
 
+    def sanitize_effects(self, raw: Any) -> dict[str, float]:
+        """Sanea un dict de efectos enhancer (0-10, solo claves conocidas)."""
+        out: dict[str, float] = {}
+        if isinstance(raw, dict):
+            for key in EFFECT_KEYS:
+                if key in raw:
+                    out[key] = _clamp(self.as_float(raw[key], 0.0), EFFECT_MIN, EFFECT_MAX)
+        return out
+
     # ---------- presets ----------
 
     # Esquema de preset v2 (dict). Campos: volume, bass, treble, eq_gains,
@@ -145,12 +154,7 @@ class ConfigManager:
         except (TypeError, ValueError):
             bands = list(EQ_BAND_SETS[n])
         try:
-            effects_raw = value.get("effects")
-            effects: dict[str, float] = {}
-            if isinstance(effects_raw, dict):
-                for key in EFFECT_KEYS:
-                    if key in effects_raw:
-                        effects[key] = _clamp(float(effects_raw[key]), EFFECT_MIN, EFFECT_MAX)
+            effects = self.sanitize_effects(value.get("effects"))
             return {
                 "volume": _clamp(float(value.get("volume", 1.0)), VOLUME_MIN, VOLUME_MAX),
                 "bass": _clamp(float(value.get("bass", 0.0)), BASS_MIN, BASS_MAX),
@@ -256,6 +260,11 @@ class ConfigManager:
             "eq_gains": eq_gains,
             "eq_bands": eq_bands,
             "eq_q": _clamp(self.as_float(raw.get("eq_q"), 1.4), 0.2, 10.0),
+            # Capa enhancer (Fase 6): efectos + balance/master/leveling.
+            "effects": self.sanitize_effects(raw.get("effects")),
+            "balance_db": _clamp(self.as_float(raw.get("balance_db"), 0.0), BALANCE_DB_MIN, BALANCE_DB_MAX),
+            "master_gain_db": _clamp(self.as_float(raw.get("master_gain_db"), 0.0), MASTER_DB_MIN, MASTER_DB_MAX),
+            "leveling": _clamp(self.as_float(raw.get("leveling"), 0.0), LEVELING_MIN, LEVELING_MAX),
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),
             "true_peak": self.as_bool(raw.get("true_peak"), True),

@@ -547,7 +547,7 @@ class AudioState(QObject):
         self.crossfeed = bool(enhancer.crossfeed)
         self.final_clip = bool(enhancer.final_clip_enabled)
         self.dynamic_boost = float(enhancer.effects.get("dynamic_boost", 0.0))
-        self.leveling = float(enhancer.effects.get("leveling", 0.0))
+        self.leveling = float(enhancer.leveling)
         self.fidelity = float(enhancer.effects.get("fidelity", 0.0))
         self.bass_exciter = float(enhancer.effects.get("bass", 0.0))
         self.ambience = float(enhancer.effects.get("ambience", 0.0))

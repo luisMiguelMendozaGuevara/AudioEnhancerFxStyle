@@ -109,6 +109,43 @@ class EffectsPage(QWidget):
         self._t = t or (lambda text: text)
         self._explain = explain or (lambda key: "")
         self._build()
+        # Aviso (Fase 6): efectos activos sin NINGUNA protección = riesgo de
+        # recorte en el driver. Se recalcula al cambiar efectos o protecciones.
+        for sig in (
+            state.limiter_changed,
+            state.safety_ceiling_changed,
+            state.dynamic_boost_changed,
+            state.leveling_changed,
+            state.fidelity_changed,
+            state.bass_exciter_changed,
+            state.ambience_changed,
+            state.surround_changed,
+            state.master_gain_changed,
+        ):
+            sig.connect(lambda *_: self._update_warning())
+        self._update_warning()
+
+    def _update_warning(self) -> None:
+        activos = (
+            self._state.dynamic_boost > 0
+            or self._state.leveling > 0
+            or self._state.fidelity > 0
+            or self._state.bass_exciter > 0
+            or self._state.ambience > 0
+            or self._state.surround > 0
+            or abs(self._state.master_gain_db) > 0.05
+        )
+        protegido = self._state.limiter or self._state.safety_ceiling
+        if activos and not protegido:
+            self._warn_label.setText(
+                self._t(
+                    "Hay efectos activos y ninguna protección: la salida puede "
+                    "recortar (distorsión). Activa el limitador o el techo de seguridad."
+                )
+            )
+            self._warn_label.show()
+        else:
+            self._warn_label.hide()
 
     def _build(self) -> None:
         scroll = QScrollArea()
@@ -127,6 +164,16 @@ class EffectsPage(QWidget):
             f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
         )
         layout.addWidget(title)
+
+        # Aviso de recorte (Fase 6): oculto salvo efectos activos sin protección.
+        self._warn_label = QLabel("")
+        self._warn_label.setWordWrap(True)
+        self._warn_label.setStyleSheet(
+            f"color: {Theme.WARNING}; background: {Theme.WARNING_BG}; "
+            f"border: 1px solid {Theme.WARNING}; border-radius: 6px; padding: 8px;"
+        )
+        self._warn_label.hide()
+        layout.addWidget(self._warn_label)
 
         self._bass_card = EffectCard(
             self._t("Refuerzo de graves (dB)"), 0.0, 12.0, 0.0, "dB", tooltip=self._explain("bass")

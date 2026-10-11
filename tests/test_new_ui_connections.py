@@ -131,9 +131,14 @@ def test_volume_slider_reaches_dsp(window):
 
 
 def test_preset_selection_updates_dsp_and_state(window):
-    name = next(n for n, v in window._all_presets().items() if v[1] != 0 or any(v[3]))
+    def _bass_gains(v):
+        if isinstance(v, dict):
+            return float(v.get("bass", 0.0)), list(v.get("eq_gains", []))
+        return float(v[1]), list(v[3])
+
+    name = next(n for n, v in window._all_presets().items() if _bass_gains(v)[0] != 0 or any(_bass_gains(v)[1]))
     window._on_preset_selected(name)
-    vol, bass, treble, gains = window._all_presets()[name]
+    bass, gains = _bass_gains(window._all_presets()[name])
     assert window.enhancer.bass == pytest.approx(bass)
     assert window.enhancer.eq_gains == [pytest.approx(g) for g in gains]
     # state sincronizado (antes quedaba en 0 y desincronizaba la UI)
@@ -509,11 +514,11 @@ def test_exportar_presets_a_json(window, tmp_path, monkeypatch):
 
 
 def test_efectos_enhancer_conectados_al_motor(window):
-    """Fase 1: los sliders de la capa enhancer llegan al DSP (dict effects)."""
+    """Fase 1: los sliders de la capa enhancer llegan al DSP."""
     window.state.dynamic_boost = 4.0
     assert window.enhancer.effects.get("dynamic_boost") == pytest.approx(4.0)
     window.state.leveling = 6.0
-    assert window.enhancer.effects.get("leveling") == pytest.approx(6.0)
+    assert window.enhancer.leveling == pytest.approx(6.0)  # campo aparte, no efecto
 
 
 def test_eq_avanzado_conectado_al_motor(window):
@@ -525,6 +530,27 @@ def test_eq_avanzado_conectado_al_motor(window):
     window._on_eq_freq(0, 90.0)
     assert window.enhancer.eq_bands[0] == pytest.approx(90.0, rel=0.01)
     window._on_eq_band_count(9)  # restaurar el estado para el resto de tests
+
+
+def test_aviso_de_recorte_con_efectos_sin_proteccion(window):
+    """(F6) Con efectos activos y sin limitador/techo, la página avisa."""
+    page = window._pages["effects"]
+    # Estado limpio: sin efectos -> sin aviso.
+    window.state.safety_ceiling = False
+    window.state.limiter = True
+    window.state.dynamic_boost = 0.0
+    assert page._warn_label.isHidden()
+    # Efecto activo sin protección -> aviso.
+    window.state.limiter = False
+    window.state.dynamic_boost = 5.0
+    assert not page._warn_label.isHidden()
+    # Cualquier protección lo apaga.
+    window.state.safety_ceiling = True
+    assert page._warn_label.isHidden()
+    # Restaurar para el resto de tests.
+    window.state.safety_ceiling = False
+    window.state.dynamic_boost = 0.0
+    window.state.limiter = True
 
 
 def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):

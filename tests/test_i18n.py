@@ -125,15 +125,16 @@ def test_presets_incluyen_el_predeterminado():
 
 
 def test_presets_tienen_formato_valido():
-    eq_bands = len(Enhancer().eq_bands)
+    """Acepta v1 (tupla) y v2 (dict): se normalizan con ConfigManager."""
+    from audio_enhancer.config_manager import ConfigManager
+
+    mgr = ConfigManager(eq_band_count=9)
     for nombre, cfg in PRESETS.items():
         assert isinstance(nombre, str) and nombre
-        vol, bass, treble, eq = cfg
-        assert isinstance(vol, (int, float))
-        assert isinstance(bass, (int, float))
-        assert isinstance(treble, (int, float))
-        assert isinstance(eq, (list, tuple)) and len(eq) == eq_bands
-        assert all(isinstance(g, (int, float)) for g in eq)
+        p = mgr.sanitize_preset(cfg)
+        assert p is not None, nombre
+        assert len(p["eq_gains"]) in (5, 9, 10, 15, 31)
+        assert all(isinstance(g, (int, float)) for g in p["eq_gains"])
 
 
 def test_preset_plano_esta_plano():

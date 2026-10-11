@@ -990,12 +990,15 @@ def test_dc_blocker_se_puede_aislar_en_tests():
 
 
 def _fx(amount: dict, blocks: int = 90):
-    """Enhancer aislado (sin comp/limit/DC) con efectos enhancer configurados."""
+    """Enhancer aislado (sin comp/limit/DC) con efectos enhancer configurados.
+
+    `leveling` no es uno de los 5 efectos (va en su propio campo)."""
     e = Enhancer()
     e.compressor = False
     e.limiter = False
     e.dc_block_enabled = False
-    e.effects = dict(amount)
+    e.effects = {k: v for k, v in amount.items() if k != "leveling"}
+    e.leveling = float(amount.get("leveling", 0.0))
     return e, blocks
 
 

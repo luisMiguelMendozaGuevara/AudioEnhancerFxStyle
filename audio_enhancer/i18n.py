@@ -45,6 +45,11 @@ TRANSLATIONS = {
     "Surround (anchura)": "Surround (width)",
     "Balance L/R": "Balance L/R",
     "Master (ganancia)": "Master (gain)",
+    "Música (enhancer)": "Music (enhancer)",
+    "Cine (enhancer)": "Movie (enhancer)",
+    "Juegos (enhancer)": "Gaming (enhancer)",
+    "Voz (enhancer)": "Voice (enhancer)",
+    "Graves (enhancer)": "Bass (enhancer)",
     "Perfil": "Profile",
     "Avanzado": "Advanced",
     "Frec.": "Freq.",
@@ -394,6 +399,44 @@ PRESETS = {
     "Cine / Series": (1.1, 4.0, 1.5, [4, 3, 1.5, -0.5, 0, 0.5, 1, 2, 2.5]),
     "Noche (vol. baja)": (0.45, 3.0, 0.5, [3, 2, 1.5, 0.5, 0, 0, 0, 1, 1.5]),
     "Agudos (Treble)": (1.0, 0.0, 4.0, [0, 0, 0, 0, 0, 0, 1, 2.5, 3.5]),
+    # Presets con la capa enhancer (Fase 6, esquema v2): los efectos van en
+    # 0-10 y las bandas/Q sin especificar usan el set por defecto de 9.
+    "Música (enhancer)": {
+        "volume": 1.0,
+        "bass": 1.0,
+        "treble": 0.5,
+        "eq_gains": [1.5, 1.0, 0.0, -0.5, 0.0, 0.0, 0.5, 1.0, 1.5],
+        "effects": {"dynamic_boost": 3.0, "fidelity": 3.0, "ambience": 1.0},
+    },
+    "Cine (enhancer)": {
+        "volume": 1.0,
+        "bass": 3.0,
+        "treble": 1.0,
+        "eq_gains": [3.0, 2.0, 0.5, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0],
+        "effects": {"surround": 3.0, "dynamic_boost": 4.0, "bass": 3.0},
+    },
+    "Juegos (enhancer)": {
+        "volume": 1.0,
+        "bass": 2.0,
+        "treble": 2.0,
+        "eq_gains": [2.0, 1.5, 0.0, -1.0, -0.5, 0.5, 1.5, 2.0, 2.5],
+        "effects": {"surround": 4.0, "fidelity": 4.0, "dynamic_boost": 2.0},
+    },
+    "Voz (enhancer)": {
+        "volume": 1.0,
+        "bass": 0.0,
+        "treble": 1.0,
+        "eq_gains": [0.0, 0.0, -0.5, 1.0, 3.0, 4.0, 3.0, 1.5, 0.5],
+        "effects": {"fidelity": 4.0, "dynamic_boost": 3.0},
+        "leveling": 4.0,
+    },
+    "Graves (enhancer)": {
+        "volume": 1.0,
+        "bass": 4.0,
+        "treble": 0.0,
+        "eq_gains": [4.0, 3.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+        "effects": {"bass": 6.0, "dynamic_boost": 3.0},
+    },
 }
 
 
