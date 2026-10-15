@@ -109,6 +109,25 @@ Paridad "enhancer" estilo FxSound, por fases.
 - **Tests**: config con efectos/balance/master/leveling (saneo y acotado),
   presets v1 y v2 válidos, y el aviso de recorte.
 
+### Correcciones post-validacion y anti-cortes (2026-10-11)
+- **EQ**: el preset ya no machaca el EQ configurado al arrancar o cambiar de
+  tema (`set_preset` silencioso); se eliminan las zonas muertas de arrastre y
+  los filtros no se resetean por snapshot.
+- **Preset "Recomendado"**: leveling 2 (con 4 bajaba la musica fuerte y el
+  volumen alto hacia que el techo aplastara los picos).
+- **Rendimiento DSP**: filtros de 1 polo en numpy (cumsum) en vez de scipy
+  lfilter; capa enhancer 4795 -> 1552 us/bloque (22.5% -> 7.3%).
+- **Anti-cortes**:
+  - Modo **"Estabilidad" (250 ms fijo)** en el selector de latencia.
+  - **Pump sin descartes**: si la cola del hijo esta llena no se tira el bloque
+    (el ring crudo de 1 s hace de reserva) -> `qdrop` queda en 0.
+  - **Colas mas profundas**: hijo 8 -> 128 bloques (~2.7 s), salida 8 -> 32.
+  - **Umbral de gracia 0.9 -> 0.5**: mas underruns se resuelven repitiendo
+    material con crossfade en vez de insertar silencio.
+  - **Boost adaptativo**: tras un corte real la consigna sube a 250 ms durante
+    20 s y vuelve sola (la metrica `fill=X/Y` muestra la consigna efectiva).
+- 323 tests verdes; ruff y mypy limpios.
+
 ## [1.5.14] - 2026-10-10
 
 Diagnóstico de pipeline (Paso 0) + un bug real de arranque.
