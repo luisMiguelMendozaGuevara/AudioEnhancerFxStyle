@@ -74,6 +74,7 @@ def _ctrl_running():
     return ctrl
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="pyaudiowpatch (WASAPI) es solo Windows")
 def test_start_es_idempotente_cierra_streams_previos():
     """Un segundo start() con la cadena ya activa NO debe dejar dos capturas
     (dos callbacks duplicaban 'capturados' y desbordaban el ring)."""
