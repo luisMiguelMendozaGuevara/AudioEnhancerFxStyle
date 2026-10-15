@@ -78,6 +78,7 @@ def _ctrl_running():
 def test_start_es_idempotente_cierra_streams_previos():
     """Un segundo start() con la cadena ya activa NO debe dejar dos capturas
     (dos callbacks duplicaban 'capturados' y desbordaban el ring)."""
+    pytest.importorskip("pyaudiowpatch")  # el CI no instala la dep (es solo Windows)
     ctrl = _ctrl_running()
     ctrl.engine.stream = _FakeStream(True)  # simular captura ya abierta
     ctrl.engine.out_stream = _FakeStream(True)
