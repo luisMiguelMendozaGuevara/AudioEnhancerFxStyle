@@ -44,24 +44,6 @@ def test_pyinstaller_instala_desde_pyproject():
     assert '".[dev]"' in text
 
 
-def _dep_names(specs) -> set[str]:
-    """Nombres de paquete normalizados ('numpy>=1.26' -> 'numpy')."""
-    import re
-
-    return {re.split(r"[<>=!\[; ]", d.strip())[0].lower() for d in specs if d.strip()}
-
-
-def _names_from_requirements(path: Path) -> set[str]:
-    """Nombres declarados en un requirements*.txt (ignora comentarios/opciones)."""
-    out = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
-            continue
-        out |= _dep_names([line])
-    return out
-
-
 def test_build_produce_instalador_y_portable():
     """El CI debe construir AMBOS artefactos desde specs que existen: el
     instalador (onedir + Inno Setup) y el portable (onefile)."""
@@ -104,6 +86,30 @@ def test_readme_documenta_ambos_artefactos():
     assert "--onefile" not in readme.split("## Building an Executable")[0]
 
 
+def _specs_from_requirements(path: Path) -> set[str]:
+    """Especificaciones declaradas en un requirements*.txt (sin espacios)."""
+    out = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        out.add(line.replace(" ", ""))
+    return out
+
+
+def test_pyproject_version_alineada_con_constants():
+    """La versión en pyproject.toml debe coincidir con APP_VERSION en constants.py."""
+    import tomllib
+
+    from audio_enhancer.constants import APP_VERSION
+
+    root = WORKFLOWS.parent.parent
+    with open(root / "pyproject.toml", "rb") as f:
+        pp = tomllib.load(f)
+    version = pp["project"]["version"]
+    assert version == APP_VERSION, f"pyproject.toml={version} != APP_VERSION={APP_VERSION}"
+
+
 def test_requirements_alineado_con_pyproject():
     """requirements*.txt son duplicados manuales de pyproject.toml; este test
     caza desincronizaciones silenciosas (la fuente de verdad es pyproject)."""
@@ -113,11 +119,21 @@ def test_requirements_alineado_con_pyproject():
     with open(root / "pyproject.toml", "rb") as f:
         pp = tomllib.load(f)
 
-    runtime = _dep_names(pp["project"]["dependencies"])
-    dev = _dep_names(pp["project"]["optional-dependencies"]["dev"])
+    runtime_specs = {d.replace(" ", "") for d in pp["project"]["dependencies"]}
+    dev_specs = {d.replace(" ", "") for d in pp["project"]["optional-dependencies"]["dev"]}
 
-    in_req = _names_from_requirements(root / "requirements.txt")
-    in_req_dev = _names_from_requirements(root / "requirements-dev.txt")
+    in_req_specs = _specs_from_requirements(root / "requirements.txt")
+    in_req_dev_specs = _specs_from_requirements(root / "requirements-dev.txt")
 
-    assert runtime <= in_req, f"requirements.txt desincronizado: faltan {runtime - in_req}"
-    assert dev <= in_req_dev, f"requirements-dev.txt desincronizado: faltan {dev - in_req_dev}"
+    assert runtime_specs == in_req_specs, (
+        f"requirements.txt desincronizado con pyproject.toml: {runtime_specs ^ in_req_specs}"
+    )
+    assert dev_specs == in_req_dev_specs, (
+        f"requirements-dev.txt desincronizado con pyproject.toml: {dev_specs ^ in_req_dev_specs}"
+    )
+
+    # El workflow de tests instala PySide6 directamente: debe usar el mismo
+    # rango que pyproject.toml (6.8 LTS; 6.11.x crashea en Windows).
+    pyside_spec = next(d for d in runtime_specs if d.lower().startswith("pyside6"))
+    ci_tests = _read("python-application.yml")
+    assert f'"{pyside_spec}"' in ci_tests, f"python-application.yml debe fijar {pyside_spec} igual que pyproject.toml"

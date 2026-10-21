@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import QObject, Signal
 
 from ...constants import LATENCY_CHOICES_MS
@@ -69,7 +71,7 @@ class AudioState(QObject):
     latency_pref_changed = Signal(int)
     status_message_changed = Signal(str, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         # Estado de procesamiento
         self._processing: bool = False
@@ -529,7 +531,7 @@ class AudioState(QObject):
     # el camino vivo es main_window._refresh_visuals, que escribe
     # input_level/output_level directamente cada tick del timer.
 
-    def sync_from_enhancer(self, enhancer) -> None:
+    def sync_from_enhancer(self, enhancer: Any) -> None:
         """Lee todo el estado del Enhancer y emite senales."""
         self.volume = float(enhancer.volume)
         self.bass = float(enhancer.bass)

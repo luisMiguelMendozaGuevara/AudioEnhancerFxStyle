@@ -6,16 +6,21 @@ Real-time audio enhancer for Windows inspired by FxSound. Captures rendered audi
 
 ## Features
 
-- System audio capture via PyAudioWPatch / WASAPI loopback.
-- 9-band equalizer.
-- Bass and treble boost.
-- Volume control with smooth ramps.
-- RMS compressor and soft limiter.
-- Spectrum analyzer.
-- Low-latency ring buffer with clock-drift compensation.
-- Anti-click crossfades on underruns.
-- Built-in and custom presets.
-- English / Spanish interface with A/B mode to compare processed vs. raw audio.
+- **System audio capture** via PyAudioWPatch / WASAPI loopback (via VB-CABLE or optional experimental native capture).
+- **FxSound-style Enhancer layer (0–10)** with smooth anti-click transitions:
+  - **Clarity (Fidelity)**: 3 kHz+ presence harmonic exciter with anti-aliasing roll-off.
+  - **Ambience**: decorrelated early reflections for spatial depth.
+  - **Surround**: Mid/Side stereo widening with mono-bass protection (<150 Hz) and correlation guard.
+  - **Dynamic Boost**: upward RMS compressor that lifts quiet passages without touching peaks.
+  - **Bass Exciter**: sub-100 Hz 2nd-harmonic generator for punch on small speakers.
+  - **Leveling**: slow AGC to normalize loudness across tracks before user volume.
+- **Advanced Parametric Equalizer**: 5, 9, 10, 15, or 31 bands (ISO 1/3-octave), draggable logarithmic curve, editable center frequencies per band, and global Q control (0.2–10), plus Bass and Treble shelves.
+- **Headphone Crossfeed (BS2B)**: Natural, Moderate, Strong, and Custom (300–2000 Hz, 1–15 dB) profiles.
+- **Mastering & Protection**: per-sample RMS compressor, equal-power L/R balance (±20 dB), sample-ramped Master gain (±20 dB), and brickwall look-ahead limiter with 4x True-Peak oversampling and safety ceiling.
+- **Isolated DSP Child Process**: runs DSP and FFT spectrum analysis outside the main UI/PortAudio GIL, with adaptive 64-bar spectrum analyzer, stereo L/R + gain-reduction meters, and stream watchdog.
+- **Low-latency Ring Buffer**: cubic Hermite fractional resampling for clock-drift compensation (up to ±3% skew), grace-repeat crossfades on partial underruns, and automatic 250 ms stability boost.
+- **Built-in & Custom Presets (v2)**: automatic v1→v2 migration, JSON import/export, **automatic per-output-device preset memory**, and instant A/B bypass comparison.
+- **Modern PySide6 Interface**: bilingual English / Spanish UI with Dark and Light themes and system tray integration.
 
 ## Interface Language
 
@@ -139,12 +144,17 @@ You can also use `AudioEnhancer_instalar_seguro.bat`, which creates the virtual 
 
 ## Recommended Audio Route
 
-1. Install and configure VB-CABLE if you need to capture all system audio.
+1. Install and configure VB-CABLE if you need to capture all system audio reliably without feedback.
 2. Set `CABLE Input` as the default output device in Windows.
 3. In the app, select the `CABLE Input` loopback as capture.
 4. Select real speakers or headphones as output.
 5. Do not select the same device for capture and output — that would cause echo or feedback.
 6. Disable FxSound or other duplicate audio processors during testing.
+
+### Experimental: Native Capture (Without Virtual Cable)
+
+In **Settings**, you can enable **Native capture without cable (experimental)** (`native_capture`). When enabled, auto-selection picks the WASAPI loopback of your active output device if no virtual cable is present.
+- **Note**: Because Windows WASAPI loopback captures everything playing on that physical endpoint, routing the processed audio back to the *same* physical output device is blocked by the echo/feedback guard (`ROUTE_ECO`). Native capture is useful when routing from one physical/HDMI output loopback to a different physical output device (e.g., speakers loopback → USB headphones). For processing and listening on the same physical device, **VB-CABLE** remains the recommended setup.
 
 ## Building an Executable
 

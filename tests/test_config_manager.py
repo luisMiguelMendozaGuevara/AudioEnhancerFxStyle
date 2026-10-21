@@ -313,3 +313,28 @@ def test_load_efectos_por_defecto_vacios(tmp_path):
     assert cfg["effects"] == {}
     assert cfg["balance_db"] == 0.0 and cfg["master_gain_db"] == 0.0
     assert cfg["leveling"] == 0.0
+    assert cfg["device_presets"] == {}
+
+
+def test_sanitize_device_presets_filtra_entradas_invalidas(tmp_path):
+    import json
+
+    p = tmp_path / "dev.json"
+    p.write_text(
+        json.dumps(
+            {
+                "device_presets": {
+                    "Altavoces (Realtek)": "Recomendado (altavoces)",
+                    "Auriculares (USB)": "Recomendado (auriculares)",
+                    "": "Vacio",
+                    "MalValor": 123,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = ConfigManager(eq_band_count=9, path=str(p)).load()
+    assert cfg["device_presets"] == {
+        "Altavoces (Realtek)": "Recomendado (altavoces)",
+        "Auriculares (USB)": "Recomendado (auriculares)",
+    }

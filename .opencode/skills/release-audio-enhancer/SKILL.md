@@ -1,6 +1,6 @@
 ---
 name: release-audio-enhancer
-description: Publica una release de AudioEnhancerFxStyle de forma reproducible: versiona, valida, compila el exe con PyInstaller, prueba el arranque, arregla el acceso directo del escritorio, commitea, sube a GitHub y crea la release con gh. Usar cuando el usuario pida "crear el release", "compilar el exe", "publicar", "hacer el acceso directo", "release", "build" o "subir versión" del proyecto AudioEnhancerFxStyle.
+description: 'Publica una release de AudioEnhancerFxStyle de forma reproducible: versiona, valida, compila el exe con PyInstaller, prueba el arranque, arregla el acceso directo del escritorio, commitea, sube a GitHub y crea la release con gh. Usar cuando el usuario pida "crear el release", "compilar el exe", "publicar", "hacer el acceso directo", "release", "build" o "subir versión" del proyecto AudioEnhancerFxStyle.'
 ---
 
 # Release AudioEnhancerFxStyle
@@ -16,12 +16,15 @@ Ejecutar **siempre desde la raíz del repo** (usa el parámetro `workdir`).
 - El acceso directo de escritorio apunta al exe:
   `C:\Users\asus\Desktop\AudioEnhancerFxStyle.exe - Acceso directo.lnk`.
 
-## 1. Determinar la versión
+## 1. Determinar y alinear la versión
 
 - Ver el último tag remoto: `git ls-remote --tags origin`.
-- La nueva versión es la siguiente según semver (v1.1.0 -> v1.1.1 para bugfix).
-- Editar `audio_enhancer/constants.py` -> `APP_VERSION = "x.y.z"`.
-- `README.md` si menciona la versión.
+- La nueva versión es la siguiente según semver (v1.6.0 -> v1.6.1 para bugfix).
+- Actualizar la versión en los **3 puntos sincronizados** (validados por `tests/test_ci_workflows.py`):
+  1. `audio_enhancer/constants.py` -> `APP_VERSION = "x.y.z"`
+  2. `pyproject.toml` -> `version = "x.y.z"`
+  3. `installer/AudioEnhancerFxStyle.iss` -> `#define AppVersion "x.y.z"`
+- Actualizar `CHANGELOG.md` (y `README.md` si menciona la versión).
 
 ## 2. Validar (antes de commitear)
 
@@ -29,6 +32,7 @@ Ejecutar **siempre desde la raíz del repo** (usa el parámetro `workdir`).
 audio_enhancer_venv\Scripts\python.exe -m pytest -q
 audio_enhancer_venv\Scripts\python.exe -m ruff check .
 audio_enhancer_venv\Scripts\python.exe -m ruff format --check .
+audio_enhancer_venv\Scripts\python.exe -m mypy audio_enhancer
 ```
 
 ## 3. Commit
@@ -39,20 +43,19 @@ versión:
 
 ```
 git add <archivos del fix> && git commit -m "fix: descripcion breve del fallo"
-git add audio_enhancer/constants.py README.md && git commit -m "chore: bump version a x.y.z"
+git add audio_enhancer/constants.py pyproject.toml installer/AudioEnhancerFxStyle.iss CHANGELOG.md && git commit -m "chore: bump version a x.y.z"
 ```
 
-Nunca commitear `AGENTS.md` (gitignored), exes, `actual/`, `dist/` ni `*.spec`.
+Nunca commitear `AGENTS.md` (gitignored), exes, `actual/`, `dist/` ni `build/`.
 
-## 4. Compilar el exe
+## 4. Compilar el exe (usando los `.spec` trackeados)
 
 ```
-audio_enhancer_venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --onefile --windowed ^
-  --name AudioEnhancerFxStyle --icon assets\app.ico --add-data "assets;assets" ^
-  --hidden-import pyaudiowpatch AudioEnhancer_FxStyle.py
+audio_enhancer_venv\Scripts\python.exe -m PyInstaller --clean --noconfirm AudioEnhancerFxStyle-onefile.spec
 ```
 
-Resultado: `dist\AudioEnhancerFxStyle.exe`.
+Resultado portable: `dist\AudioEnhancerFxStyle.exe`.
+(Para el paquete `onedir` del instalador: `AudioEnhancerFxStyle.spec`).
 
 ## 5. Smoke test del exe
 

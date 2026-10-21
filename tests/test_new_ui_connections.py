@@ -616,3 +616,27 @@ def test_spectrum_worker_necesidad_calculada_por_visibilidad(window):
     assert window._spectrum_worker.needed.is_set()
     window._spectrum_worker.set_needed(False)
     assert not window._spectrum_worker.needed.is_set()
+
+
+def test_perfiles_automaticos_por_dispositivo_de_salida(window):
+    """Al elegir un preset se asocia al dispositivo de salida actual; al
+    cambiar entre salidas físicas se restaura el preset de cada una."""
+    audio_page = window._pages["audio"]
+    home = window._pages["home"]
+    audio_page.set_speakers(["Altavoces (Realtek)", "Auriculares (USB)"])
+
+    audio_page.set_output("Altavoces (Realtek)")
+    home.set_preset("Rock")
+    window._on_preset_selected("Rock")
+    assert window.device_presets["Altavoces (Realtek)"] == "Rock"
+
+    audio_page.set_output("Auriculares (USB)")
+    home.set_preset("Voz / Podcast")
+    window._on_preset_selected("Voz / Podcast")
+    assert window.device_presets["Auriculares (USB)"] == "Voz / Podcast"
+
+    # Al volver a Altavoces, se restaura automáticamente su preset ("Rock").
+    audio_page.set_output("Altavoces (Realtek)")
+    window._on_output_device_selected()
+    assert window.state.preset_name == "Rock"
+    assert home.preset_text() == "Rock"

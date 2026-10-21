@@ -185,6 +185,18 @@ class ConfigManager:
                     out[str(name)] = preset
         return out
 
+    @staticmethod
+    def sanitize_device_presets(raw: Any) -> dict[str, str]:
+        """Mapa dispositivo_salida -> nombre_preset (solo strings no vacíos)."""
+        out: dict[str, str] = {}
+        if isinstance(raw, dict):
+            for dev, preset_name in raw.items():
+                if isinstance(dev, str) and isinstance(preset_name, str):
+                    d, p = dev.strip(), preset_name.strip()
+                    if d and p:
+                        out[d] = p
+        return out
+
     # ---------- migración ----------
 
     @staticmethod
@@ -282,6 +294,7 @@ class ConfigManager:
             "autostart_audio": self.as_bool(raw.get("autostart_audio"), True),
             "notifications": self.as_bool(raw.get("notifications"), True),
             "custom_presets": custom,
+            "device_presets": self.sanitize_device_presets(raw.get("device_presets")),
         }
 
     def save(self, cfg: dict[str, Any]) -> bool:

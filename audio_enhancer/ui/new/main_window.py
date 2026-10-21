@@ -245,6 +245,7 @@ class NewMainWindow(QMainWindow):
         state.crossfeed_changed.connect(_apply_crossfeed)
         state.volume_changed.connect(lambda v: setattr(self.enhancer, "volume", float(v)))
         self.custom_presets: dict[str, Any] = {}
+        self.device_presets: dict[str, str] = {}
         self.loopbacks: list[dict[str, Any]] = []
         self.speakers: list[dict[str, Any]] = []
         # Preferencias de comportamiento (página Config): antes los tres
@@ -477,7 +478,7 @@ class NewMainWindow(QMainWindow):
         home.volume_edited.connect(self._on_volume_slider)
         audio_page = self._pages["audio"]
         audio_page.input_selected.connect(self._route_guard)
-        audio_page.output_selected.connect(self._route_guard)
+        audio_page.output_selected.connect(self._on_output_device_selected)
         audio_page.refresh_requested.connect(self._start_discovery)
         audio_page.latency_selected.connect(self._on_latency_pref_changed)
         self._pages["presets"].save_requested.connect(self._save_custom_preset)
@@ -832,6 +833,21 @@ class NewMainWindow(QMainWindow):
         if is_bluetooth_name(out) and self.state.latency_pref < 100:
             self._status_bar.set_status_text(self._t("Salida Bluetooth: usa 100 ms si oyes cortes."), WARN)
 
+    def _on_output_device_selected(self, *_args) -> None:
+        """Valida ruteo y restaura el preset recordado para esa salida física."""
+        self._route_guard()
+        audio_page = self._pages.get("audio")
+        home = self._pages.get("home")
+        if audio_page is None or home is None:
+            return
+        out_name = (audio_page.selected_output() or "").strip()
+        if not out_name:
+            return
+        remembered = self.device_presets.get(out_name)
+        if remembered and remembered in self._all_presets() and remembered != home.preset_text():
+            home.set_preset(remembered)
+            self._on_preset_selected(remembered)
+
     def _route_guard(self, *_args) -> None:
         audio_page = self._pages["audio"]
         src_name = audio_page.selected_source() or ""
@@ -908,6 +924,11 @@ class NewMainWindow(QMainWindow):
         )
         self._sync_ui_from_state()
         self.state.preset_name = name
+        audio_page = self._pages.get("audio")
+        if audio_page is not None:
+            out_name = (audio_page.selected_output() or "").strip()
+            if out_name:
+                self.device_presets[out_name] = name
 
     def _save_custom_preset(self) -> None:
         presets_page = self._pages["presets"]
@@ -986,7 +1007,7 @@ class NewMainWindow(QMainWindow):
         self._pages["effects"].set_safety_ceiling(self.enhancer.safety_ceiling_enabled)
         self._pages["effects"].set_final_clip(self.enhancer.final_clip_enabled)
         self._pages["effects"].set_dynamic_boost(float(self.enhancer.effects.get("dynamic_boost", 0.0)))
-        self._pages["effects"].set_leveling(float(self.enhancer.effects.get("leveling", 0.0)))
+        self._pages["effects"].set_leveling(float(self.enhancer.leveling))
         self._pages["effects"].set_clarity(float(self.enhancer.effects.get("fidelity", 0.0)))
         self._pages["effects"].set_bass_exciter(float(self.enhancer.effects.get("bass", 0.0)))
         self._pages["effects"].set_ambience(float(self.enhancer.effects.get("ambience", 0.0)))
@@ -1217,6 +1238,7 @@ class NewMainWindow(QMainWindow):
         self._keep_src = cfg["source"]
         self._keep_out = cfg["output"]
         self.custom_presets = dict(cfg["custom_presets"])
+        self.device_presets = dict(cfg.get("device_presets") or {})
         self.enhancer.apply_params(
             EnhancerParams(
                 volume=cfg["volume"],
@@ -1298,6 +1320,7 @@ class NewMainWindow(QMainWindow):
             "watchdog": bool(self.watchdog_enabled),
             "native_capture": bool(self.native_capture),
             "custom_presets": {n: dict(v) for n, v in self.custom_presets.items()},
+            "device_presets": dict(self.device_presets),
         }
         if not self._config.save(config):
             logger.warning("Failed to save config")
