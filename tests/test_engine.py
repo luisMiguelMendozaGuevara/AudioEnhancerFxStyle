@@ -617,6 +617,9 @@ def test_start_dsp_process_crea_colas_profundas(engine, monkeypatch):
         assert engine._raw_q.maxsize == 128
         assert engine._out_q.maxsize == 32
         assert engine._params_q.maxsize == 8
+        # La salida del hijo notifica al evento que despierta a la bomba.
+        assert engine._mp_wakeup is not None
+        assert engine._out_q._notify_event is engine._mp_wakeup
     finally:
         engine._dsp_running = False
 
@@ -650,6 +653,31 @@ def test_put_raw_cuenta_frames_descartados(engine):
     for _ in range(bloques):
         engine._put_raw(np.zeros((1024, 2), dtype=np.float32))
     assert engine.stats_snapshot()["raw_ring_drops"] > 0
+
+
+def test_put_raw_activa_despertar_de_hilo_y_bomba(engine):
+    """_put_raw activa los eventos de despertar: el hilo DSP local
+    (_dsp_wakeup) y la bomba del proceso hijo (_mp_wakeup), sin polling."""
+    engine.configure_ring(48000)
+    engine._put_raw(np.zeros((CHUNK, 2), dtype=np.float32))
+    assert engine._dsp_wakeup.is_set()
+    ev = threading.Event()
+    engine._mp_wakeup = ev
+    engine._put_raw(np.zeros((CHUNK, 2), dtype=np.float32))
+    assert ev.is_set()
+
+
+def test_pump_wait_despierta_por_evento_sin_agotar_el_tope(engine):
+    """_pump_wait vuelve al activarse el evento (no espera el tope completo) y
+    lo limpia al salir."""
+    ev = threading.Event()
+    engine._mp_wakeup = ev
+    threading.Timer(0.02, ev.set).start()
+    t0 = time.monotonic()
+    engine._pump_wait(5.0)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 2.0  # despertó por evento, no por expiración
+    assert not ev.is_set()  # quedó limpio para la próxima espera
 
 
 def test_out_callback_cuenta_salida_y_deriva_con_signo(engine):

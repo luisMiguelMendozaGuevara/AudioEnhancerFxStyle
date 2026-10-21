@@ -171,6 +171,7 @@ ENV_RELEASE_S = 0.35
 #   DC); se mezcla una fracción. Restaura detalle/punch sin subir esa banda de
 #   volumen (es contenido NUEVO, no un realce del EQ).
 CLARITY_HP_HZ = 3000.0
+CLARITY_LP_HZ = 16000.0
 CLARITY_MIX = 0.5
 BASS_EXCITER_LP_HZ = 100.0
 BASS_EXCITER_MIX = 0.6
@@ -376,6 +377,8 @@ class Enhancer:
         # Valores suavizados (rampas anti-cremallera) de los nuevos controles.
         self._c_master: float = 1.0
         self._c_balance_db: float = 0.0
+        self._c_effects: dict[str, float] = default_effects()
+        self._c_leveling: float = 0.0
         # DC blocker SIEMPRE activo al inicio de la cadena: quita la componente
         # continua (<~10 Hz) que roba headroom. Estado zi y coeficiente R.
         # `dc_block_enabled` es un punto de aislamiento para los tests (en
@@ -408,6 +411,9 @@ class Enhancer:
         self.level_peak_r: float = 0.0
         # Reducción de ganancia del limitador (dB, <=0): feedback para la UI.
         self.level_gr: float = 0.0
+        # Última ganancia aplicada por el limitador al final del bloque previo
+        # (continuidad en la costura entre bloques sin escalón).
+        self._lim_last_g: float = 1.0
         # Valores suavizados actuales (rampa anti-cremallera)
         self._c_vol: float = 1.0
         self._c_bass: float = 0.0
@@ -461,9 +467,12 @@ class Enhancer:
         self.level_peak_l = 0.0
         self.level_peak_r = 0.0
         self.level_gr = 0.0
+        self._lim_last_g = 1.0
         self._cf_state = None
         self._c_master = 1.0
         self._c_balance_db = 0.0
+        self._c_effects = default_effects()
+        self._c_leveling = 0.0
         self._dc_state = None
         self._dc_ch = 0
         self._env_zi = {}
@@ -975,7 +984,7 @@ class Enhancer:
         y = self._apply_balance(y, block_sec)
         y = self._apply_master(y, block_sec)
         if self.limiter:
-            y = self._limit(y)
+            y = self._limit(y, prev_g=self._lim_last_g)
         elif y.size:
             # Techo de seguridad SIEMPRE activo: con el limitador apagado el
             # único techo era np.clip (recorte duro). El MISMO limitador
@@ -987,7 +996,9 @@ class Enhancer:
             # array temporal; el caso común bajo el techo cuesta dos pasadas).
             peak = max(float(y.max()), -float(y.min()))
             if self.safety_ceiling_enabled and peak > self.safety_ceiling:
-                y = self._limit(y, thr=self.safety_ceiling)
+                y = self._limit(y, thr=self.safety_ceiling, prev_g=self._lim_last_g)
+            else:
+                self._lim_last_g = 1.0
         # Recorte duro final (±1.0), desactivable: apagado, la señal sale tal
         # cual y el recorte (si lo hay) ocurre en el driver de audio.
         if self.final_clip_enabled:
@@ -1106,15 +1117,41 @@ class Enhancer:
     def _env_db(env: np.ndarray) -> np.ndarray:
         return 20.0 * np.log10(np.maximum(env, 1e-9))
 
+    def _smooth_effect(self, key: str, target: float, block_sec: float) -> float:
+        """Suaviza la intensidad (0-10) de un efecto enhancer (tau ~30 ms).
+
+        En reposo en 0 devuelve 0.0 sin coste; al apagar un efecto activo,
+        desliza el valor hacia 0 antes de liberar el estado del filtro (sin clic)."""
+        cur = self._c_leveling if key == "leveling" else self._c_effects.get(key, 0.0)
+        if target <= 0.0 and cur < 1e-3:
+            if cur != 0.0:
+                if key == "leveling":
+                    self._c_leveling = 0.0
+                else:
+                    self._c_effects[key] = 0.0
+            return 0.0
+        if abs(target - cur) < 1e-4:
+            nxt = target
+        else:
+            nxt = self._ramp(cur, target, self._onepole(block_sec, 0.03))
+            if target <= 0.0 and nxt < 1e-3:
+                nxt = 0.0
+        if key == "leveling":
+            self._c_leveling = nxt
+        else:
+            self._c_effects[key] = nxt
+        return nxt
+
     def _dynamic_boost(self, y: np.ndarray, block_sec: float) -> np.ndarray:
         """Compresor ASCENDENTE: sube los pasajes bajos sin tocar los picos.
 
         Envolvente RMS (ataque 5 ms / release 350 ms) -> boost = k*(objetivo-env)
         acotado a [0, +12] dB. ``amount`` 0-10 (0 = apagado)."""
-        amount = float(self.effects.get("dynamic_boost", 0.0))
+        amount = self._smooth_effect("dynamic_boost", float(self.effects.get("dynamic_boost", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            self._env_zi.pop("db_att", None)
-            self._env_zi.pop("db_rel", None)
+            if self._env_zi:
+                self._env_zi.pop("db_att", None)
+                self._env_zi.pop("db_rel", None)
             return y
         env_db = self._env_db(self._rms_envelope(y, "db"))
         k = (amount / EFFECT_MAX) * 1.5
@@ -1130,10 +1167,11 @@ class Enhancer:
         Envolvente RMS lenta -> corrección (objetivo - env) acotada a ±9 dB,
         escalada por ``amount`` 0-10 (0 = apagado). Va ANTES del volumen del
         usuario: normaliza el material, no su ajuste manual."""
-        amount = float(self.leveling)
+        amount = self._smooth_effect("leveling", float(self.leveling), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            self._env_zi.pop("lv_att", None)
-            self._env_zi.pop("lv_rel", None)
+            if self._env_zi:
+                self._env_zi.pop("lv_att", None)
+                self._env_zi.pop("lv_rel", None)
             return y
         env_db = self._env_db(self._rms_envelope(y, "lv"))
         corr_db = np.clip(LEVELING_TARGET_DB - env_db, -LEVELING_MAX_DB, LEVELING_MAX_DB) * (amount / EFFECT_MAX)
@@ -1177,15 +1215,21 @@ class Enhancer:
         """Exciter de presencia (Fidelity/Clarity): 2º armónico de 3 kHz+.
 
         Filtra la banda de presencia y añade su 2º armónico (rectificado, sin
-        continua): restaura detalle sin subir esa banda de volumen (contenido
-        NUEVO, no EQ). 0-10."""
-        amount = float(self.effects.get("fidelity", 0.0))
+        continua, suavizado con paso-bajo anti-aliasing a ~16 kHz): restaura
+        detalle sin subir esa banda de volumen (contenido NUEVO, no EQ). 0-10."""
+        amount = self._smooth_effect("fidelity", float(self.effects.get("fidelity", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            self._exc_zi.pop("cl_hp", None)
-            self._exc_zi.pop("cl_h2", None)
+            if self._exc_zi:
+                self._exc_zi.pop("cl_hp", None)
+                self._exc_zi.pop("cl_h2", None)
+                self._exc_zi.pop("cl_lp", None)
             return y
         hp = self._apply_biquad(y, "cl_hp", self._highpass(CLARITY_HP_HZ, self.sample_rate))
         h = self._harmonic_2nd(hp, "cl_h2")
+        # Paso-bajo anti-aliasing (~16 kHz, biquad 2º orden): atenúa armónicos
+        # pares altos (4º, 6º...) cercanos a Nyquist sin tocar el 2º armónico útil.
+        lp_hz = min(CLARITY_LP_HZ, 0.42 * max(int(self.sample_rate), 1))
+        h = self._apply_biquad(h, "cl_lp", self._lowpass(lp_hz, self.sample_rate))
         g = (amount / EFFECT_MAX) * CLARITY_MIX
         return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
 
@@ -1195,10 +1239,11 @@ class Enhancer:
         Filtra la banda de graves y añade su 2º armónico (rectificado, sin
         continua): más 'punch' en altavoces pequeños (el oído interpreta el
         armónico como grave real). 0-10."""
-        amount = float(self.effects.get("bass", 0.0))
+        amount = self._smooth_effect("bass", float(self.effects.get("bass", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            self._exc_zi.pop("bx_lp", None)
-            self._exc_zi.pop("bx_h2", None)
+            if self._exc_zi:
+                self._exc_zi.pop("bx_lp", None)
+                self._exc_zi.pop("bx_h2", None)
             return y
         lp = self._apply_biquad(y, "bx_lp", self._lowpass(BASS_EXCITER_LP_HZ, self.sample_rate))
         h = self._harmonic_2nd(lp, "bx_h2")
@@ -1214,7 +1259,7 @@ class Enhancer:
         el bloque y se leen los taps a retardos primos distintos por canal
         (L: 11/23/37 ms, R: 13/27/41 ms) con ganancias decrecientes. Añade
         sensación de espacio (útil sobre todo con auriculares)."""
-        amount = float(self.effects.get("ambience", 0.0))
+        amount = self._smooth_effect("ambience", float(self.effects.get("ambience", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0 or y.ndim < 2 or y.shape[1] < 2:
             self._amb_hist = None
             return y
@@ -1242,9 +1287,10 @@ class Enhancer:
         de 150 Hz: los graves quedan al centro (mono-bass) para conservar la
         compatibilidad mono. Si la señal ya es ancha (correlación L/R < 0.2), el
         guard reduce el ensanchado. El factor del guard se suaviza (~50 ms)."""
-        amount = float(self.effects.get("surround", 0.0))
+        amount = self._smooth_effect("surround", float(self.effects.get("surround", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0 or y.ndim < 2 or y.shape[1] < 2:
-            self._exc_zi.pop("sr_hp", None)
+            if self._exc_zi:
+                self._exc_zi.pop("sr_hp", None)
             self._sr_boost = 0.0
             return y
         m = 0.5 * (y[:, 0] + y[:, 1])
@@ -1303,7 +1349,7 @@ class Enhancer:
         self._c_master = float(gain[-1])
         return (y * gain[:, None]).astype(np.float32, copy=False)
 
-    def _limit(self, y, thr=None):
+    def _limit(self, y, thr=None, prev_g: float | None = None):
         """Limitador brickwall con look-ahead de 3 ms (techo garantizado).
 
         Reemplaza al antiguo "soft limiter" por muestra: esa curva dependía de
@@ -1315,6 +1361,8 @@ class Enhancer:
         garantía de techo) como techo de seguridad cuando el limitador
         musical está apagado: un solo código de suavizado de ganancia que
         preserva la forma espectral (escala lineal), sin duplicados.
+        ``prev_g`` encadena la ganancia final del bloque previo para evitar
+        escalones de ganancia en la frontera entre bloques consecutivos.
 
         Diseño estándar de mastering:
         1. Envolvente de pico vinculada (máximo entre canales, mono-link).
@@ -1338,13 +1386,10 @@ class Enhancer:
             return y
         linked = np.abs(y).max(axis=1)  # envolvente de pico vinculada
         sample_peak = float(linked.max())
-        if self.true_peak:
-            # Atajo barato: el sobrepico inter-muestra teórico máximo es ~3 dB
-            # (factor ~1.414) respecto al pico por muestra. Si incluso
-            # asumiendo ese sobrepico no se alcanza el techo, no hay trabajo.
-            if sample_peak <= thr / 1.414:
-                return y
-        elif sample_peak <= thr:
+        below_thr = (sample_peak <= thr / 1.414) if self.true_peak else (sample_peak <= thr)
+        if below_thr:
+            if prev_g is not None:
+                self._lim_last_g = 1.0
             return y  # caso común: bloque bajo el techo, intocado
         la = max(1, int(self.sample_rate * 0.003))  # look-ahead 3 ms
         if self.true_peak:
@@ -1384,7 +1429,11 @@ class Enhancer:
         k = max(3, int(self.sample_rate * 0.002) | 1)
         kernel = _smooth_kernel(k)  # cacheado: k solo cambia con la tasa (D1)
         half = k // 2
-        g_pad = np.concatenate([np.full(half, g[0]), g, np.full(half, g[-1])])
+        if prev_g is not None and prev_g < float(g[0]):
+            left_pad = np.full(half, prev_g, dtype=g.dtype)
+        else:
+            left_pad = np.full(half, g[0], dtype=g.dtype)
+        g_pad = np.concatenate([left_pad, g, np.full(half, g[-1], dtype=g.dtype)])
         g_s = np.minimum(np.convolve(g_pad, kernel, mode="valid")[: y.shape[0]], 1.0)
         out = y * g_s[:, None].astype(np.float32)
         # Garantía de techo: el suavizado puede subestimar la reducción en
@@ -1392,18 +1441,23 @@ class Enhancer:
         # de la salida; pero solo vale la pena cuando el sample-peak está cerca
         # del techo (si no, ni asumiendo el sobrepico máximo ×1.414 lo cruza).
         # Eso evita una 2ª pasada de sobremuestreo en el caso común.
+        scale = 1.0
         sample_peak_out = float(np.abs(out).max())
         if self.true_peak:
             if sample_peak_out > thr / 1.414:
                 peak = float(np.abs(_true_peak_oversample(out)).max())
                 if peak > thr:
-                    out *= thr / peak
+                    scale = thr / peak
+                    out *= scale
         elif sample_peak_out > thr:
-            out *= thr / sample_peak_out
+            scale = thr / sample_peak_out
+            out *= scale
+        if prev_g is not None:
+            self._lim_last_g = float(g_s[-1]) * scale
         # GR (gain reduction) del bloque en dB: 0 = sin limitar, negativo =
         # atenuando. La UI lo muestra en un medidor para ajustar sin ir a
         # ciegas. Se toma el mínimo de la ganancia suavizada (el peor caso).
-        min_gain = float(g_s.min()) if g_s.size else 1.0
+        min_gain = float(g_s.min()) * scale if g_s.size else 1.0
         self.level_gr = max(-24.0, 20.0 * math.log10(max(min_gain, 1e-6)))
         return out
 

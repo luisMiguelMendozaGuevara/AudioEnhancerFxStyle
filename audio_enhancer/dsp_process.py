@@ -17,12 +17,141 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import multiprocessing as mp
+import queue
 import threading
 import time
+from typing import Any
 
 import numpy as np
 
+from .constants import CHUNK
+
 logger = logging.getLogger("audio_enhancer.dsp_process")
+
+DEFAULT_BLOCK_BYTES = CHUNK * 2 * 4  # 1024 frames estéreo float32 = 8192 bytes
+
+
+class SharedBlockQueue:
+    """Cola circular SPSC en memoria compartida (ctx.Array + ctx.Event).
+
+    Sustituye a ``multiprocessing.Queue`` para el transporte de bloques de audio
+    entre el proceso principal y el proceso hijo del DSP:
+    - Cero hilos *feeder* internos ni tuberías (pipes) del SO.
+    - Cero serialización ``pickle`` (copia directa de bytes sobre ``c_ubyte``).
+    - Compatible con ``spawn`` en Windows y con PyInstaller (herencia de handles
+      de ``ctx.Array`` / ``ctx.Event`` sin ``resource_tracker``).
+    """
+
+    def __init__(
+        self,
+        maxsize: int = 128,
+        max_block_bytes: int = DEFAULT_BLOCK_BYTES,
+        ctx: Any = None,
+        notify_event: Any = None,
+    ) -> None:
+        self._maxsize = max(1, int(maxsize))
+        self.maxsize = self._maxsize
+        self._slot_bytes = max(64, int(max_block_bytes))
+        self._is_mp = isinstance(ctx, mp.context.BaseContext)
+        if self._is_mp:
+            self._buf: Any = ctx.Array("B", self._maxsize * self._slot_bytes, lock=False)
+            self._lengths: Any = ctx.Array("i", self._maxsize, lock=False)
+            # [write_idx, read_idx, count] protegidos por el lock del propio Array.
+            self._meta: Any = ctx.Array("i", 3)
+            self._lock: Any = None
+            self._not_empty: Any = ctx.Event()
+        else:
+            self._buf = bytearray(self._maxsize * self._slot_bytes)
+            self._lengths = [0] * self._maxsize
+            self._meta = [0, 0, 0]
+            self._lock = threading.Lock()
+            self._not_empty = ctx.Event() if (ctx is not None and hasattr(ctx, "Event")) else threading.Event()
+        self._notify_event = notify_event
+
+    def _guard(self):
+        return self._meta.get_lock() if self._lock is None else self._lock
+
+    def qsize(self) -> int:
+        with self._guard():
+            return int(self._meta[2])
+
+    def full(self) -> bool:
+        with self._guard():
+            return int(self._meta[2]) >= self._maxsize
+
+    def put_nowait(self, item: bytes | None) -> None:
+        with self._guard():
+            count = int(self._meta[2])
+            if count >= self._maxsize:
+                raise queue.Full
+            w = int(self._meta[0])
+            if item is None:
+                self._lengths[w] = -1
+            else:
+                b = bytes(item)
+                nb = len(b)
+                if nb > self._slot_bytes:
+                    raise ValueError(f"Bloque excede slot compartido: {nb} > {self._slot_bytes}")
+                start = w * self._slot_bytes
+                np.frombuffer(self._buf, dtype=np.uint8)[start : start + nb] = np.frombuffer(b, dtype=np.uint8)
+                self._lengths[w] = nb
+            self._meta[0] = (w + 1) % self._maxsize
+            self._meta[2] = count + 1
+            self._not_empty.set()
+        if self._notify_event is not None:
+            with contextlib.suppress(Exception):
+                self._notify_event.set()
+
+    def put(self, item: bytes | None, timeout: float | None = None) -> None:
+        # Nunca bloquea: si la cola está llena, descarta el bloque más viejo
+        # (la salida reciente importa más que la vieja) y reintenta; si otro
+        # productor la llenó en la carrera, se repite el descarte.
+        while True:
+            try:
+                self.put_nowait(item)
+                return
+            except queue.Full:
+                with self._guard():
+                    count = int(self._meta[2])
+                    if count >= self._maxsize:
+                        self._meta[1] = (int(self._meta[1]) + 1) % self._maxsize
+                        self._meta[2] = count - 1
+
+    def get_nowait(self) -> bytes | None:
+        with self._guard():
+            count = int(self._meta[2])
+            if count <= 0:
+                self._not_empty.clear()
+                raise queue.Empty
+            r = int(self._meta[1])
+            nb = int(self._lengths[r])
+            if nb < 0:
+                out = None
+            else:
+                start = r * self._slot_bytes
+                out = np.frombuffer(self._buf, dtype=np.uint8)[start : start + nb].tobytes()
+            self._meta[1] = (r + 1) % self._maxsize
+            new_count = count - 1
+            self._meta[2] = new_count
+            if new_count <= 0:
+                self._not_empty.clear()
+            return out
+
+    def get(self, timeout: float | None = None) -> bytes | None:
+        deadline = None if timeout is None else (time.monotonic() + max(0.0, float(timeout)))
+        while True:
+            try:
+                return self.get_nowait()
+            except queue.Empty:
+                if deadline is not None:
+                    rem = deadline - time.monotonic()
+                    if rem <= 0.0:
+                        raise queue.Empty from None
+                    self._not_empty.wait(min(rem, 0.05))
+                else:
+                    self._not_empty.wait(0.05)
+
 
 # Atributos públicos del Enhancer que la UI puede cambiar y que hay que
 # replicar en el proceso hijo.

@@ -1431,3 +1431,66 @@ def test_onepole_vectorizado_coincide_con_la_recurrencia():
     assert np.allclose(y2, ref2, atol=1e-9)
     assert abs(z2 - ref2[-1]) < 1e-9
     assert abs(xl - x[-1]) < 1e-12
+
+
+def test_efectos_enhancer_suavizan_encendido_y_apagado_sin_escalon():
+    """Al activar o apagar un efecto enhancer, la intensidad desliza con rampa
+    (tau ~30 ms) y al apagar mantiene el estado del filtro hasta que cae a 0."""
+    x = _stereo(0.2, 5000.0)
+    e, _ = _fx({"fidelity": 0.0})
+    e.process(x.copy())
+    assert e._c_effects["fidelity"] == 0.0
+
+    # Encendido brusco a 10: el primer bloque queda a mitad de camino (rampa).
+    e.effects["fidelity"] = 10.0
+    e.process(x.copy())
+    assert 0.0 < e._c_effects["fidelity"] < 9.0
+    warm(e, x, blocks=40)
+    assert e._c_effects["fidelity"] == pytest.approx(10.0, rel=1e-2)
+    assert "cl_hp" in e._exc_zi
+
+    # Apagado a 0: decae suavemente y conserva estado mientras sea audible,
+    # limpiando los estados solo cuando llega a 0.
+    e.effects["fidelity"] = 0.0
+    e.process(x.copy())
+    assert e._c_effects["fidelity"] > 0.0
+    assert "cl_hp" in e._exc_zi
+    warm(e, x, blocks=40)
+    assert e._c_effects["fidelity"] == 0.0
+    assert "cl_hp" not in e._exc_zi
+
+
+def test_clarity_atenua_armonicos_altos_cerca_de_nyquist():
+    """El paso-bajo anti-aliasing (~16 kHz) de Clarity atenúa armónicos pares
+    altos cercanos a Nyquist (22 kHz) frente al 2º armónico útil (11 kHz)."""
+    x = _stereo(0.25, 5500.0)
+    e, blocks = _fx({"fidelity": 10.0})
+    warm(e, x, blocks=blocks)
+    y = e.process(x.copy())
+    h2 = _tone_energy(y - x, 11000.0)
+    h4 = _tone_energy(y - x, 22000.0)
+    assert h2 > h4 * 4.0
+
+
+def test_limitador_continuidad_ganancia_entre_bloques_sin_escalon():
+    """Entre dos bloques consecutivos que activan el limitador con distinta
+    atenuación, la ganancia inicial del 2º bloque se suaviza desde _lim_last_g
+    en vez de pegar un escalón en la frontera."""
+    e = Enhancer()
+    e.compressor = False
+    e.dc_block_enabled = False
+    e.true_peak = False
+    hot1 = np.full((N, 2), 1.6, dtype=np.float32)
+    y1 = e.process(hot1.copy())
+    assert e._lim_last_g < 0.65
+    assert float(y1[-1, 0]) == pytest.approx(e.limiter_threshold, abs=1e-3)
+
+    # Segundo bloque también sobre el techo pero menos fuerte (1.1): la primera
+    # muestra hereda el suavizado desde _lim_last_g (~0.59) hacia la nueva
+    # ganancia (~0.86), evitando el salto brusco en la costura.
+    hot2 = np.full((N, 2), 1.1, dtype=np.float32)
+    y2 = e.process(hot2.copy())
+    g0 = float(y2[0, 0] / hot2[0, 0])
+    g_end = float(y2[-1, 0] / hot2[-1, 0])
+    assert g0 < g_end - 0.05
+    assert float(np.abs(y2).max()) <= e.limiter_threshold + 1e-3

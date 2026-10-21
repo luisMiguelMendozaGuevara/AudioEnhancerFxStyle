@@ -144,6 +144,11 @@ class AudioEngine:
         self._out_q: Any = None
         self._params_q: Any = None
         self._mp_stop: Any = None
+        # Evento compartido (mp) que despierta a la bomba al llegar crudo
+        # (productor: callback de captura) o salida procesada (hijo ->
+        # notify_event de _out_q): sin polling con sleep (en Windows el timer
+        # redondea a ~15,6 ms). None si no hay proceso hijo (tests).
+        self._mp_wakeup: Any = None
         self._gr: Any = None  # value compartido: gain reduction del limitador
         # Telemetría visual (hijo -> padre): niveles (7 floats) y espectro (64).
         self._telemetry: Any = None
@@ -551,6 +556,12 @@ class AudioEngine:
                 raw[idx:] = data[:a]
                 raw[: n - a] = data[a:]
             self._raw_write += n
+        # Despertar a los consumidores (dato primero, evento después): el
+        # evento es solo una pista; el dato en el ring es la fuente de verdad.
+        self._dsp_wakeup.set()
+        if self._mp_wakeup is not None:
+            with contextlib.suppress(Exception):
+                self._mp_wakeup.set()
 
     def _read_raw(self) -> np.ndarray | None:
         """Devuelve el bloque crudo disponible (o None si no hay)."""
@@ -589,15 +600,17 @@ class AudioEngine:
 
         El proceso hijo tiene su propio GIL: su trabajo numpy no compite con el
         callback de salida de PortAudio (que era la causa de los descartes)."""
-        from .dsp_process import child_main, snapshot_params
+        from .dsp_process import SharedBlockQueue, child_main, snapshot_params
 
         ctx = mp.get_context("spawn")
-        # Colas ACOTADAS pero profundas: 128 bloques crudos (~2.7 s a 48 kHz)
-        # absorben atascos breves del hijo sin acumular backlog indefinido. La
-        # bomba ya NO descarta si se llenan: retiene el bloque y reintenta;
-        # solo el desborde del ring crudo (1 s) puede descartar audio.
-        self._raw_q = ctx.Queue(maxsize=128)
-        self._out_q = ctx.Queue(maxsize=32)
+        # Colas circulares SPSC en memoria compartida (sin hilos feeder ni
+        # pickle): 128 bloques crudos (~2.7 s a 48 kHz) absorben atascos breves
+        # del hijo sin acumular backlog indefinido. La bomba NO descarta si se
+        # llenan: retiene el bloque y reintenta; solo el desborde del ring
+        # crudo (1 s) puede descartar audio.
+        self._mp_wakeup = ctx.Event()
+        self._raw_q = SharedBlockQueue(maxsize=128, ctx=ctx)
+        self._out_q = SharedBlockQueue(maxsize=32, ctx=ctx, notify_event=self._mp_wakeup)
         self._params_q = ctx.Queue(maxsize=8)
         self._mp_stop = ctx.Event()
         self._gr = ctx.Value("f", 0.0)  # GR del limitador (hijo -> padre)
@@ -682,6 +695,9 @@ class AudioEngine:
             return
         if self._mp_stop is not None:
             self._mp_stop.set()
+        if self._mp_wakeup is not None:
+            with contextlib.suppress(Exception):
+                self._mp_wakeup.set()  # despertar a la bomba para que salga ya
         with contextlib.suppress(Exception):
             self._raw_q.put_nowait(None)  # centinela de parada
         self._dsp_proc.join(timeout=2.0)
@@ -747,9 +763,22 @@ class AudioEngine:
             else:
                 self._stats["out_q_empty"] += 1
             if stalled:
-                time.sleep(0.002)  # hijo atrasado: reintentar sin quemar CPU
+                self._pump_wait(0.002)  # hijo atrasado: reintentar sin quemar CPU
             elif block is None and not got:
-                time.sleep(0.001)
+                self._pump_wait(0.005)  # despierta al llegar crudo o salida
+
+    def _pump_wait(self, timeout: float) -> None:
+        """Espera de la bomba por EVENTO (crudo nuevo o salida del hijo) con
+        tope de tiempo: el tope es red de seguridad ante un set perdido (el
+        dato manda y se reencuentra en el siguiente ciclo). Sin evento (tests
+        sin proceso hijo) se usa sleep normal."""
+        ev = self._mp_wakeup
+        if ev is None:
+            time.sleep(timeout)
+            return
+        with contextlib.suppress(Exception):
+            ev.wait(timeout)
+            ev.clear()
 
     def _sync_telemetry(self) -> None:
         t = self._telemetry
@@ -806,8 +835,15 @@ class AudioEngine:
         while self._dsp_running:
             block = self._read_raw()
             if block is None:
-                self._dsp_wakeup.wait(0.001)  # espera sin quemar CPU; stop() despierta
-                continue
+                # Limpiar ANTES de releer: si el productor activó el evento
+                # mientras procesábamos, el dato ya está en el ring y la
+                # relectura no lo pierde; el clear evita el giro caliente
+                # (wait sobre un evento activo vuelve al instante).
+                self._dsp_wakeup.clear()
+                block = self._read_raw()
+                if block is None:
+                    self._dsp_wakeup.wait(0.005)  # tope: red de seguridad
+                    continue
             try:
                 y = self.enhancer.process(block)
                 self._put(y)
