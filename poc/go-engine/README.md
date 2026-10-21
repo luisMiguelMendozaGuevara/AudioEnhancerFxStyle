@@ -41,3 +41,25 @@ go build -o poc.exe .
   de los fallos (stalls del SO + politica de buffer). Se queda como
   experimento; solo tendria sentido retomarlo (con paridad DSP y control de
   deriva portados) si se busca un binario nativo, no para arreglar los cortes.
+
+## A/B limpio (2026-10-20, app parada, 250 ms, 10 min cada uno)
+
+Mismo tono (440 Hz, amplitud 0.03) hacia CABLE Input, salida a altavoces,
+ventanas de 600 s, sin otras cargas durante la medida.
+
+| Metrica | App @250 ms | PoC Go @250 ms |
+|---|---|---|
+| Cortes (huecos / underruns) | 0 | 0 |
+| Huecos (segundos) | 0.000 | 0.000 |
+| Repeticiones por gracia | 0 | n/a |
+| Hambrunas del hijo DSP | 13 (absorbidas por el colchon) | n/a |
+| Fill del ring | 215-265 ms | 156-296 ms |
+| Jitter p50 / p99 / max | (la app no lo registra) | 0.04 / 5.8 / 711 ms |
+| CPU del motor | ~7% (1552 us/bloque de DSP, medido antes) | 3.1% |
+
+**Conclusion**: al mismo colchon (250 ms) **ambos motores son igual de limpios
+(0 cortes)**. Go gana en CPU (~4 puntos de un nucleo) y en simplicidad de
+proceso (sin hijo ni colas), pero **no en cortes**: lo que los elimina es el
+colchon. Los atascos del sistema (hasta 711 ms en esta ventana) aparecen en
+ambos mundos y el buffer es lo que los absorbe.
+
