@@ -1341,12 +1341,21 @@ def test_set_eq_band_count_redimensiona():
     assert len(e.eq_gains) == 31
 
 
-def test_set_eq_band_count_conserva_ganancias_por_indice():
+def test_set_eq_band_count_conserva_la_forma_de_la_curva():
+    """Al cambiar el numero de bandas la curva se remapea por FRECUENCIA (no
+    por indice): un realce en 1 kHz sigue en ~1 kHz con 31 bandas y no queda
+    comprimido en las primeras bandas."""
     e = Enhancer()
-    gains = [float(i) for i in range(9)]
-    e.eq_gains = gains
-    e.set_eq_band_count(5)
-    assert e.eq_gains == gains[:5]
+    e.eq_gains = [0.0, 0.0, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0, 0.0]  # pico en 1 kHz (set de 9)
+    e.set_eq_band_count(31)
+    assert len(e.eq_gains) == 31
+    idx = min(range(31), key=lambda i: abs(e.eq_bands[i] - 1000.0))
+    assert abs(e.eq_bands[idx] - 1000.0) <= 50.0
+    assert e.eq_gains[idx] == pytest.approx(6.0, abs=0.2)
+    assert e.eq_gains[0] == pytest.approx(0.0, abs=0.05)  # 20 Hz sigue plano
+    # y de vuelta a 9 bandas el pico sigue en 1 kHz (indice 4 del set de 9)
+    e.set_eq_band_count(9)
+    assert e.eq_gains[4] == pytest.approx(6.0, abs=0.2)
 
 
 def test_set_eq_band_freq_acota_entre_vecinas():

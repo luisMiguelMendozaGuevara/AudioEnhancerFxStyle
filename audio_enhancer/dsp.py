@@ -525,14 +525,27 @@ class Enhancer:
         """Cambia las frecuencias centrales del EQ (redimensiona ganancias/Q).
 
         Valida: frecuencias dentro de [20, 20000] y ordenadas; si llegan menos
-        de 2, se usa el set por defecto. Las ganancias y los Q existentes se
-        conservan por índice (los nuevos quedan a 0/1.4). Limpia los estados de
+        de 2, se usa el set por defecto. Las ganancias se REMAPEAN a las nuevas
+        frecuencias interpolando la curva en escala logaritmica (la forma se
+        conserva al cambiar el numero de bandas); los Q existentes se conservan
+        por indice (los nuevos usan el Q por defecto). Limpia los estados de
         filtro: las secciones han cambiado."""
         f = sorted(min(EQ_FREQ_MAX, max(EQ_FREQ_MIN, float(x))) for x in freqs)
         if len(f) < 2:
             f = list(EQ_BANDS)
         n = len(f)
-        gains = (list(self._eq_gains) + [0.0] * n)[:n]
+        old_bands = [float(x) for x in self.eq_bands]
+        old_gains = [float(g) for g in self._eq_gains]
+        if len(old_bands) == n and all(abs(a - b) < 1e-9 for a, b in zip(old_bands, f, strict=True)):
+            gains = old_gains  # mismo set: no tocar la curva
+        elif not any(abs(g) > 1e-6 for g in old_gains):
+            gains = [0.0] * n  # curva plana: nada que remapear
+        else:
+            # Interpola ganancia vs log(frecuencia) en las nuevas centrales.
+            # Fuera del rango antiguo se mantiene el valor del extremo (np.interp).
+            log_old = np.log10(np.maximum(np.asarray(old_bands, dtype=np.float64), 1e-9))
+            log_new = np.log10(np.maximum(np.asarray(f, dtype=np.float64), 1e-9))
+            gains = [float(g) for g in np.interp(log_new, log_old, np.asarray(old_gains, dtype=np.float64))]
         qs = (list(self.eq_q_values) + [self._eq_q_default] * n)[:n]
         self.eq_bands = f
         self.eq_q_values = qs

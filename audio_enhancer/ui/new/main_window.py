@@ -996,8 +996,11 @@ class NewMainWindow(QMainWindow):
     def _sync_ui_from_state(self) -> None:
         home = self._pages["home"]
         home.set_volume(self.enhancer.volume)
-        self._pages["equalizer"].set_gains(self.enhancer.eq_gains)
+        # Bandas ANTES que ganancias: el motor ya remapeó la curva por
+        # frecuencia al nuevo set y el widget necesita conocer primero el
+        # número de bandas para no recortar la lista.
         self._pages["equalizer"].set_bands(self.enhancer.eq_bands)
+        self._pages["equalizer"].set_gains(self.enhancer.eq_gains)
         self._pages["equalizer"].set_q(float(self.enhancer.eq_q))
         self._pages["effects"].set_bass(self.enhancer.bass)
         self._pages["effects"].set_treble(self.enhancer.treble)

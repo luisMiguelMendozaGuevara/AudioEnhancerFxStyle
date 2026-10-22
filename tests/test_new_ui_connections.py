@@ -73,6 +73,20 @@ def test_eq_reset_reaches_dsp(window):
     assert window.enhancer.eq_gains == [pytest.approx(0.0)] * 9
 
 
+def test_cambio_de_bandas_remezcla_la_curva_en_la_ui(window):
+    """(fix EQ) Al cambiar 9->31 la curva del widget es la MISMA forma
+    remapeada por frecuencia: antes se comprimia en las primeras bandas."""
+    eq = window._pages["equalizer"]
+    eq._on_band_changed(4, 6.0)  # pico en 1 kHz (indice 4 del set de 9)
+    window._on_eq_band_count(31)
+    curve = eq._eq_curve
+    assert len(curve._bands) == 31
+    assert len(curve._gains) == 31
+    idx = min(range(31), key=lambda i: abs(curve._bands[i] - 1000.0))
+    assert curve._gains[idx] == pytest.approx(6.0, abs=0.2)
+    assert curve._gains[0] == pytest.approx(0.0, abs=0.05)
+
+
 def test_limiter_toggle_reaches_dsp(window):
     toggle = window._pages["effects"]._limiter_card._toggle
     toggle.setChecked(False)

@@ -76,7 +76,12 @@ class EQCurveWidget(QWidget):
             return
         n = len(f)
         self._bands = f
-        self._gains = (list(self._gains) + [0.0] * n)[:n]
+        if len(self._gains) != n:
+            # El motor (fuente de verdad) remapea las ganancias por frecuencia
+            # y main_window manda primero las bandas y después las ganancias
+            # exactas; si llega un cambio de cuenta suelto se rellena/recorta
+            # solo para no romper el dibujo.
+            self._gains = (list(self._gains) + [0.0] * n)[:n]
         self._bars = np.zeros(n, dtype=np.float32)
         self._recompute_bin_map()
         self.update()
@@ -226,22 +231,24 @@ class EQCurveWidget(QWidget):
             points.append(QPointF(x, y))
 
         if len(points) >= 2:
-            path = QPainterPath()
-            path.moveTo(points[0].x(), zero_y)
-            for pt in points:
-                path.lineTo(pt.x(), pt.y())
-            path.lineTo(points[-1].x(), zero_y)
-            path.closeSubpath()
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(accent_subtle_color(13)))
-            p.drawPath(path)
-
+            # Curva suave (Bezier) y relleno construido del MISMO trazado:
+            # antes el relleno unía los puntos con rectas y se veía un borde
+            # escalonado bajo la curva.
             line_path = QPainterPath()
             line_path.moveTo(points[0])
             for i in range(1, len(points)):
                 prev, curr = points[i - 1], points[i]
                 cx = (prev.x() + curr.x()) / 2
                 line_path.cubicTo(cx, prev.y(), cx, curr.y(), curr.x(), curr.y())
+
+            fill_path = QPainterPath(line_path)
+            fill_path.lineTo(points[-1].x(), zero_y)
+            fill_path.lineTo(points[0].x(), zero_y)
+            fill_path.closeSubpath()
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(accent_subtle_color(13)))
+            p.drawPath(fill_path)
+
             p.setPen(QPen(QColor(Theme.EQ_CURVE), 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(line_path)
