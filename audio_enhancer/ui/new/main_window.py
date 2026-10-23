@@ -1048,6 +1048,7 @@ class NewMainWindow(QMainWindow):
     def _on_eq_q(self, q: float) -> None:
         """(Fase 5) Q global del EQ (ancho de campana)."""
         self.enhancer.eq_q = float(q)
+        self.state.eq_q = float(q)
 
     def toggle_ab(self) -> None:
         self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0

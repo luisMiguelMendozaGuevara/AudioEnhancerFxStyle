@@ -9,7 +9,7 @@ del EQ, paso mono y analizador de espectro.
 import numpy as np
 import pytest
 
-from audio_enhancer.dsp import Enhancer
+from audio_enhancer.dsp import Enhancer, eq_response_db
 
 FS = 48000
 N = 2048
@@ -510,6 +510,35 @@ def test_eq_q_escalar_sigue_funcionando():
     e.eq_q = 3.0
     assert e.eq_q_values == [3.0] * 9
     assert e.eq_q == 3.0
+
+
+def test_eq_response_db_en_el_centro_igual_a_la_ganancia():
+    """La curva dibujada usa la MISMA RBJ que el DSP: en f0 el peaking vale
+    exactamente la ganancia de la banda, con cualquier Q (por eso los puntos
+    de la UI siguen apoyados sobre la curva)."""
+    bands = [80.0, 1000.0, 6000.0]
+    gains = [6.0, -9.0, 3.0]
+    for f0, g in zip(bands, gains, strict=True):
+        for q in (0.3, 1.4, 8.0):
+            resp = eq_response_db([f0], [f0], [g], [q])[0]
+            assert resp == pytest.approx(g, abs=0.01)
+
+
+def test_eq_response_db_q_cambia_el_ancho_del_lomo():
+    """Regresion ("Ancho no funciona"): lejos de f0, un Q estrecho deja caer
+    la respuesta mucho antes que uno ancho, tanto en realce como en corte."""
+    probe = 1500.0
+    boost_narrow = eq_response_db([probe], [1000.0], [12.0], [6.0])[0]
+    boost_wide = eq_response_db([probe], [1000.0], [12.0], [0.4])[0]
+    assert boost_narrow < boost_wide - 2.0
+    cut_narrow = eq_response_db([probe], [1000.0], [-12.0], [6.0])[0]
+    cut_wide = eq_response_db([probe], [1000.0], [-12.0], [0.4])[0]
+    assert cut_narrow > cut_wide + 2.0
+
+
+def test_eq_response_db_plano_es_plano():
+    resp = eq_response_db([40.0, 500.0, 5000.0], [100.0, 1000.0], [0.0, 0.0], [1.4, 1.4])
+    assert np.allclose(resp, 0.0, atol=1e-9)
 
 
 def test_true_peak_ventana_o_n_equivale_a_la_deslizante(monkeypatch):
