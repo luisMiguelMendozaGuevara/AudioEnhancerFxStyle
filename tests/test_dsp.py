@@ -9,7 +9,7 @@ del EQ, paso mono y analizador de espectro.
 import numpy as np
 import pytest
 
-from audio_enhancer.dsp import Enhancer
+from audio_enhancer.dsp import EQ_BAND_SETS, Enhancer, pchip_interp
 
 FS = 48000
 N = 2048
@@ -1339,6 +1339,39 @@ def test_set_eq_band_count_redimensiona():
     e.set_eq_band_count(31)
     assert len(e.eq_bands) == 31
     assert len(e.eq_gains) == 31
+
+
+def test_pchip_interp_pasa_por_los_puntos_sin_sobreoscilar():
+    """PCHIP: exacto en los nodos, plano fuera del rango y sin picos
+    inventados entre puntos (la curva del EQ y el remapeo usan esto)."""
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([0.0, 3.0, 3.0, 0.0])
+    assert np.allclose(pchip_interp(x, y, x), y)
+    assert np.allclose(pchip_interp(x, y, [-1.0, 4.0]), [0.0, 0.0])  # extension plana
+    xs = np.linspace(0.0, 3.0, 101)
+    ys = pchip_interp(x, y, xs)
+    assert ys.min() >= -1e-9 and ys.max() <= 3.0 + 1e-9  # sin sobreoscilacion
+    assert pchip_interp(x, y, [1.5])[0] == pytest.approx(3.0)  # tramo plano
+
+
+def test_set_eq_bands_remapea_pchip_sin_sobreoscilar():
+    """Al cambiar de bandas la curva se remapea con PCHIP: nunca inventa
+    ganancias fuera del rango original y la ida y vuelta conserva la forma."""
+    e = Enhancer()
+    e.set_eq_bands([100.0, 400.0, 1600.0])
+    e.eq_gains = [0.0, 9.0, 0.0]
+    e.set_eq_band_count(31)
+    assert max(e.eq_gains) <= 9.0 + 1e-6
+    assert min(e.eq_gains) >= -1e-6
+    # 9 -> 31 -> 9: cada ganancia vuelve casi exacta (antes, con interpolacion
+    # lineal, el ciclo derivaba hasta ~0.5 dB de media).
+    original = [8.0, 6.0, 3.0, 0.0, -3.0, -2.0, 1.0, 4.0, 6.0]
+    e2 = Enhancer()
+    e2.set_eq_bands(EQ_BAND_SETS[9])
+    e2.eq_gains = original
+    e2.set_eq_band_count(31)
+    e2.set_eq_band_count(9)
+    assert max(abs(a - b) for a, b in zip(e2.eq_gains, original, strict=True)) < 0.2
 
 
 def test_set_eq_band_count_conserva_la_forma_de_la_curva():

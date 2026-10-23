@@ -219,6 +219,47 @@ def _onepole_powers(pole: float, n: int) -> np.ndarray:
     return pole ** np.arange(1, n + 1, dtype=np.float64)
 
 
+def pchip_interp(x, y, xq):
+    """Interpolacion cubica monotona (Fritsch-Carlson) de ``y(x)`` en ``xq``.
+
+    Sin sobreoscilacion (no inventa picos entre puntos) y con pendiente
+    continua: la usan la curva dibujada y el remapeo al cambiar de bandas,
+    para que la forma se conserve. Fuera del rango de ``x`` el valor queda
+    plano en el extremo (extension horizontal)."""
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    xq = np.asarray(xq, dtype=np.float64)
+    n = x.size
+    if n < 2:
+        return np.full(xq.shape, float(y[0]) if n else 0.0, dtype=np.float64)
+    h = np.diff(x)
+    if np.any(h <= 0.0):
+        return np.interp(xq, x, y)  # x no creciente: no deberia ocurrir
+    delta = np.diff(y) / h
+    m = np.zeros_like(y)
+    m[0] = delta[0]
+    m[-1] = delta[-1]
+    if n > 2:
+        d0, d1 = delta[:-1], delta[1:]
+        w1 = 2.0 * h[1:] + h[:-1]
+        w2 = h[1:] + 2.0 * h[:-1]
+        same = d0 * d1 > 0.0
+        safe0 = np.where(same, d0, 1.0)
+        safe1 = np.where(same, d1, 1.0)
+        m[1:-1] = np.where(same, (w1 + w2) / (w1 / safe0 + w2 / safe1), 0.0)
+    xc = np.clip(xq, x[0], x[-1])
+    idx = np.clip(np.searchsorted(x, xc) - 1, 0, n - 2)
+    t = (xc - x[idx]) / h[idx]
+    t2 = t * t
+    t3 = t2 * t
+    return (
+        (2.0 * t3 - 3.0 * t2 + 1.0) * y[idx]
+        + (t3 - 2.0 * t2 + t) * h[idx] * m[idx]
+        + (-2.0 * t3 + 3.0 * t2) * y[idx + 1]
+        + (t3 - t2) * h[idx] * m[idx + 1]
+    )
+
+
 def _onepole_lp(x: np.ndarray, pole: float, y_last, b0=None):
     """Filtro de 1 polo ``y[n] = b0*x[n] + pole*y[n-1]`` SIN scipy.
 
@@ -526,10 +567,11 @@ class Enhancer:
 
         Valida: frecuencias dentro de [20, 20000] y ordenadas; si llegan menos
         de 2, se usa el set por defecto. Las ganancias se REMAPEAN a las nuevas
-        frecuencias interpolando la curva en escala logaritmica (la forma se
-        conserva al cambiar el numero de bandas); los Q existentes se conservan
-        por indice (los nuevos usan el Q por defecto). Limpia los estados de
-        filtro: las secciones han cambiado."""
+        frecuencias con una interpolacion cubica monotona (PCHIP) en escala
+        logaritmica: la forma se conserva al cambiar de bandas, sin quiebros ni
+        picos inventados (la misma curva que se dibuja). Los Q existentes se
+        conservan por indice (los nuevos usan el Q por defecto). Limpia los
+        estados de filtro: las secciones han cambiado."""
         f = sorted(min(EQ_FREQ_MAX, max(EQ_FREQ_MIN, float(x))) for x in freqs)
         if len(f) < 2:
             f = list(EQ_BANDS)
@@ -541,11 +583,11 @@ class Enhancer:
         elif not any(abs(g) > 1e-6 for g in old_gains):
             gains = [0.0] * n  # curva plana: nada que remapear
         else:
-            # Interpola ganancia vs log(frecuencia) en las nuevas centrales.
-            # Fuera del rango antiguo se mantiene el valor del extremo (np.interp).
+            # Curva suave (PCHIP) ganancia vs log(frecuencia): fuera del rango
+            # antiguo se extiende plana con el valor del extremo.
             log_old = np.log10(np.maximum(np.asarray(old_bands, dtype=np.float64), 1e-9))
             log_new = np.log10(np.maximum(np.asarray(f, dtype=np.float64), 1e-9))
-            gains = [float(g) for g in np.interp(log_new, log_old, np.asarray(old_gains, dtype=np.float64))]
+            gains = [float(g) for g in pchip_interp(log_old, old_gains, log_new)]
         qs = (list(self.eq_q_values) + [self._eq_q_default] * n)[:n]
         self.eq_bands = f
         self.eq_q_values = qs

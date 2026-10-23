@@ -295,6 +295,10 @@ EXPLAIN = {
     "es muy ancha, se reduce automáticamente para no perder compatibilidad "
     "mono. Nota: si sumas la salida a mono, el ensanchado se cancela (es "
     "normal); con auriculares se nota más.",
+    "eq_q": "Ancho (Q) del ecualizador: qué estrechos o anchos son los lomos "
+    "del EQ. Q bajo (0.5) = curvas suaves y amplias; Q alto (8) = picos "
+    "finos. Solo se nota donde hay ganancia aplicada: con el EQ plano no "
+    "hace nada.",
     "balance": "Balance L/R (equal-power): mueve la imagen hacia un lado. En "
     "0 dB no hace nada; a -20 dB el canal derecho queda mudo (y el izquierdo "
     "sube ~3 dB), y al revés. Sirve para compensar altavoces o auriculares "
@@ -351,6 +355,9 @@ EXPLAIN_EN = {
     "stays centered (mono-bass) and, if the signal is already very wide, it is "
     "reduced automatically to keep mono compatibility. Note: summing the "
     "output to mono cancels the widening (expected); headphones show it best.",
+    "eq_q": "EQ width (Q): how narrow or wide the EQ bells are. Low Q (0.5) "
+    "= broad, gentle curves; high Q (8) = sharp peaks. Audible only where "
+    "gain is applied: it does nothing on a flat EQ.",
     "balance": "Balance L/R (equal-power): moves the image to one side. At "
     "0 dB it does nothing; at -20 dB the right channel is muted (and the left "
     "rises ~3 dB), and vice versa. Useful to compensate uneven speakers or "

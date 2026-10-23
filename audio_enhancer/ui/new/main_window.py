@@ -210,6 +210,7 @@ class NewMainWindow(QMainWindow):
         state.bass_changed.connect(lambda v: setattr(self.enhancer, "bass", float(v)))
         state.treble_changed.connect(lambda v: setattr(self.enhancer, "treble", float(v)))
         state.eq_changed.connect(lambda g: setattr(self.enhancer, "eq_gains", [float(x) for x in g]))
+        state.eq_q_changed.connect(lambda q: setattr(self.enhancer, "eq_q", float(q)))
         state.limiter_changed.connect(lambda on: setattr(self.enhancer, "limiter", bool(on)))
         state.compressor_changed.connect(lambda on: setattr(self.enhancer, "compressor", bool(on)))
         state.true_peak_changed.connect(lambda on: setattr(self.enhancer, "true_peak", bool(on)))
@@ -496,11 +497,11 @@ class NewMainWindow(QMainWindow):
         settings.watchdog_pref_changed.connect(self._on_watchdog_changed)
         settings.native_capture_pref_changed.connect(self._on_native_capture_changed)
         settings.diagnostics_requested.connect(self._export_diagnostics)
-        # (Fase 5) EQ avanzado: nº de bandas, frecuencia central y Q.
+        # (Fase 5) EQ avanzado: nº de bandas y frecuencia central (el Q vive
+        # en Efectos y llega por state.eq_q_changed).
         eq_page = self._pages["equalizer"]
         eq_page.band_count_selected.connect(self._on_eq_band_count)
         eq_page.freq_selected.connect(self._on_eq_freq)
-        eq_page.q_selected.connect(self._on_eq_q)
         self._refresh_preset_list()
 
     def _on_language_changed(self, text: str) -> None:
@@ -1001,7 +1002,7 @@ class NewMainWindow(QMainWindow):
         # número de bandas para no recortar la lista.
         self._pages["equalizer"].set_bands(self.enhancer.eq_bands)
         self._pages["equalizer"].set_gains(self.enhancer.eq_gains)
-        self._pages["equalizer"].set_q(float(self.enhancer.eq_q))
+        self._pages["effects"].set_eq_q(float(self.enhancer.eq_q))
         self._pages["effects"].set_bass(self.enhancer.bass)
         self._pages["effects"].set_treble(self.enhancer.treble)
         self._pages["effects"].set_limiter(self.enhancer.limiter)
@@ -1048,6 +1049,7 @@ class NewMainWindow(QMainWindow):
     def _on_eq_q(self, q: float) -> None:
         """(Fase 5) Q global del EQ (ancho de campana)."""
         self.enhancer.eq_q = float(q)
+        self.state.eq_q = float(q)
 
     def toggle_ab(self) -> None:
         self.enhancer.blend = 0.0 if self.enhancer.blend > 0.5 else 1.0

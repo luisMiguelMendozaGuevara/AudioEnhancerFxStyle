@@ -74,8 +74,10 @@ class EffectCard(QFrame):
     def _update_label(self, value) -> None:
         if self._unit == "dB":
             self._value_label.setText(f"{value:+.1f} {self._unit}")
-        else:
+        elif self._unit:
             self._value_label.setText(f"{value:.2f} {self._unit}")
+        else:
+            self._value_label.setText(f"{value:.2f}")
 
     def _on_value(self, raw) -> None:
         self._update_label(raw / self._scale)
@@ -190,6 +192,21 @@ class EffectsPage(QWidget):
         if self._treble_card._toggle:
             self._treble_card._toggle.toggled.connect(self._on_treble_toggle)
         layout.addWidget(self._treble_card)
+
+        # Ancho (Q) del ecualizador (movido aqui desde la pagina EQ: es un
+        # ajuste fino que casi no se percibe; aqui queda accesible sin cargar
+        # la pagina del ecualizador). 0.2 = lomos anchos, 10 = picos finos.
+        self._eq_q_card = EffectCard(
+            self._t("Ancho (Q) del ecualizador"),
+            0.2,
+            10.0,
+            1.4,
+            "",
+            has_toggle=False,
+            tooltip=self._explain("eq_q"),
+        )
+        self._eq_q_card._slider.valueChanged.connect(lambda v: self._on_eq_q(v / 100))
+        layout.addWidget(self._eq_q_card)
 
         # Capa enhancer (Fase 1): Dynamic Boost (sube los pasajes bajos sin
         # tocar los picos) y Leveling (AGC lento que iguala el volumen).
@@ -449,6 +466,9 @@ class EffectsPage(QWidget):
     def _on_surround(self, v) -> None:
         self._state.surround = v
 
+    def _on_eq_q(self, v) -> None:
+        self._state.eq_q = float(v)
+
     def _on_ambience_toggle(self, on) -> None:
         if self._ambience_card._toggle is not None:
             self._ambience_card._toggle.setText("ON" if on else "OFF")
@@ -537,6 +557,9 @@ class EffectsPage(QWidget):
 
     def set_surround(self, v) -> None:
         self._surround_card.set_value(v)
+
+    def set_eq_q(self, v) -> None:
+        self._eq_q_card.set_value(v)
 
     def set_balance(self, v) -> None:
         self._balance_card.set_value(v)

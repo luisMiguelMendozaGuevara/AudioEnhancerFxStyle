@@ -546,6 +546,35 @@ def test_eq_avanzado_conectado_al_motor(window):
     window._on_eq_band_count(9)  # restaurar el estado para el resto de tests
 
 
+def test_curva_de_bandas_cubre_todo_el_ancho(window):
+    """Al cambiar de bandas la curva ya no empieza en la primera banda: se
+    dibuja de borde a borde (extension plana) y pasa por cada ganancia."""
+    page = window._pages["equalizer"]
+    page.set_bands([60.0, 250.0, 1000.0, 4000.0, 12000.0])
+    page.set_gains([6.0, 0.0, -3.0, 2.0, 5.0])
+    ts, gs = page._eq_curve.curve_samples()
+    assert ts[0] == pytest.approx(0.0) and ts[-1] == pytest.approx(1.0)
+    assert gs[0] == pytest.approx(6.0) and gs[-1] == pytest.approx(5.0)
+    assert gs.min() >= -3.0 - 1e-9 and gs.max() <= 6.0 + 1e-9  # sin sobreoscilacion
+
+
+def test_ancho_q_en_efectos_conectado_al_motor(window):
+    """El Ancho (Q) vive ahora en la pagina Efectos y sigue llegando al DSP
+    (via state.eq_q_changed); la pagina EQ ya no lo muestra."""
+    page = window._pages["effects"]
+    page._eq_q_card._slider.setValue(250)  # 2.50
+    assert window.enhancer.eq_q == pytest.approx(2.5)
+    assert window.state.eq_q == pytest.approx(2.5)
+    page.set_eq_q(1.4)
+    assert page._eq_q_card.value() == pytest.approx(1.4)
+    window._on_eq_q(3.0)
+    assert window.enhancer.eq_q == pytest.approx(3.0)
+    assert window.state.eq_q == pytest.approx(3.0)
+    assert not hasattr(window._pages["equalizer"], "_q_slider")
+    window.state.eq_q = 1.4  # restaurar para el resto de tests
+    page.set_eq_q(1.4)
+
+
 def test_aviso_de_recorte_con_efectos_sin_proteccion(window):
     """(F6) Con efectos activos y sin limitador/techo, la página avisa."""
     page = window._pages["effects"]

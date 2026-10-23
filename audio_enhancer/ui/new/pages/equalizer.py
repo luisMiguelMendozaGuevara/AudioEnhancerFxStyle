@@ -18,13 +18,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from ....dsp import EQ_BAND_SETS as _EQ_BAND_SETS
 from ....dsp import EQ_BANDS as _DSP_EQ_BANDS
+from ....dsp import pchip_interp
 from ..audio_state import AudioState
 from ..theme.colors import Theme, accent_subtle_color
 
@@ -159,6 +159,25 @@ class EQCurveWidget(QWidget):
             return f"{freq / 1000:.1f}k".replace(".0k", "k")
         return str(int(freq))
 
+    def _band_t(self) -> np.ndarray:
+        """Posicion normalizada (0..1, log-f) de cada banda en el eje X."""
+        log_lo, log_hi = math.log10(self.FREQ_MIN), math.log10(self.FREQ_MAX)
+        bands = np.asarray(self._bands, dtype=np.float64)
+        return (np.log10(bands) - log_lo) / (log_hi - log_lo)
+
+    def curve_samples(self, n: int = 160) -> tuple[np.ndarray, np.ndarray]:
+        """Curva dibujada completa: t 0..1 (log-f) y ganancia (dB).
+
+        Interpola las bandas con PCHIP (pasa exactamente por los puntos, sin
+        ondular ni sobreoscilar) y extiende plano hasta los bordes del grafico:
+        la curva y el relleno cubren todo el ancho con cualquier numero de
+        bandas (antes empezaban en la primera/ultima banda)."""
+        tx = np.concatenate(([0.0], self._band_t(), [1.0]))
+        gy = np.concatenate(([self._gains[0]], self._gains, [self._gains[-1]]))
+        keep = np.concatenate(([True], np.diff(tx) > 1e-9))
+        samples = np.linspace(0.0, 1.0, n)
+        return samples, pchip_interp(tx[keep], gy[keep], samples)
+
     # ---------- pintura ----------
 
     def paintEvent(self, event) -> None:
@@ -230,28 +249,32 @@ class EQCurveWidget(QWidget):
             y = self._gain_to_y(gain, h, mt, mb)
             points.append(QPointF(x, y))
 
-        if len(points) >= 2:
-            # Curva suave (Bezier) y relleno construido del MISMO trazado:
-            # antes el relleno unía los puntos con rectas y se veía un borde
-            # escalonado bajo la curva.
-            line_path = QPainterPath()
-            line_path.moveTo(points[0])
-            for i in range(1, len(points)):
-                prev, curr = points[i - 1], points[i]
-                cx = (prev.x() + curr.x()) / 2
-                line_path.cubicTo(cx, prev.y(), cx, curr.y(), curr.x(), curr.y())
+        # Curva completa (borde a borde) interpolando las bandas con PCHIP:
+        # pasa exactamente por los puntos y no ondula entre ellos; con pocas
+        # bandas ya no se veian ondas en S y el relleno cubre todo el ancho.
+        ts, gs = self.curve_samples()
+        plot_w = max(1.0, w - ml - mr - 40)
+        x0 = ml + 20
+        line_path = QPainterPath()
+        for i, (t, g) in enumerate(zip(ts, gs, strict=False)):
+            x = x0 + plot_w * float(t)
+            y = self._gain_to_y(float(g), h, mt, mb)
+            if i == 0:
+                line_path.moveTo(x, y)
+            else:
+                line_path.lineTo(x, y)
 
-            fill_path = QPainterPath(line_path)
-            fill_path.lineTo(points[-1].x(), zero_y)
-            fill_path.lineTo(points[0].x(), zero_y)
-            fill_path.closeSubpath()
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(accent_subtle_color(13)))
-            p.drawPath(fill_path)
+        fill_path = QPainterPath(line_path)
+        fill_path.lineTo(x0 + plot_w, zero_y)
+        fill_path.lineTo(x0, zero_y)
+        fill_path.closeSubpath()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(accent_subtle_color(13)))
+        p.drawPath(fill_path)
 
-            p.setPen(QPen(QColor(Theme.EQ_CURVE), 2))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(line_path)
+        p.setPen(QPen(QColor(Theme.EQ_CURVE), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(line_path)
 
         for i, pt in enumerate(points):
             is_active = i == self._hover or i == self._dragging
@@ -319,7 +342,6 @@ class EqualizerPage(QWidget):
 
     band_count_selected = Signal(int)
     freq_selected = Signal(int, float)
-    q_selected = Signal(float)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -346,7 +368,8 @@ class EqualizerPage(QWidget):
         )
         layout.addWidget(title)
 
-        # Controles (Fase 5): número de bandas y ancho de campana (Q global).
+        # Controles (Fase 5): numero de bandas. El Ancho (Q) vive en Efectos
+        # (es un ajuste fino que casi no se percibe y cargaba esta pagina).
         ctrl = QHBoxLayout()
         ctrl.setSpacing(Theme.SPACING_MD)
         lbl_bands = QLabel(self._t("Bandas"))
@@ -358,20 +381,7 @@ class EqualizerPage(QWidget):
         self._bands_combo.setCurrentIndex(sorted(_EQ_BAND_SETS).index(9))
         self._bands_combo.currentIndexChanged.connect(self._on_band_count)
         ctrl.addWidget(self._bands_combo)
-        ctrl.addSpacing(Theme.SPACING_LG)
-        lbl_q = QLabel(self._t("Ancho (Q)"))
-        lbl_q.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
-        ctrl.addWidget(lbl_q)
-        self._q_slider = QSlider(Qt.Orientation.Horizontal)
-        self._q_slider.setRange(20, 1000)  # 0.20 .. 10.00
-        self._q_slider.setValue(140)
-        self._q_slider.valueChanged.connect(self._on_q)
-        ctrl.addWidget(self._q_slider, 1)
-        self._q_label = QLabel("1.40")
-        self._q_label.setFixedWidth(44)
-        self._q_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._q_label.setStyleSheet(f"color: {Theme.TEXT}; background: transparent;")
-        ctrl.addWidget(self._q_label)
+        ctrl.addStretch()
         layout.addLayout(ctrl)
 
         self._eq_curve = EQCurveWidget()
@@ -391,11 +401,6 @@ class EqualizerPage(QWidget):
 
     def _on_band_count(self, index: int) -> None:
         self.band_count_selected.emit(int(self._bands_combo.itemData(index) or 9))
-
-    def _on_q(self, raw: int) -> None:
-        q = raw / 100.0
-        self._q_label.setText(f"{q:.2f}")
-        self.q_selected.emit(q)
 
     def _on_band_changed(self, index: int, gain: float) -> None:
         # Asignar la lista COMPLETA (no eq_gains[i] = gain): la mutación in
@@ -424,9 +429,3 @@ class EqualizerPage(QWidget):
             self._bands_combo.blockSignals(True)
             self._bands_combo.setCurrentIndex(idx)
             self._bands_combo.blockSignals(False)
-
-    def set_q(self, q: float) -> None:
-        self._q_slider.blockSignals(True)
-        self._q_slider.setValue(int(round(float(q) * 100)))
-        self._q_slider.blockSignals(False)
-        self._q_label.setText(f"{float(q):.2f}")
