@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import numpy as np
 import pytest
 
 
@@ -545,34 +544,6 @@ def test_eq_avanzado_conectado_al_motor(window):
     window._on_eq_freq(0, 90.0)
     assert window.enhancer.eq_bands[0] == pytest.approx(90.0, rel=0.01)
     window._on_eq_band_count(9)  # restaurar el estado para el resto de tests
-
-
-def test_cambiar_el_ancho_q_redibuja_la_curva(window):
-    """Regresion ("Ancho no funciona"): la curva ahora es la respuesta REAL
-    del EQ; mover la Q debe cambiar su forma (antes era una Bezier cosmetica
-    que ignoraba la Q)."""
-    page = window._pages["equalizer"]
-    page.set_bands([100.0, 1000.0, 10000.0])
-    page.set_gains([12.0, 0.0, 0.0])
-
-    def _ancho_a_mitad(q: float) -> float:
-        page.set_q(q)
-        freqs, resp = page._eq_curve.sample_response()
-        above = freqs > 100.0
-        # Primera frecuencia (por encima de f0) donde el lomo cae a la mitad.
-        idx = int(np.argmax(resp[above] <= 6.0))
-        return float(freqs[above][idx]) - 100.0
-
-    assert _ancho_a_mitad(8.0) < _ancho_a_mitad(0.5) / 2.0
-    # El deslizador actualiza curva y motor a la vez.
-    page._on_q(800)
-    assert page._eq_curve._q == pytest.approx(8.0)
-    assert window.enhancer.eq_q == pytest.approx(8.0)
-    assert window.state.eq_q == pytest.approx(8.0)
-    # Restaurar para el resto de tests del modulo.
-    page.set_q(1.4)
-    window._on_eq_band_count(9)
-    page.set_gains([0.0] * 9)
 
 
 def test_aviso_de_recorte_con_efectos_sin_proteccion(window):

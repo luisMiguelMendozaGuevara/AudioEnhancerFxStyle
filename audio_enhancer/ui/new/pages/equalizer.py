@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
 
 from ....dsp import EQ_BAND_SETS as _EQ_BAND_SETS
 from ....dsp import EQ_BANDS as _DSP_EQ_BANDS
-from ....dsp import eq_response_db
 from ..audio_state import AudioState
 from ..theme.colors import Theme, accent_subtle_color
 
@@ -57,23 +56,9 @@ class EQCurveWidget(QWidget):
         self._bars = np.zeros(len(self._bands), dtype=np.float32)
         self._bin_band = np.zeros(self.SPECTRUM_BINS, dtype=np.intp)
         self._recompute_bin_map()
-        self._q: float = 1.4
-        log_lo, log_hi = math.log10(self.FREQ_MIN), math.log10(self.FREQ_MAX)
-        self._resp_freqs = np.logspace(log_lo, log_hi, 192)
-        self._resp_t = (np.log10(self._resp_freqs) - log_lo) / (log_hi - log_lo)
-        self._resp_db: np.ndarray | None = None
-        self._rebuild_response()
         self.setMinimumHeight(200)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
-
-    def _rebuild_response(self) -> np.ndarray:
-        """Cachea la respuesta real (dB) sobre la rejilla log de la curva.
-
-        La Q es la misma para todas las bandas (la UI simple solo expone el
-        ancho global; el motor admite Q por banda)."""
-        self._resp_db = eq_response_db(self._resp_freqs, self._bands, self._gains, [self._q] * len(self._bands))
-        return self._resp_db
 
     # ---------- datos ----------
 
@@ -99,7 +84,6 @@ class EQCurveWidget(QWidget):
             self._gains = (list(self._gains) + [0.0] * n)[:n]
         self._bars = np.zeros(n, dtype=np.float32)
         self._recompute_bin_map()
-        self._rebuild_response()
         self.update()
 
     def set_gains(self, gains) -> None:
@@ -107,26 +91,10 @@ class EQCurveWidget(QWidget):
         if len(g) != len(self._bands):
             g = (g + [0.0] * len(self._bands))[: len(self._bands)]
         self._gains = g
-        self._rebuild_response()
         self.update()
-
-    def set_q(self, q: float) -> None:
-        """Ancho (Q) global del dibujo; el motor recibe el mismo valor."""
-        q = min(10.0, max(0.2, float(q)))
-        if abs(q - self._q) < 1e-9:
-            return
-        self._q = q
-        self._rebuild_response()
-        self.update()
-
-    def sample_response(self) -> tuple[np.ndarray, np.ndarray]:
-        """Frecuencias (Hz) y respuesta dibujada (dB); para tests."""
-        resp = self._resp_db if self._resp_db is not None else self._rebuild_response()
-        return self._resp_freqs.copy(), resp.copy()
 
     def reset(self) -> None:
         self._gains = [0.0] * len(self._bands)
-        self._rebuild_response()
         self.update()
 
     def set_spectrum(self, values) -> None:
@@ -262,27 +230,20 @@ class EQCurveWidget(QWidget):
             y = self._gain_to_y(gain, h, mt, mb)
             points.append(QPointF(x, y))
 
-        # Curva = respuesta REAL del EQ (misma RBJ que el DSP): el Ancho (Q)
-        # ensancha/estrecha los lomos y la curva coincide con lo que suena.
-        # En el centro de cada banda la respuesta vale exactamente su ganancia,
-        # asi que los puntos siguen apoyados sobre la curva.
-        resp_db = self._resp_db if self._resp_db is not None else self._rebuild_response()
-        plot_w = max(1.0, w - ml - mr - 40)
-        x0 = ml + 20
-        line_path = QPainterPath()
-        first = True
-        for t, db in zip(self._resp_t, resp_db, strict=False):
-            y = self._gain_to_y(max(self.DB_MIN, min(self.DB_MAX, float(db))), h, mt, mb)
-            x = x0 + plot_w * float(t)
-            if first:
-                line_path.moveTo(x, y)
-                first = False
-            else:
-                line_path.lineTo(x, y)
-        if not first:
+        if len(points) >= 2:
+            # Curva suave (Bezier) y relleno construido del MISMO trazado:
+            # antes el relleno unía los puntos con rectas y se veía un borde
+            # escalonado bajo la curva.
+            line_path = QPainterPath()
+            line_path.moveTo(points[0])
+            for i in range(1, len(points)):
+                prev, curr = points[i - 1], points[i]
+                cx = (prev.x() + curr.x()) / 2
+                line_path.cubicTo(cx, prev.y(), cx, curr.y(), curr.x(), curr.y())
+
             fill_path = QPainterPath(line_path)
-            fill_path.lineTo(x0 + plot_w, zero_y)
-            fill_path.lineTo(x0, zero_y)
+            fill_path.lineTo(points[-1].x(), zero_y)
+            fill_path.lineTo(points[0].x(), zero_y)
             fill_path.closeSubpath()
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(accent_subtle_color(13)))
@@ -434,7 +395,6 @@ class EqualizerPage(QWidget):
     def _on_q(self, raw: int) -> None:
         q = raw / 100.0
         self._q_label.setText(f"{q:.2f}")
-        self._eq_curve.set_q(q)
         self.q_selected.emit(q)
 
     def _on_band_changed(self, index: int, gain: float) -> None:
@@ -466,9 +426,7 @@ class EqualizerPage(QWidget):
             self._bands_combo.blockSignals(False)
 
     def set_q(self, q: float) -> None:
-        q = float(q)
         self._q_slider.blockSignals(True)
-        self._q_slider.setValue(int(round(q * 100)))
+        self._q_slider.setValue(int(round(float(q) * 100)))
         self._q_slider.blockSignals(False)
-        self._q_label.setText(f"{q:.2f}")
-        self._eq_curve.set_q(q)
+        self._q_label.setText(f"{float(q):.2f}")

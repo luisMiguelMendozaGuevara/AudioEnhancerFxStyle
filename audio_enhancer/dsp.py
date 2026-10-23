@@ -219,47 +219,6 @@ def _onepole_powers(pole: float, n: int) -> np.ndarray:
     return pole ** np.arange(1, n + 1, dtype=np.float64)
 
 
-def _peaking_coeffs(freq, gain_db, fs, q):
-    """Coeficientes RBJ de un peaking EQ normalizados por a0.
-
-    Devuelve ``(b0, b1, b2, a1, a2)``. Fuente unica de la matematica del EQ:
-    la usan el DSP (``Enhancer._peaking``) y la curva dibujada en la UI
-    (``eq_response_db``), para que el grafico y el audio no puedan divergir."""
-    A = 10.0 ** (gain_db / 40.0)
-    w0 = 2.0 * np.pi * freq / fs
-    cw = np.cos(w0)
-    sw = np.sin(w0)
-    alpha = sw / (2.0 * q)
-    b0 = 1.0 + alpha * A
-    b1 = -2.0 * cw
-    b2 = 1.0 - alpha * A
-    a0 = 1.0 + alpha / A
-    a1 = -2.0 * cw
-    a2 = 1.0 - alpha / A
-    return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
-
-
-def eq_response_db(freqs, bands, gains, q_values, fs=SAMPLE_RATE):
-    """Respuesta en dB de la cascada de peaking del EQ evaluada en ``freqs``.
-
-    Misma RBJ que el DSP. En el centro de cada banda la respuesta vale
-    exactamente su ganancia y el Q ensancha/estrecha el lomo: la UI la usa
-    para dibujar la curva real (el Ancho (Q) se ve, no solo se oye)."""
-    f = np.asarray(freqs, dtype=np.float64)
-    total = np.zeros_like(f)
-    for f0, g, q in zip(bands, gains, q_values, strict=False):
-        f0 = float(f0)
-        g = float(g)
-        if abs(g) < 1e-9 or f0 <= 0.0 or f0 >= float(fs) * 0.5:
-            continue
-        b0, b1, b2, a1, a2 = _peaking_coeffs(f0, g, fs, max(1e-3, float(q)))
-        z = np.exp(-1j * 2.0 * np.pi * f / float(fs))
-        num = b0 + b1 * z + b2 * z * z
-        den = 1.0 + a1 * z + a2 * z * z
-        total += 20.0 * np.log10(np.maximum(np.abs(num), 1e-12)) - 20.0 * np.log10(np.maximum(np.abs(den), 1e-12))
-    return total
-
-
 def _onepole_lp(x: np.ndarray, pole: float, y_last, b0=None):
     """Filtro de 1 polo ``y[n] = b0*x[n] + pole*y[n-1]`` SIN scipy.
 
@@ -698,7 +657,18 @@ class Enhancer:
 
     @staticmethod
     def _peaking(freq, gain_db, fs, q):
-        return _peaking_coeffs(freq, gain_db, fs, q)
+        A = 10.0 ** (gain_db / 40.0)
+        w0 = 2.0 * np.pi * freq / fs
+        cw = np.cos(w0)
+        sw = np.sin(w0)
+        alpha = sw / (2.0 * q)
+        b0 = 1.0 + alpha * A
+        b1 = -2.0 * cw
+        b2 = 1.0 - alpha * A
+        a0 = 1.0 + alpha / A
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha / A
+        return b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0
 
     @staticmethod
     def _highpass(freq, fs, q=EXCITER_Q):
