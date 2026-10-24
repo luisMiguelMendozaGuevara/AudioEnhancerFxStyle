@@ -47,3 +47,18 @@ widgets (ver `NewMainWindow._on_theme_changed`). Selector: Settings → APPEARAN
 
 ## Espaciado
 Base 4px: 4/8/12/16/24/32; margen de página 16px
+
+## Curva del EQ (pages/equalizer.py)
+- La curva y el relleno son la interpolación **PCHIP** de las ganancias por
+  banda en log-frecuencia (`dsp.pchip_interp`, compartida con el DSP): pasa
+  exactamente por los puntos, no ondula en S ni sobreoscila. Nada de Bézier
+  decorativas: si el dibujo y el motor divergen, el gráfico miente.
+- Se dibuja **de borde a borde** (20 Hz–20 kHz) con extensión plana en los
+  extremos (`curve_samples()`); con cualquier nº de bandas el ancho se cubre
+  entero y el relleno usa `accent_subtle_color(13)` cerrado a 0 dB.
+- Cambiar el nº de bandas remapea las ganancias con la MISMA PCHIP
+  (`Enhancer.set_eq_bands`); la ida y vuelta 9→31→9 conserva la forma en
+  <0.2 dB. La UI manda bandas **antes** que ganancias (`_sync_ui_from_state`).
+- El **Ancho (Q)** es un ajuste fino con efecto casi inaudible: vive en
+  Efectos («Ancho (Q) del ecualizador», 0.2–10, sin toggle) y llega al motor
+  por `state.eq_q_changed`; la página EQ solo tiene el selector de Bandas.
