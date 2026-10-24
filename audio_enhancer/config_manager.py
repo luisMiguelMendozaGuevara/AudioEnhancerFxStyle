@@ -33,6 +33,10 @@ from .dsp import (
 
 logger = logging.getLogger("audio_enhancer.config_manager")
 
+# Paginas de la sidebar (ids estables): la ultima visitada se reabre al
+# reiniciar. Debe coincidir con los ids de widgets/sidebar.py.
+VALID_PAGES = ("home", "equalizer", "effects", "audio", "presets", "settings")
+
 # Rangos de la UI (única fuente de verdad de lo que el usuario puede pedir).
 # Se ACOTAN al cargar: un config.json editado a mano no puede colar un boost
 # desmedido al DSP (p. ej. volume=10, bass=50), que sonaría a estática/
@@ -260,12 +264,19 @@ class ConfigManager:
         if theme not in ("dark", "light"):
             theme = None
 
+        # Ultima pagina abierta: solo ids conocidos (un config editado a mano
+        # no puede navegar a una pagina inexistente).
+        last_page = raw.get("last_page")
+        if last_page not in VALID_PAGES:
+            last_page = "home"
+
         return {
             "source": str(raw.get("source", "") or ""),
             "output": str(raw.get("output", "") or ""),
             "preset": str(raw.get("preset", "") or "") or DEFAULT_PRESET,
             "language": language,
             "theme": theme,
+            "last_page": last_page,
             "volume": _clamp(self.as_float(raw.get("volume"), 1.0), VOLUME_MIN, VOLUME_MAX),
             "bass": _clamp(self.as_float(raw.get("bass"), 0.0), BASS_MIN, BASS_MAX),
             "treble": _clamp(self.as_float(raw.get("treble"), 0.0), TREBLE_MIN, TREBLE_MAX),

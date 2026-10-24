@@ -316,6 +316,22 @@ def test_load_efectos_por_defecto_vacios(tmp_path):
     assert cfg["device_presets"] == {}
 
 
+# ---------- ultima pagina del menu (se reabre al reiniciar) ----------
+
+
+def test_last_page_round_trip_y_fallback(tmp_path):
+    import json
+
+    p = tmp_path / "ui.json"
+    p.write_text(json.dumps({"last_page": "effects"}), encoding="utf-8")
+    assert ConfigManager(eq_band_count=9, path=str(p)).load()["last_page"] == "effects"
+
+    p.write_text(json.dumps({"last_page": "pantalla-inexistente"}), encoding="utf-8")
+    assert ConfigManager(eq_band_count=9, path=str(p)).load()["last_page"] == "home"
+
+    assert ConfigManager(eq_band_count=9, path=str(tmp_path / "vacio.json")).load()["last_page"] == "home"
+
+
 def test_sanitize_device_presets_filtra_entradas_invalidas(tmp_path):
     import json
 

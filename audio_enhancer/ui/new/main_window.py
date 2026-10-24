@@ -258,6 +258,7 @@ class NewMainWindow(QMainWindow):
         # (PRUEBA, opt-in) captura nativa sin cable virtual: auto-selecciona el
         # loopback del dispositivo de salida. OFF por defecto hasta validarla.
         self.native_capture = False
+        self._current_page = "home"  # ultima pagina del menu (se persiste en config)
         self._closing = False
         self._active_names = ("", "")
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
@@ -465,7 +466,9 @@ class NewMainWindow(QMainWindow):
         self.visual_timer.setInterval(33)
         self.visual_timer.timeout.connect(self._refresh_visuals)
         self.visual_timer.start()
-        self._sidebar.set_active("home")
+        # Reabrir la ultima pagina del menu (persistida en config.json); si no
+        # hay valor valido, ConfigManager devuelve "home".
+        self._navigate_to(self._current_page)
         self._update_spectrum_needed()
         logger.info("New UI ready: %s", self.metrics.summary())
 
@@ -722,6 +725,11 @@ class NewMainWindow(QMainWindow):
         page = self._pages.get(page_id)
         if not page:
             return
+        # Se registra SIEMPRE (aunque la pagina ya este activa): la ultima
+        # pagina se reabre al reiniciar y la sidebar debe reflejarla tambien
+        # en navegacion programatica (restauracion, atajos, tests).
+        self._current_page = page_id
+        self._sidebar.set_active(page_id)
         if self._stack.currentWidget() is page:
             return
         self._stack.setCurrentWidget(page)
@@ -1277,6 +1285,8 @@ class NewMainWindow(QMainWindow):
         # Preferencia de latencia persistida (40/60/100 ms), ya validada.
         self.state.latency_pref = cfg["latency_pref"]
         self._pages["audio"].set_latency_pref(self.state.latency_pref)
+        # Ultima pagina del menu: build_content la reabre al arrancar.
+        self._current_page = cfg["last_page"]
         # (C1) preferencias de comportamiento, antes checkboxes decorativos.
         self.minimize_to_tray = cfg["minimize_to_tray"]
         self.autostart_audio = cfg["autostart_audio"]
@@ -1297,6 +1307,7 @@ class NewMainWindow(QMainWindow):
             "output": audio_page.selected_output(),
             "preset": home.preset_text() or DEFAULT_PRESET,
             "language": self.language,
+            "last_page": self._current_page,
             "volume": float(self.enhancer.volume),
             "bass": float(self.enhancer.bass),
             "treble": float(self.enhancer.treble),
