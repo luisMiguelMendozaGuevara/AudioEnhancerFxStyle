@@ -171,6 +171,14 @@ TRANSLATIONS = {
     "ESPACIO": "SPACE",
     "PROTECCIONES": "PROTECTION",
     "AURICULARES": "HEADPHONES",
+    "Bandas": "Bands",
+    "Ancho (Q) del ecualizador": "EQ width (Q)",
+    "Latencia objetivo: %d ms": "Target latency: %d ms",
+    "Hay efectos activos y ninguna protección: la salida puede recortar (distorsión). "
+    "Activa el limitador o el techo de seguridad.": (
+        "Effects are active with no protection: the output can clip (distortion). "
+        "Turn on the limiter or the safety ceiling."
+    ),
     "Eliminar": "Delete",
     "Preset eliminado: %s": "Preset deleted: %s",
     "Escribe un nombre para el preset.": "Write a name for the preset.",

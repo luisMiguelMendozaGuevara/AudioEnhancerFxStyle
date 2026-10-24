@@ -16,6 +16,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
 from .constants import APP_NAME
+from .error_hooks import install_exception_hooks, install_qt_message_handler
 from .single_instance import acquire_single_instance, setup_logging
 from .ui.new import NewMainWindow
 
@@ -41,6 +42,7 @@ def main() -> int:
     # Soporte de multiprocessing en el EXE congelado (proceso hijo del DSP).
     multiprocessing.freeze_support()
     setup_logging()
+    install_exception_hooks()
     logger = logging.getLogger("audio_enhancer.main")
     logger.info("Arranque de %s", APP_NAME)
     if acquire_single_instance() is None:
@@ -52,6 +54,7 @@ def main() -> int:
     app = cast(QApplication, QApplication.instance() or QApplication([]))
     # Ocultar a la bandeja no debe terminar la aplicación.
     app.setQuitOnLastWindowClosed(False)
+    install_qt_message_handler()
     window = NewMainWindow()
     window.show()
     threading.Thread(target=_preload_scipy, name="scipy-preload", daemon=True).start()

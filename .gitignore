@@ -46,3 +46,9 @@ AGENTS.md
 # Artefactos locales de herramientas de agentes IA
 .codebase-memory/
 .hermes/
+
+# Cobertura de tests (generada por pytest-cov)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
