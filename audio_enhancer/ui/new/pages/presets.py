@@ -16,6 +16,28 @@ from ..audio_state import AudioState
 from ..theme.colors import Theme
 
 
+def _clear_layout(layout) -> None:
+    """Vacía un layout borrando de verdad widgets y sub-layouts.
+
+    Regresión «línea blanca en Presets → INCLUIDOS»: las filas se añaden con
+    ``addLayout()``; el borrado anterior solo miraba ``item.widget()`` y dejaba
+    los QLabel de los sub-layouts vivos como hijos fantasma (el texto se
+    duplicaba en cada refresco, y el arranque refresca dos veces)."""
+    while layout.count():
+        item = layout.takeAt(0)
+        if item is None:
+            break
+        widget = item.widget()
+        if widget is not None:
+            widget.hide()  # no puede pintarse mientras llega el deleteLater
+            widget.deleteLater()
+            continue
+        sub = item.layout()
+        if sub is not None:
+            _clear_layout(sub)
+            sub.deleteLater()
+
+
 class PresetsPage(QWidget):
     """Pagina de presets: incluidos, personalizados, favoritos.
 
@@ -148,13 +170,7 @@ class PresetsPage(QWidget):
         outer.addWidget(scroll)
 
     def set_included_presets(self, names: list[str]) -> None:
-        while self._included_layout.count():
-            item = self._included_layout.takeAt(0)
-            if item is None:
-                break
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        _clear_layout(self._included_layout)
         for name in names:
             row = QHBoxLayout()
             lbl = QLabel(name)
@@ -164,23 +180,7 @@ class PresetsPage(QWidget):
             self._included_layout.addLayout(row)
 
     def set_custom_presets(self, names: list[str]) -> None:
-        while self._custom_layout.count():
-            item = self._custom_layout.takeAt(0)
-            if item is None:
-                break
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-            sub = item.layout()
-            if sub is not None:
-                # Clean up sub-layout items
-                while sub.count():
-                    si = sub.takeAt(0)
-                    if si is None:
-                        break
-                    sw = si.widget()
-                    if sw is not None:
-                        sw.deleteLater()
+        _clear_layout(self._custom_layout)
         for name in names:
             row = QHBoxLayout()
             lbl = QLabel(name)

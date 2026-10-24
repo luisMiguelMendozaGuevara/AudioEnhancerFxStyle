@@ -486,6 +486,68 @@ def test_botones_importar_exportar_emiten_senales(qapp):
     assert got == ["import", "export"]
 
 
+def test_listas_de_presets_no_acumulan_labels_fantasma(window, qapp):
+    """Regresion "linea blanca en INCLUIDOS": cada refresco debe recrear las
+    filas sin dejar QLabels viejos vivos (antes 3 -> 6 -> 9 al repetir)."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QLabel
+
+    def flush() -> None:
+        qapp.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    flush()  # dejar correr los deleteLater del arranque
+    page = window._pages["presets"]
+    page.set_included_presets(["A", "B", "C"])
+    flush()
+    page.set_included_presets(["A", "B", "C"])
+    flush()
+    page.set_included_presets(["A", "B"])
+    flush()
+
+    assert len(page._included_list.findChildren(QLabel)) == 2
+    assert page._included_layout.count() == 2
+
+    page.set_custom_presets(["X", "Y"])
+    flush()
+    page.set_custom_presets(["X"])
+    flush()
+    assert len(page._custom_list.findChildren(QLabel)) == 1
+    assert page._custom_layout.count() == 1
+
+    window._refresh_preset_list()  # restaurar las listas reales para otros tests
+
+
+def test_navegacion_persiste_la_ultima_pagina(window):
+    """La ultima pagina del menu se registra al navegar y se guarda en config
+    (se reabre al reiniciar)."""
+    from audio_enhancer.config_manager import ConfigManager
+
+    window._navigate_to("presets")
+    assert window._current_page == "presets"
+    assert window._sidebar._current_id == "presets"
+    window._save_config()
+    cfg = ConfigManager(eq_band_count=len(window.enhancer.eq_bands)).load()
+    assert cfg["last_page"] == "presets"
+    window._navigate_to("home")
+
+
+def test_arranque_reabre_la_ultima_pagina(window, monkeypatch):
+    """Regresion: al arrancar se reabre la pagina guardada (antes forzaba
+    Inicio)."""
+    cfg = dict(window._config.load())
+    cfg["last_page"] = "effects"
+    monkeypatch.setattr(window._config, "load", lambda: cfg)
+    window._apply_config()
+    assert window._current_page == "effects"
+    window._navigate_to(window._current_page)
+    assert window._stack.currentWidget() is window._pages["effects"]
+    assert window._sidebar._current_id == "effects"
+    monkeypatch.undo()
+    window._current_page = "home"
+    window._navigate_to("home")
+
+
 def test_importar_presets_desde_json(window, tmp_path, monkeypatch):
     import json
 
