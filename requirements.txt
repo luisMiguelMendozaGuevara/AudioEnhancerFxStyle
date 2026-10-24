@@ -3,5 +3,5 @@
 # Instalar:  pip install -r requirements.txt
 numpy>=1.26
 scipy>=1.11
-PySide6>=6.8,<6.9
+PySide6>=6.8,<6.13
 PyAudioWPatch>=0.2.12.8
