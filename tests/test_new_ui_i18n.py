@@ -53,6 +53,8 @@ def test_default_labels_spanish(window):
     assert window._pages["home"]._start_button.text() == "Iniciar audio"
     assert window._pages["audio"]._refresh_btn.text() == "Actualizar dispositivos"
     assert window._sidebar._items[0]._text_label.text() == "Inicio"
+    assert window._pages["effects"]._section_labels[0].text() == "TONO"
+    assert len(window._pages["effects"]._section_labels) == 7
 
 
 def test_live_switch_to_english(window):
@@ -64,6 +66,15 @@ def test_live_switch_to_english(window):
     assert window._sidebar._items[1]._text_label.text() == "Equalizer"
     assert window._pages["settings"]._autostart_check.text() == "Start with Windows"
     assert window._pages["effects"]._bass_card._title_label.text() == "Bass boost (dB)"
+    assert [lbl.text() for lbl in window._pages["effects"]._section_labels] == [
+        "TONE",
+        "DYNAMICS",
+        "EXCITERS",
+        "SPACE",
+        "OUTPUT",
+        "PROTECTION",
+        "HEADPHONES",
+    ]
 
 
 def test_state_preserved_after_reload(window):

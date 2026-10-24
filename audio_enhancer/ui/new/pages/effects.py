@@ -20,10 +20,22 @@ from ..theme.colors import Theme
 class EffectCard(QFrame):
     """Tarjeta de un efecto individual."""
 
-    def __init__(self, title, min_val, max_val, default, unit="dB", has_toggle=True, tooltip="", parent=None) -> None:
+    def __init__(
+        self,
+        title,
+        min_val,
+        max_val,
+        default,
+        unit="dB",
+        has_toggle=True,
+        tooltip="",
+        compact=False,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._unit = unit
         self._scale = 100
+        self._compact = compact
         # objectName "card": el QSS global lo estiliza y sigue el tema activo.
         self.setObjectName("card")
         # El tooltip se pone en la tarjeta: Qt lo muestra al pasar el mouse por
@@ -31,7 +43,8 @@ class EffectCard(QFrame):
         if tooltip:
             self.setToolTip(tooltip)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD)
+        top_pad = Theme.SPACING_SM if compact else Theme.SPACING_MD
+        layout.setContentsMargins(Theme.SPACING_LG, top_pad, Theme.SPACING_LG, top_pad)
         layout.setSpacing(Theme.SPACING_SM)
         self._layout = layout
 
@@ -68,7 +81,19 @@ class EffectCard(QFrame):
         )
         self._update_label(default)
         row_slider.addWidget(self._value_label)
-        layout.addLayout(row_slider)
+        if compact:
+            # ON/OFF puro (protecciones): el slider estaba deshabilitado y no
+            # aportaba nada. Se crea pero se oculta para no romper la API
+            # (set_value / tests); la tarjeta queda en una fila de 40 px.
+            holder = QWidget()
+            holder_layout = QHBoxLayout(holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.addLayout(row_slider)
+            holder.setVisible(False)
+            layout.addWidget(holder)
+            self.setMinimumHeight(40)
+        else:
+            layout.addLayout(row_slider)
         self._slider.valueChanged.connect(self._on_value)
 
     def _update_label(self, value) -> None:
@@ -110,6 +135,7 @@ class EffectsPage(QWidget):
         self._state = state
         self._t = t or (lambda text: text)
         self._explain = explain or (lambda key: "")
+        self._section_labels: list[QLabel] = []
         self._build()
         # Aviso (Fase 6): efectos activos sin NINGUNA protección = riesgo de
         # recorte en el driver. Se recalcula al cambiar efectos o protecciones.
@@ -158,7 +184,21 @@ class EffectsPage(QWidget):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG, Theme.SPACING_LG)
-        layout.setSpacing(Theme.SPACING_LG)
+        # 8 px dentro de un grupo; las cabeceras añaden 12 px extra arriba
+        # (20 entre secciones) para variar el ritmo a proposito.
+        layout.setSpacing(Theme.SPACING_SM)
+
+        def section(text: str) -> None:
+            """Cabecera de grupo (patron XS/500/muted de PRESETS › INCLUIDOS)."""
+            if layout.count():
+                layout.addSpacing(Theme.SPACING_MD)
+            header = QLabel(self._t(text))
+            header.setStyleSheet(
+                f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
+                f"font-weight: {Theme.FONT_WEIGHT_MEDIUM}; background: transparent;"
+            )
+            self._section_labels.append(header)
+            layout.addWidget(header)
 
         title = QLabel(self._t("Efectos"))
         title.setStyleSheet(
@@ -176,6 +216,8 @@ class EffectsPage(QWidget):
         )
         self._warn_label.hide()
         layout.addWidget(self._warn_label)
+
+        section("TONO")
 
         self._bass_card = EffectCard(
             self._t("Refuerzo de graves (dB)"), 0.0, 12.0, 0.0, "dB", tooltip=self._explain("bass")
@@ -210,6 +252,8 @@ class EffectsPage(QWidget):
 
         # Capa enhancer (Fase 1): Dynamic Boost (sube los pasajes bajos sin
         # tocar los picos) y Leveling (AGC lento que iguala el volumen).
+        section("DINÁMICA")
+
         self._dynamic_boost_card = EffectCard(
             self._t("Refuerzo dinámico"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("dynamic_boost")
         )
@@ -228,6 +272,8 @@ class EffectsPage(QWidget):
 
         # Exciters (Fase 2): 2º armónico de presencia (Clarity) y de graves
         # (Bass). Contenido NUEVO, no realce del EQ.
+        section("EXCITERS")
+
         self._clarity_card = EffectCard(
             self._t("Claridad (Fidelity)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("fidelity")
         )
@@ -246,6 +292,8 @@ class EffectsPage(QWidget):
 
         # Ambience/Surround (Fase 3): espacio (reflexiones tempranas) y anchura
         # estéreo (M/S con mono-bass y guard de correlación).
+        section("ESPACIO")
+
         self._ambience_card = EffectCard(
             self._t("Ambiente (sala)"), 0.0, 10.0, 0.0, "/10", tooltip=self._explain("ambience")
         )
@@ -264,6 +312,8 @@ class EffectsPage(QWidget):
 
         # Balance/Master (Fase 4): control estéreo y ganancia final (sin toggle:
         # en 0 dB no hacen nada).
+        section("SALIDA")
+
         self._balance_card = EffectCard(
             self._t("Balance L/R"), -20.0, 20.0, 0.0, "dB", has_toggle=False, tooltip=self._explain("balance")
         )
@@ -276,19 +326,33 @@ class EffectsPage(QWidget):
         self._master_card._slider.valueChanged.connect(lambda v: self._on_master(v / 100))
         layout.addWidget(self._master_card)
 
+        section("PROTECCIONES")
+
         self._limiter_card = EffectCard(
-            self._t("Limitador suave"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("limiter")
+            self._t("Limitador suave"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("limiter"),
+            compact=True,
         )
-        self._limiter_card._slider.setEnabled(False)
         if self._limiter_card._toggle is not None:
             self._limiter_card._toggle.setChecked(True)
             self._limiter_card._toggle.toggled.connect(self._on_limiter_toggle)
         layout.addWidget(self._limiter_card)
 
         self._compressor_card = EffectCard(
-            self._t("Compresor RMS"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("compressor")
+            self._t("Compresor RMS"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("compressor"),
+            compact=True,
         )
-        self._compressor_card._slider.setEnabled(False)
         if self._compressor_card._toggle is not None:
             self._compressor_card._toggle.setChecked(True)
             self._compressor_card._toggle.toggled.connect(self._on_compressor_toggle)
@@ -297,9 +361,15 @@ class EffectsPage(QWidget):
         # True-peak: limita picos inter-muestra con sobremuestreo x4. Es lo más
         # caro del DSP; se puede apagar en equipos lentos.
         self._true_peak_card = EffectCard(
-            self._t("True-peak (x4)"), 0.0, 1.0, 1.0, "", has_toggle=True, tooltip=self._explain("true_peak")
+            self._t("True-peak (x4)"),
+            0.0,
+            1.0,
+            1.0,
+            "",
+            has_toggle=True,
+            tooltip=self._explain("true_peak"),
+            compact=True,
         )
-        self._true_peak_card._slider.setEnabled(False)
         if self._true_peak_card._toggle is not None:
             self._true_peak_card._toggle.setChecked(True)
             self._true_peak_card._toggle.toggled.connect(self._on_true_peak_toggle)
@@ -316,8 +386,8 @@ class EffectsPage(QWidget):
             "",
             has_toggle=True,
             tooltip=self._explain("safety_ceiling"),
+            compact=True,
         )
-        self._safety_card._slider.setEnabled(False)
         if self._safety_card._toggle is not None:
             self._safety_card._toggle.setChecked(True)
             self._safety_card._toggle.toggled.connect(self._on_safety_ceiling_toggle)
@@ -333,8 +403,8 @@ class EffectsPage(QWidget):
             "",
             has_toggle=True,
             tooltip=self._explain("final_clip"),
+            compact=True,
         )
-        self._final_clip_card._slider.setEnabled(False)
         if self._final_clip_card._toggle is not None:
             self._final_clip_card._toggle.setChecked(True)
             self._final_clip_card._toggle.toggled.connect(self._on_final_clip_toggle)
@@ -342,6 +412,8 @@ class EffectsPage(QWidget):
 
         # Crossfeed BS2B: imagen estéreo "fuera de la cabeza" para auriculares.
         # OFF por defecto (modifica la separación estéreo: no es universal).
+        section("AURICULARES")
+
         self._crossfeed_card = EffectCard(
             self._t("Crossfeed (auriculares)"),
             0.0,
