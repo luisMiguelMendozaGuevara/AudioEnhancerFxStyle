@@ -124,7 +124,9 @@ Without the virtual cable, Audio Enhancer has no way to intercept the sound comi
 
 ## Installing from Source
 
-If you're a developer and want to run from source code:
+If you're a developer and want to run from source code.
+
+**Requirements:** Python **3.12+** (tested on **3.13**; the installer and the portable build bundle Python 3.13). Python 3.11 is no longer supported.
 
 ```bat
 py -3 -m venv .venv
@@ -164,7 +166,7 @@ Two artifacts are produced from the same sources:
 - **Portable**: a single `--onefile` `.exe` for users who prefer not to install.
 
 ```bat
-.venv\Scripts\pip install -r requirements-dev.txt
+.venv\Scripts\pip install -r requirements-dev.txt -c constraints.txt
 
 :: 1) Onedir package + installer
 .venv\Scripts\pyinstaller.exe --clean --noconfirm AudioEnhancerFxStyle.spec

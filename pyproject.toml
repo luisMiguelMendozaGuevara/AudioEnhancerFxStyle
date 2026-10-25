@@ -5,7 +5,7 @@ description = "Real-time system audio enhancer for Windows (WASAPI loopback DSP)
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
@@ -25,7 +25,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [
     "audio_enhancer_venv",
     "actual",
@@ -48,7 +48,7 @@ testpaths = ["tests"]
 include = ["audio_enhancer*"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 # La UI depende de PySide6/pyaudiowpatch, sin stubs completos.
 ignore_missing_imports = true
 files = ["audio_enhancer"]
