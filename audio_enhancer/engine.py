@@ -744,8 +744,8 @@ class AudioEngine:
                     stalled = True
                 except Exception:
                     # Cola cerrada o error inesperado (p. ej. durante stop()):
-                    # mismo comportamiento que antes (se pierde el bloque).
-                    pass
+                    # el bloque se pierde, pero queda rastro en el log.
+                    logger.debug("Bloque crudo descartado (cola cerrada)", exc_info=True)
             elif not stalled:
                 self._stats["raw_q_empty"] += 1
             got = False

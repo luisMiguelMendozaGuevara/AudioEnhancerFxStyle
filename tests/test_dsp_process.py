@@ -319,3 +319,17 @@ def test_shared_block_queue_ciclo_completo_y_wrap_around():
     # Centinela None (longitud -1) y wrap-around de índices.
     q.put_nowait(None)
     assert q.get_nowait() is None
+
+
+def test_parent_alive_detecta_padre_vivo_y_pid_inexistente():
+    """Si el principal muere a lo bruto, el hijo debe poder detectarlo y salir
+    (evita el proceso DSP huerfano que sigue capturando en silencio)."""
+    import os as os_mod
+
+    from audio_enhancer.dsp_process import _parent_alive
+
+    if os_mod.name != "nt":
+        assert _parent_alive(0) is True  # fuera de Windows no se comprueba
+        return
+    assert _parent_alive(os_mod.getpid()) is True
+    assert _parent_alive(0x7FFFFFF0) is False  # PID inexistente

@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import multiprocessing as mp
+import os
 import queue
 import threading
 import time
@@ -28,6 +29,36 @@ import numpy as np
 from .constants import CHUNK
 
 logger = logging.getLogger("audio_enhancer.dsp_process")
+
+
+def _parent_alive(parent_pid: int) -> bool:
+    """True si el proceso padre sigue vivo (Windows: handle + wait 0).
+
+    Si el principal muere a lo bruto (Administrador de tareas o crash nativo),
+    este hijo seguiria capturando/procesando en silencio para siempre. Ante
+    cualquier duda devuelve True: nunca se mata al hijo por un fallo de la
+    comprobacion."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        WAIT_TIMEOUT = 0x00000102
+        ERROR_INVALID_PARAMETER = 87
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = ctypes.c_void_p
+        handle = k32.OpenProcess(SYNCHRONIZE, False, int(parent_pid))
+        if not handle:
+            # 87 = PID inexistente (muerto); otro error (p. ej. acceso) -> vivo.
+            return k32.GetLastError() != ERROR_INVALID_PARAMETER
+        try:
+            return k32.WaitForSingleObject(ctypes.c_void_p(handle), 0) == WAIT_TIMEOUT
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+    except Exception:
+        return True
+
 
 DEFAULT_BLOCK_BYTES = CHUNK * 2 * 4  # 1024 frames estéreo float32 = 8192 bytes
 
@@ -290,7 +321,17 @@ def child_main(
     blocks = 0
     backlog_sum = 0
     clipped = 0
+    # Vigilancia del padre: si muere a lo bruto, este proceso (que ya no puede
+    # alimentar audio util) termina solo en vez de quedar huerfano.
+    parent_pid = os.getppid()
+    last_parent_check = 0.0
     while not stop_event.is_set():
+        now = time.monotonic()
+        if now - last_parent_check >= 1.0:
+            last_parent_check = now
+            if not _parent_alive(parent_pid):
+                logger.warning("El proceso padre desaparecio; el DSP hijo termina")
+                break
         try:
             item = raw_q.get(timeout=0.1)
         except Exception:

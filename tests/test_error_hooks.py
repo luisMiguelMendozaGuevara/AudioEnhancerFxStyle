@@ -12,7 +12,7 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from audio_enhancer.error_hooks import install_exception_hooks
+from audio_enhancer.error_hooks import install_exception_hooks, make_qt_message_handler
 
 
 def test_install_exception_hooks_registra_en_el_log(caplog):
@@ -34,3 +34,24 @@ def test_install_exception_hooks_registra_en_el_log(caplog):
         assert "hilo" in texto
     finally:
         sys.excepthook, threading.excepthook = orig_sys, orig_thread
+
+
+def test_qt_message_handler_mapea_niveles(caplog):
+    """warning->WARNING, critical->ERROR y debug->DEBUG con archivo:linea."""
+    import logging
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QtMsgType
+
+    handler = make_qt_message_handler()
+    ctx = SimpleNamespace(file="vista.py", line=42)
+    with caplog.at_level(logging.DEBUG, logger="audio_enhancer.qt"):
+        handler(QtMsgType.QtWarningMsg, ctx, "aviso")
+        handler(QtMsgType.QtCriticalMsg, ctx, "critico")
+        handler(QtMsgType.QtDebugMsg, ctx, "detalle")
+
+    por_nivel = {(r.levelno, r.getMessage().split(" (")[0]) for r in caplog.records}
+    assert (logging.WARNING, "aviso") in por_nivel
+    assert (logging.ERROR, "critico") in por_nivel
+    assert (logging.DEBUG, "detalle") in por_nivel
+    assert all("vista.py:42" in r.getMessage() for r in caplog.records if " (" in r.getMessage())

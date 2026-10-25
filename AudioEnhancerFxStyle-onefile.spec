@@ -3,6 +3,15 @@
 # no quiere instalar nada. El build principal (instalador) usa
 # AudioEnhancerFxStyle.spec (onedir) + installer/AudioEnhancerFxStyle.iss.
 
+import os
+import sys
+
+if os.getcwd() not in sys.path:
+    sys.path.insert(0, os.getcwd())
+from tools.make_version_info import write_version_info  # noqa: E402
+
+VERSION_FILE = write_version_info(os.path.join(os.getcwd(), "build", "version_info.txt"))
+
 
 a = Analysis(
     ['AudioEnhancer_FxStyle.py'],
@@ -15,7 +24,7 @@ a = Analysis(
     runtime_hooks=['onefile_disable_dsp_process.py'],
     excludes=[],
     noarchive=False,
-    optimize=0,
+    optimize=1,
 )
 pyz = PYZ(a.pure)
 
@@ -29,8 +38,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
+    # UPX desactivado: mismo motivo que en el spec onedir (DLLs de Qt + AV).
+    upx=False,
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
@@ -39,4 +48,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['assets/app.ico'],
+    version=VERSION_FILE,
 )

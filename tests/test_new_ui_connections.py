@@ -518,6 +518,24 @@ def test_listas_de_presets_no_acumulan_labels_fantasma(window, qapp):
     window._refresh_preset_list()  # restaurar las listas reales para otros tests
 
 
+def test_exportar_diagnostico_escribe_el_informe(window, tmp_path, monkeypatch):
+    """El informe de soporte (version, config, dispositivos y cola del log) se
+    escribe en disco y refleja el estado real."""
+    import audio_enhancer.single_instance as si
+
+    log = tmp_path / "audio_enhancer.log"
+    log.write_text("linea de log de prueba\n", encoding="utf-8")
+    monkeypatch.setattr(si, "LOG_FILE", str(log))
+
+    window._export_diagnostics()
+    dest = tmp_path / "diagnostico.txt"
+    assert dest.exists()
+    texto = dest.read_text(encoding="utf-8")
+    assert "Audio Enhancer FxStyle" in texto
+    assert "== Config ==" in texto
+    assert "linea de log de prueba" in texto
+
+
 def test_navegacion_persiste_la_ultima_pagina(window):
     """La ultima pagina del menu se registra al navegar y se guarda en config
     (se reabre al reiniciar)."""

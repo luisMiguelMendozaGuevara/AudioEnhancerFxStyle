@@ -33,14 +33,11 @@ def install_exception_hooks() -> None:
     threading.excepthook = _thread_hook
 
 
-def install_qt_message_handler() -> None:
-    """Manda los mensajes de Qt al log (warning/error; debug filtrado).
+def make_qt_message_handler(logger: logging.Logger | None = None):
+    """Devuelve el handler de mensajes de Qt (testeable sin QApplication)."""
+    from PySide6.QtCore import QtMsgType
 
-    Debe llamarse despues de crear QApplication (y antes de construir la UI)
-    para capturar tambien los avisos de construccion de la ventana."""
-    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
-
-    qt_logger = logging.getLogger("audio_enhancer.qt")
+    qt_logger = logger or logging.getLogger("audio_enhancer.qt")
 
     def _handler(mode, context, message) -> None:
         where = f"{context.file or '?'}:{context.line or 0}"
@@ -51,4 +48,14 @@ def install_qt_message_handler() -> None:
         else:
             qt_logger.debug("%s", message)
 
-    qInstallMessageHandler(_handler)
+    return _handler
+
+
+def install_qt_message_handler() -> None:
+    """Manda los mensajes de Qt al log (warning/error; debug filtrado).
+
+    Debe llamarse despues de crear QApplication (y antes de construir la UI)
+    para capturar tambien los avisos de construccion de la ventana."""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    qInstallMessageHandler(make_qt_message_handler())
