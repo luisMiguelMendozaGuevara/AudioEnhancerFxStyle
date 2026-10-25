@@ -527,6 +527,36 @@ def test_aviso_de_fallo_del_dsp_es_claro(window):
     assert "dispositivo" not in texto
 
 
+def test_audio_state_coherente_entre_bandas_y_ganancias(qapp):
+    """F5: cambiar el numero de bandas ajusta las ganancias (nunca 31 bandas
+    con 9 ganancias) y las ganancias se coercen a float."""
+    from audio_enhancer.ui.new.audio_state import AudioState
+
+    state = AudioState()
+    state.eq_gains = ["1.5", "2", "-3"]  # strings: se coercen
+    assert state.eq_gains == [1.5, 2.0, -3.0]
+    state.eq_bands = [100.0 * (i + 1) for i in range(5)]
+    assert len(state.eq_gains) == 5
+    state.eq_bands = [60.0, 150.0]
+    assert len(state.eq_gains) == 2
+
+
+def test_audio_page_resuelve_por_indice_con_nombres_duplicados(qapp):
+    """F4: con dos dispositivos con el mismo nombre la seleccion se resuelve
+    por indice (antes el texto abria siempre el primero)."""
+    from audio_enhancer.ui.new.audio_state import AudioState
+    from audio_enhancer.ui.new.pages.audio import AudioPage
+
+    page = AudioPage(AudioState())
+    page.set_speakers(["Altavoces", "Altavoces"])
+    page.set_loopbacks(["Mezcla", "Mezcla"])
+    page._output_combo.setCurrentIndex(1)
+    page._input_combo.setCurrentIndex(1)
+    assert page.selected_output() == "Altavoces"
+    assert page.selected_output_index() == 1
+    assert page.selected_source_index() == 1
+
+
 def test_exportar_diagnostico_escribe_el_informe(window, tmp_path, monkeypatch):
     """El informe de soporte (version, config, dispositivos y cola del log) se
     escribe en disco y refleja el estado real."""

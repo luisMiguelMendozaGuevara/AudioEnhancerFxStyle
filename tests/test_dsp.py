@@ -540,6 +540,30 @@ def test_eq_bands_asignadas_directamente_no_revientan_por_el_q():
     assert np.isfinite(y).all()
 
 
+def test_reset_state_parte_de_los_objetivos_actuales():
+    """F1: tras un reset (cambio de tasa/dispositivo o saneo de NaN) no hay
+    salto de volumen: las rampas arrancan en el volumen del usuario."""
+    x = _stereo(0.2, 440.0)
+    e = Enhancer()
+    e.volume = 0.45
+    warm(e, x)
+    e.reset_state()
+    y = e.process(x.copy())
+    ratio = _rms(y) / _rms(x)
+    assert 0.40 < ratio < 0.50  # antes saltaba a ~0.9 (volumen 1.0)
+
+
+def test_reset_state_conserva_el_bypass():
+    """F1: en modo B (blend=0) un reset no debe colar audio procesado."""
+    x = _stereo(0.2, 440.0)
+    e = Enhancer()
+    e.blend = 0.0
+    warm(e, x)
+    e.reset_state()
+    y = e.process(x.copy())
+    assert np.allclose(y, x, atol=1e-6)  # sigue siendo el bloque seco
+
+
 def test_true_peak_ventana_o_n_equivale_a_la_deslizante(monkeypatch):
     """Regresion de rendimiento: la envolvente true-peak usa filtros O(n) de
     scipy.ndimage (maximum/minimum_filter1d) en vez de la ventana deslizante

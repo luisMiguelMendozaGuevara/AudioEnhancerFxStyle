@@ -1080,8 +1080,21 @@ class NewMainWindow(QMainWindow):
             return  # recarga de interfaz en curso
         src_text = audio_page.selected_source()
         out_text = audio_page.selected_output()
-        source = next((d for d in self.loopbacks if d["name"] == src_text), None)
-        output = next((d for d in self.speakers if d["name"] == out_text), None)
+        # (F4) Resolver por INDICE (data del combo): con nombres duplicados el
+        # "next por nombre" abria siempre el primer dispositivo. Fallback por
+        # nombre para combos poblados sin data (tests/legado).
+        src_idx = audio_page.selected_source_index()
+        out_idx = audio_page.selected_output_index()
+        source = (
+            self.loopbacks[src_idx]
+            if 0 <= src_idx < len(self.loopbacks)
+            else next((d for d in self.loopbacks if d["name"] == src_text), None)
+        )
+        output = (
+            self.speakers[out_idx]
+            if 0 <= out_idx < len(self.speakers)
+            else next((d for d in self.speakers if d["name"] == out_text), None)
+        )
         if not self.go or source is None or output is None:
             self._route_guard()
             self._status_bar.set_status_text(self._t("Revisa el ruteo."), DANGER)

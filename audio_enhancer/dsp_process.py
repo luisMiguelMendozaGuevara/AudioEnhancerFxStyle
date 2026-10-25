@@ -42,20 +42,27 @@ def _parent_alive(parent_pid: int) -> bool:
         return True
     try:
         import ctypes
+        from ctypes import wintypes
 
         SYNCHRONIZE = 0x00100000
         WAIT_TIMEOUT = 0x00000102
         ERROR_INVALID_PARAMETER = 87
-        k32 = ctypes.windll.kernel32
-        k32.OpenProcess.restype = ctypes.c_void_p
+        # use_last_error: captura el error DE LA PROPIA LLAMADA (un
+        # GetLastError() suelto puede leer un valor pisado entre medias).
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k32.WaitForSingleObject.restype = wintypes.DWORD
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
         handle = k32.OpenProcess(SYNCHRONIZE, False, int(parent_pid))
         if not handle:
             # 87 = PID inexistente (muerto); otro error (p. ej. acceso) -> vivo.
-            return k32.GetLastError() != ERROR_INVALID_PARAMETER
+            return ctypes.get_last_error() != ERROR_INVALID_PARAMETER
         try:
-            return k32.WaitForSingleObject(ctypes.c_void_p(handle), 0) == WAIT_TIMEOUT
+            return k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
         finally:
-            k32.CloseHandle(ctypes.c_void_p(handle))
+            k32.CloseHandle(handle)
     except Exception:
         return True
 

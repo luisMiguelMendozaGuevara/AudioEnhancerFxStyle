@@ -192,14 +192,19 @@ class AudioPage(QWidget):
     def set_loopbacks(self, names: list[str]) -> None:
         self._input_combo.blockSignals(True)
         self._input_combo.clear()
-        self._input_combo.addItems(names)
+        for i, name in enumerate(names):
+            # (F4) Data = indice: si Windows muestra dos dispositivos con el
+            # mismo nombre, elegir por texto abriria siempre el primero. El
+            # texto se conserva para persistir el ruteo en config.
+            self._input_combo.addItem(name, i)
         self._input_combo.setEnabled(bool(names))
         self._input_combo.blockSignals(False)
 
     def set_speakers(self, names: list[str]) -> None:
         self._output_combo.blockSignals(True)
         self._output_combo.clear()
-        self._output_combo.addItems(names)
+        for i, name in enumerate(names):
+            self._output_combo.addItem(name, i)
         self._output_combo.setEnabled(bool(names))
         self._output_combo.blockSignals(False)
 
@@ -218,6 +223,16 @@ class AudioPage(QWidget):
     def selected_output(self) -> str:
         """Salida seleccionada (texto del combo de salida)."""
         return self._output_combo.currentText()
+
+    def selected_source_index(self) -> int:
+        """Indice de la fuente en la lista de loopbacks (-1 si no hay)."""
+        data = self._input_combo.currentData()
+        return int(data) if data is not None else -1
+
+    def selected_output_index(self) -> int:
+        """Indice de la salida en la lista de altavoces (-1 si no hay)."""
+        data = self._output_combo.currentData()
+        return int(data) if data is not None else -1
 
     def has_source_items(self) -> bool:
         return self._input_combo.count() > 0

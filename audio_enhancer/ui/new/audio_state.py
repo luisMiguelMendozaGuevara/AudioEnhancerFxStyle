@@ -299,7 +299,9 @@ class AudioState(QObject):
 
     @eq_gains.setter
     def eq_gains(self, value: list[float]) -> None:
-        self._eq_gains = list(value)
+        # (F5) Coercion defensiva: de aqui salen valores al DSP; una lista con
+        # strings (p. ej. de un preset importado a mano) reventaria el motor.
+        self._eq_gains = [float(v) for v in value]
         self.eq_changed.emit(self._eq_gains)
 
     @property
@@ -311,6 +313,12 @@ class AudioState(QObject):
         bands = [float(f) for f in value]
         if bands != self._eq_bands:
             self._eq_bands = bands
+            # (F5) Mantener coherencia interna: no se puede quedar con 31
+            # bandas y 9 ganancias (el motor y la UI dibujarian cosas distintas).
+            n = len(bands)
+            if len(self._eq_gains) != n:
+                self._eq_gains = (list(self._eq_gains) + [0.0] * n)[:n]
+                self.eq_changed.emit(list(self._eq_gains))
             self.eq_bands_changed.emit(list(bands))
 
     @property

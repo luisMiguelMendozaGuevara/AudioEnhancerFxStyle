@@ -487,16 +487,22 @@ class Enhancer:
         Imprescindible al cambiar de dispositivo o de tasa de muestreo: los
         estados zi de los biquads y del compresor corresponden a la señal
         previa y seguirían mezclando historial de otra tasa (artefactos al
-        arrancar). También pone a cero rampas y medidores."""
+        arrancar). Las rampas arrancan en los OBJETIVOS actuales y los
+        medidores a cero."""
         self._states = {}
         self._sos_cache = {}
         self._coeff_cache = {}
         self._channels = None
-        self._c_vol = 1.0
-        self._c_bass = 0.0
-        self._c_treble = 0.0
-        self._c_eq = np.zeros(len(self.eq_bands), dtype=np.float32)
-        self._c_blend = 1.0
+        # (F1) Arrancar desde los objetivos, no desde constantes: antes un
+        # reset (cambio de tasa/dispositivo o saneo de una entrada no finita)
+        # devolvia _c_vol a 1.0 y un usuario con volumen 0.45 (Noche) oia un
+        # salto de ~+7 dB durante ~100 ms; en bypass (blend=0) tambien se
+        # colaba audio procesado al volver _c_blend a 1.0.
+        self._c_vol = float(self.volume)
+        self._c_bass = float(self.bass)
+        self._c_treble = float(self.treble)
+        self._c_eq = np.array(self._eq_target, dtype=np.float32, copy=True)
+        self._c_blend = float(self.blend)
 
         self._comp_zi_fast = None
         self._comp_zi_slow = None
