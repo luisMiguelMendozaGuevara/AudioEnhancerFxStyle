@@ -1588,3 +1588,65 @@ def test_limitador_continuidad_ganancia_entre_bloques_sin_escalon():
     g_end = float(y2[-1, 0] / hot2[-1, 0])
     assert g0 < g_end - 0.05
     assert float(np.abs(y2).max()) <= e.limiter_threshold + 1e-3
+
+
+@pytest.mark.parametrize("rate", [8000, 16000, 22050, 32000, 40000, 44100, 48000, 96000])
+def test_espectro_funciona_a_cualquier_tasa(rate):
+    """Regresión: con tasas cuyo Nyquist cae por debajo del techo de 20 kHz
+    (32k, 22.05k, 16k...) el tope de cierre del último bin era
+    ``len(spec)`` y ``np.add.reduceat`` abortaba con IndexError: el
+    espectro quedaba muerto en esos dispositivos."""
+    e = Enhancer()
+    e.sample_rate = rate
+    e.blend = 1.0
+    e.compressor = False
+    e.spectrum_enabled = True
+    t = np.arange(N) / rate
+    x = (0.5 * np.sin(2 * np.pi * 440.0 * t))[:, None].repeat(2, axis=1).astype(np.float32)
+    e.process(x)
+    e.compute_spectrum()
+    sp = e.spectrum
+    assert sp is not None and sp.shape == (64,)
+    assert np.isfinite(sp).all()
+    assert int(np.sum(sp > -79.0)) >= 1  # hay energía: no todo el piso
+
+
+def test_eq_q_cero_o_nan_no_envenena_el_estado():
+    """Regresión: ``q=0`` anulaba el denominador de ``_peaking`` (alpha = sw/2q).
+
+    Los coeficientes salían inf/NaN y el estado zi del biquad quedaba
+    envenenado: la salida se quedaba en NaN PARA SIEMPRE (el saneo de entrada
+    no lo curaba porque la entrada sí era finita). El Q se acota ahora dentro
+    del propio filtro.
+    """
+    for q_malo in (0.0, -1.0, float("nan"), float("inf"), 1e12):
+        e = Enhancer()
+        e.blend = 1.0
+        e.compressor = False
+        e.eq_gains = [6.0] * 9
+        e.eq_q = q_malo
+        for _ in range(3):
+            y = e.process(_stereo(0.3, 440.0))
+            assert np.isfinite(y).all(), f"q={q_malo} produjo salida no finita"
+        e.eq_q = 1.4  # vuelve un valor sano: el estado no quedó envenenado
+        assert np.isfinite(e.process(_stereo(0.3, 440.0))).all()
+
+
+def test_estado_envenenado_se_autocura_en_un_bloque():
+    """Un estado zi no finito (por cualquier causa) no puede durar para
+    siempre: la cadena detecta el pico no finito, reinicia y emite UN bloque
+    en silencio; el siguiente bloque vuelve a sonar."""
+    e = Enhancer()
+    e.blend = 1.0
+    e.compressor = False
+    e.eq_gains = [6.0] * 9
+    x = _stereo(0.3, 440.0)
+    e.process(x)
+    for estado in e._states.values():
+        estado[...] = np.nan
+    y1 = e.process(x)
+    assert np.isfinite(y1).all(), "el bloque de auto-curación debe ser finito"
+    assert float(np.abs(y1).max()) == 0.0, "el bloque de auto-curación es silencio"
+    y2 = e.process(x)
+    assert np.isfinite(y2).all()
+    assert float(np.abs(y2).max()) > 0.0, "el audio debe recuperarse en el bloque siguiente"

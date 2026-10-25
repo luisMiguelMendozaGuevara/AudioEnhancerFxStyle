@@ -702,3 +702,26 @@ def test_stats_snapshot_fusiona_contadores_del_hijo(engine):
     assert snap["child_blocks"] == 100
     assert snap["child_backlog"] == 42
     assert snap["child_clipped"] == 7
+
+
+def test_desbordamiento_del_ring_descarta_lo_viejo_y_conserva_el_audio(engine):
+    """Al desbordar el ring se pierde el audio MÁS VIEJO, no el siguiente.
+
+    Regresión: se movía el puntero de lectura y se ponía a cero el tramo
+    SIGUIENTE (el que aún no se había reproducido), así que cada desborde se
+    oía como un hueco de silencio además de perder audio.
+    """
+    engine.nframes = 8
+    engine.ring = np.zeros((8, 2), dtype=np.float32)
+    engine._put(np.full((4, 2), 0.5, dtype=np.float32))  # 4 frames "A"
+    engine._put(np.full((6, 2), 0.25, dtype=np.float32))  # 6 frames "B": desborda
+    with engine.lock:
+        n = engine.write_pos - engine.read_pos
+        idx = engine.read_pos % engine.nframes
+        cola = np.concatenate([engine.ring[idx:], engine.ring[:idx]])[:n]
+    # Sobran 2 frames de A (se descartan 2 de los 4) y quedan los 6 de B.
+    assert cola.shape[0] == 8
+    assert np.allclose(cola[:2, 0], 0.5), "se conserva el audio de A aún no reproducido"
+    assert np.allclose(cola[2:, 0], 0.25)
+    assert not np.any(cola[:, 0] == 0.0), "el desbordamiento no debe insertar silencio"
+    assert engine.stats_snapshot()["dropped_frames"] == 2

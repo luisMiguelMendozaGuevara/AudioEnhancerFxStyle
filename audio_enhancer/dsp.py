@@ -11,6 +11,7 @@ callback.
 """
 
 import dataclasses
+import logging
 import math
 import threading
 from functools import lru_cache
@@ -19,6 +20,8 @@ from typing import Any
 import numpy as np
 
 from .constants import SAMPLE_RATE
+
+logger = logging.getLogger("audio_enhancer.dsp")
 
 # Import perezoso de scipy.signal: su importación cuesta ~2,3 s y solo se
 # usa sosfilt() cuando hay secciones de filtro activas. La precarga en
@@ -139,6 +142,10 @@ EQ_BAND_SETS: dict[int, list[float]] = {
     ],
 }
 EQ_FREQ_MIN, EQ_FREQ_MAX = 20.0, 20000.0
+# Rango de Q con el que el biquad peaking es numéricamente seguro (q=0 anula
+# el denominador y envenena el estado). El config/UI usan 0.2..10.
+EQ_Q_MIN, EQ_Q_MAX = 0.05, 60.0
+EQ_Q_DEFAULT = 1.4
 
 # Capa "enhancer" (paridad FxSound): 5 efectos con escala 0-10 en la UI.
 # Los nombres siguen a FxSound para que la UI sea familiar.
@@ -705,6 +712,14 @@ class Enhancer:
 
     @staticmethod
     def _peaking(freq, gain_db, fs, q):
+        # Q con red de seguridad: es el único parámetro del biquad que puede
+        # anular el denominador (alpha = sw/(2q)). Con q=0 los coeficientes
+        # salían inf/NaN y el estado zi quedaba envenenado (salida NaN para
+        # siempre). Se acota a un rango audible; el default es 1.4.
+        q = float(q)
+        if not math.isfinite(q):
+            q = EQ_Q_DEFAULT
+        q = min(EQ_Q_MAX, max(EQ_Q_MIN, q))
         A = 10.0 ** (gain_db / 40.0)
         w0 = 2.0 * np.pi * freq / fs
         cw = np.cos(w0)
@@ -1056,6 +1071,17 @@ class Enhancer:
         # del limitador (para que el techo siga siendo el último eslabón).
         y = self._apply_balance(y, block_sec)
         y = self._apply_master(y, block_sec)
+        # Auto-curación de la cadena: si algo produjo NaN/inf (un parámetro
+        # absurdo, un coeficiente degenerado, un estado zi ya envenenado) se
+        # reinicia el estado y se emite UN bloque en silencio. Sin esto el NaN
+        # se queda para siempre: los biquads con zi=NaN lo propagan bloque tras
+        # bloque y ni el saneo de entrada (la entrada SÍ era finita) lo cura.
+        # El pico se calcula aquí de todos modos para el techo de seguridad.
+        peak = max(float(y.max()), -float(y.min())) if y.size else 0.0
+        if not math.isfinite(peak):
+            logger.warning("Cadena DSP no finita (pico=%r): se reinicia el estado", peak)
+            self.reset_state()
+            return np.zeros_like(y)
         if self.limiter:
             y = self._limit(y, prev_g=self._lim_last_g)
         elif y.size:
@@ -1067,7 +1093,6 @@ class Enhancer:
             # limitador encendido es no-op: 0.95 < 0.99 y _limit ya garantiza
             # su techo. Guarda SIN alocar (max/min son reducciones puras, sin
             # array temporal; el caso común bajo el techo cuesta dos pasadas).
-            peak = max(float(y.max()), -float(y.min()))
             if self.safety_ceiling_enabled and peak > self.safety_ceiling:
                 y = self._limit(y, thr=self.safety_ceiling, prev_g=self._lim_last_g)
             else:
@@ -1569,7 +1594,13 @@ class Enhancer:
         # reduceat suma el último segmento hasta el final del array: hay que
         # añadir idx[-1] como tope de cierre para que el bin 63 no absorba los
         # bins de frecuencia que quedan por encima del techo (20 kHz).
-        sums = np.add.reduceat(spec, np.append(idx[:-1], idx[-1]))[:64]
+        # Ese tope tiene que ser un índice VÁLIDO: si el techo cae justo en
+        # Nyquist (cualquier tasa <= 40 kHz: 32k, 22.05k, 16k...) searchsorted
+        # devuelve len(spec) y reduceat aborta con IndexError, dejando el
+        # espectro muerto (se veía solo como un log a nivel debug). Un cero
+        # extra al final hace válido el tope sin alterar ninguna suma.
+        spec_pad = np.concatenate([spec, np.zeros(1, dtype=spec.dtype)])
+        sums = np.add.reduceat(spec_pad, idx)[:64]
         means = sums / np.where(valid, counts, 1)
         pos = valid & (means > 1e-9)
         out[pos] = 20.0 * np.log10(means[pos])

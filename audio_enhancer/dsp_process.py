@@ -328,6 +328,8 @@ def child_main(
     blocks = 0
     backlog_sum = 0
     clipped = 0
+    proc_errors = 0
+    last_proc_error_log = 0.0
     # Vigilancia del padre: si muere a lo bruto, este proceso (que ya no puede
     # alimentar audio util) termina solo en vez de quedar huerfano.
     parent_pid = os.getppid()
@@ -360,7 +362,15 @@ def child_main(
             # cuando no hay limitador/techo). Barato y fuera del audio crítico.
             clipped += int(np.count_nonzero(np.abs(y) > 1.0))
         except Exception:
-            logger.exception("Error en el proceso DSP")
+            # Rate-limit: si process() falla en CADA bloque (p. ej. un estado
+            # corrupto), loguear por bloque inunda el log rotativo (256 KB x2)
+            # y se pierde el historial justo cuando hace falta. Se avisa del
+            # primero y luego uno cada 5 s, con el total de fallos.
+            proc_errors += 1
+            now_err = time.monotonic()
+            if proc_errors == 1 or (now_err - last_proc_error_log) >= 5.0:
+                last_proc_error_log = now_err
+                logger.exception("Error en el proceso DSP (%d fallos)", proc_errors)
             continue
         if telemetry is not None:
             with telemetry.get_lock():

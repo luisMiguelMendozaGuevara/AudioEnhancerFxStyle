@@ -407,17 +407,22 @@ class AudioEngine:
         with self.lock:
             avail = self.write_pos - self.read_pos
             if avail + n > nframes:
-                # descartar lo más viejo si la salida va más lenta
+                # Descartar lo MÁS VIEJO si la salida va más lenta: se pone a
+                # cero el tramo que se abandona y solo DESPUÉS se mueve el
+                # puntero de lectura. Antes se movía primero y se ponía a cero
+                # el tramo SIGUIENTE, que es audio que sí se va a reproducir:
+                # el desbordamiento se oía como un hueco de 'drop' frames en
+                # medio (silencio insertado, no descartado).
                 drop = avail + n - nframes
+                drop_idx = self.read_pos % nframes
+                if drop_idx + drop <= nframes:
+                    ring[drop_idx : drop_idx + drop] = 0.0
+                else:
+                    a = nframes - drop_idx
+                    ring[drop_idx:] = 0.0
+                    ring[: drop - a] = 0.0
                 self.read_pos += drop
                 self._stats["dropped_frames"] += drop  # métrica en vivo
-                idx = self.read_pos % nframes
-                if idx + drop <= nframes:
-                    ring[idx : idx + drop] = 0.0
-                else:
-                    a = nframes - idx
-                    ring[idx:] = 0.0
-                    ring[: drop - a] = 0.0
             idx = self.write_pos % nframes
             if idx + n <= nframes:
                 ring[idx : idx + n] = data

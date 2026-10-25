@@ -1232,12 +1232,23 @@ class NewMainWindow(QMainWindow):
                 prev = self._last_stats
 
                 def delta(key: str) -> int:
-                    return int(s[key]) - int(prev.get(key, s[key]))
+                    # .get: en modo sin proceso hijo (AUDIO_ENHANCER_NO_DSP_PROCESS)
+                    # las claves child_* no existen y el log de métricas petaba
+                    # dentro del slot del QTimer.
+                    actual = int(s.get(key, 0))
+                    return actual - int(prev.get(key, actual))
+
+                # fill se muestrea en un instante arbitrario del bloque: vale
+                # entre consigna-CHUNK y consigna. Se registra el ERROR de
+                # deriva (derr) para que el log no parezca una avería cuando
+                # el control está perfectamente asentado.
+                consigna = self.engine.drift_target_effective
+                relleno = self.engine.fill()
 
                 logger.info(
                     "metricas(10s): unders=%d huecos=%d frames_hueco=%d gracias=%d "
                     "deriva=%d dsg=%+d descartes=%d overflows=%d capturados=%d salida=%d "
-                    "rdrop=%d qdrop=%d qemp=%d oemp=%d hijos=%d hblk=%d hclip=%d fill=%d/%d",
+                    "rdrop=%d qdrop=%d qemp=%d oemp=%d hijos=%d hblk=%d hclip=%d fill=%d consigna=%d derr=%+d",
                     delta("output_underruns"),
                     delta("gap_blocks"),
                     delta("gap_frames"),
@@ -1255,8 +1266,9 @@ class NewMainWindow(QMainWindow):
                     delta("child_raw_empty"),
                     delta("child_blocks"),
                     delta("child_clipped"),
-                    self.engine.fill(),
-                    self.engine.drift_target_effective,
+                    relleno,
+                    consigna,
+                    relleno - consigna,
                 )
                 self._last_stats = dict(s)
         else:

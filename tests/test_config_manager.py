@@ -354,3 +354,39 @@ def test_sanitize_device_presets_filtra_entradas_invalidas(tmp_path):
         "Altavoces (Realtek)": "Recomendado (altavoces)",
         "Auriculares (USB)": "Recomendado (auriculares)",
     }
+
+
+def test_load_no_lanza_con_no_finitos(tmp_path):
+    """Regresión: ``latency_pref: Infinity`` lanzaba OverflowError (``load()``
+    promete no lanzar nunca) y un ``NaN`` se acotaba al MÁXIMO del rango, no
+    al default: volumen 2x, efectos 10. ``json.load`` acepta NaN/Infinity."""
+    import json
+
+    p = tmp_path / "nan.json"
+    p.write_text(
+        json.dumps(
+            {
+                "latency_pref": float("inf"),
+                "volume": float("nan"),
+                "bass": float("-inf"),
+                "leveling": float("nan"),
+                "crossfeed_cut_hz": float("inf"),
+                "effects": {"dynamic_boost": float("nan")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = ConfigManager(eq_band_count=9, path=str(p)).load()
+    assert cfg["latency_pref"] == 60  # valor ofrecido por la UI, no inf
+    assert cfg["volume"] == 1.0  # default, NO el máximo (2.0)
+    assert cfg["bass"] == 0.0
+    assert cfg["leveling"] == 0.0
+    assert cfg["crossfeed_cut_hz"] == 700
+    assert cfg["effects"]["dynamic_boost"] == 0.0
+
+
+def test_as_float_descarta_no_finitos():
+    assert ConfigManager.as_float(float("nan"), 1.0) == 1.0
+    assert ConfigManager.as_float(float("inf"), 1.0) == 1.0
+    assert ConfigManager.as_float(float("-inf"), 1.0) == 1.0
+    assert ConfigManager.as_float("NaN", 1.0) == 1.0

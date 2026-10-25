@@ -14,6 +14,7 @@ Capas (de abajo arriba):
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from .config import load_config, save_config
@@ -50,6 +51,14 @@ LEVELING_MIN, LEVELING_MAX = 0.0, 10.0
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
+    """Acota al rango. Un NaN se resuelve al MÍNIMO del rango.
+
+    ``max(lo, min(hi, nan))`` devolvía ``hi`` (las comparaciones con NaN son
+    falsas), y acotar al máximo es justo lo contrario de lo prudente en
+    controles de audio: volumen 2x o boost 10 en vez de silencio/apagado.
+    Defensa en profundidad: ``as_float`` ya descarta los no finitos."""
+    if value != value:  # NaN
+        return lo
     return max(lo, min(hi, value))
 
 
@@ -69,11 +78,16 @@ class ConfigManager:
 
     @staticmethod
     def as_float(value: Any, default: float) -> float:
-        """float con red de seguridad (C2): config editado a mano no tumba el arranque."""
+        """float con red de seguridad (C2): config editado a mano no tumba el arranque.
+
+        Los valores NO FINITOS se tratan como ausentes: ``json.load`` acepta
+        ``NaN``/``Infinity`` (extensión de Python, no JSON estricto) y al
+        acotarlos caían en el MÁXIMO del rango (volumen 2x, efectos 10)."""
         try:
-            return float(value)
+            out = float(value)
         except (TypeError, ValueError):
             return default
+        return out if math.isfinite(out) else default
 
     @staticmethod
     def as_bool(value: Any, default: bool) -> bool:
@@ -247,10 +261,9 @@ class ConfigManager:
                 eq_bands = list(EQ_BAND_SETS[n])
 
         # Latencia: solo los valores ofrecidos por la UI (40/60/100/250).
-        try:
-            latency = int(raw.get("latency_pref", 60) or 60)
-        except (TypeError, ValueError):
-            latency = 60
+        # Se pasa por as_float: ``int(inf)`` lanzaba OverflowError y ``load()``
+        # promete no lanzar nunca (reventaba el arranque de la ventana).
+        latency = int(self.as_float(raw.get("latency_pref", 60) or 60, 60.0))
         if latency not in LATENCY_CHOICES_MS:
             latency = LATENCY_CHOICES_MS[1]
 
