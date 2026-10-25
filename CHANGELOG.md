@@ -4,6 +4,63 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.6.1] — 2026-10-25
+
+Versión de **corrección de fallos** sobre 1.6.0 (sin cambios de esquema de
+config ni de interfaz) más la migración del entorno a **Python 3.13**.
+
+### Corregido — audio
+- **Desbordamiento del ring insertaba silencio**: al descartar audio por
+  desbordamiento se ponía a cero el tramo *siguiente* (audio aún no
+  reproducido) en vez del tramo descartado, así que cada desborde se oía como
+  un hueco además de la pérdida. Ahora solo se descarta lo más viejo.
+  Verificado con salida más lenta que la captura: 124 k frames descartados y
+  **0 frames de silencio insertado**.
+- **El Q del ecualizador a 0 dejaba el audio en NaN para siempre**: con
+  `q = 0` el denominador del biquad peaking se anulaba, los coeficientes
+  salían inf/NaN y el estado `zi` quedaba envenenado (la salida seguía en NaN
+  aunque se corrigiera el control). El Q se acota ahora dentro del propio
+  filtro y, como red de seguridad, si la cadena produce un pico no finito se
+  reinicia el estado y se emite **un solo bloque** en silencio (el siguiente
+  ya suena).
+- **Espectro muerto en dispositivos de 8 a 40 kHz**: con tasas cuyo Nyquist
+  cae por debajo del techo de 20 kHz (16 kHz, 22.05 kHz, 32 kHz…) el cálculo
+  de las 64 barras abortaba con `IndexError` y el analizador dejaba de
+  actualizarse.
+- **Fallo del proceso DSP**: los errores del hijo se registran con límite de
+  frecuencia (1 aviso / 5 s con el total) para no inundar el log rotativo, y
+  el watchdog ya detectaba y avisaba de su muerte (desde 1.6.0).
+
+### Corregido — arranque y configuración
+- **Un `config.json` corrupto ya no impide arrancar**: `latency_pref` con
+  `Infinity`/`NaN` (que `json` acepta) lanzaba `OverflowError` desde
+  `ConfigManager.load()` y reventaba la construcción de la ventana.
+- **Los valores no finitos ya no caen en el máximo**: un `NaN` en volumen,
+  bass o efectos se acotaba al **máximo** del rango (volumen 2x). Ahora se
+  tratan como ausentes y cada campo usa su valor por defecto.
+
+### Cambiado — plataforma
+- **Python 3.13**: venv, empaquetado (`PyInstaller`) e instalador se compilan
+  con 3.13; el CI prueba **3.12 y 3.13** en Windows y Linux.
+- **CI con `constraints.txt`**: los jobs instalan exactamente las versiones
+  que se empaquetan (`requirements-dev.txt -c constraints.txt`), con una sola
+  fuente de verdad para las dependencias (se eliminaron los pins duplicados
+  en el YAML, que impedían a Dependabot proponer subidas).
+- `requires-python >=3.12`; `pyaudiowpatch` marcado `sys_platform == "win32"`
+  (Linux instala el resto sin él).
+
+### Infraestructura y pruebas
+- **La suite ya no toca hardware de audio**: fixture `autouse` que bloquea
+  `PyAudio`/`PyAudio.open` en toda la suite. El CI de Windows instalaba
+  `pyaudiowpatch` y un test abría un dispositivo real (el runner no tiene):
+  PortAudio tumbaba el job entero. Los 372 tests pasan con el hardware
+  bloqueado, así que la suite es independiente del dispositivo.
+- 13 tests nuevos (ring, espectro por tasa, config no finita, Q y
+  auto-curación del DSP); cobertura ≥ 85 %.
+- Log de métricas más claro: `fill`, `consigna` y `derr` (el error de deriva)
+  en vez de `fill=N/consigna`, que parecía una avería permanente cuando el
+  control estaba perfectamente asentado.
+
 ## [1.6.0] — rama `feat-enhancer-fx`
 
 Paridad "enhancer" estilo FxSound, por fases.
