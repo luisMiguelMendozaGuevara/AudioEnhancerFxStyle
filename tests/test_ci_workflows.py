@@ -132,8 +132,21 @@ def test_requirements_alineado_con_pyproject():
         f"requirements-dev.txt desincronizado con pyproject.toml: {dev_specs ^ in_req_dev_specs}"
     )
 
-    # El workflow de tests instala PySide6 directamente: debe usar el mismo
-    # rango que pyproject.toml (6.8 LTS; 6.11.x crashea en Windows).
-    pyside_spec = next(d for d in runtime_specs if d.lower().startswith("pyside6"))
+    # El workflow de tests NO duplica especificaciones: instala desde los
+    # requirements con constraints, para que las versiones vivan en un solo
+    # sitio. Duplicarlas en el YAML hacia imposible que Dependabot pudiera
+    # subir versiones (su bump chocaba con el pin copiado del workflow).
     ci_tests = _read("python-application.yml")
-    assert f'"{pyside_spec}"' in ci_tests, f"python-application.yml debe fijar {pyside_spec} igual que pyproject.toml"
+    assert "-r requirements-dev.txt" in ci_tests, "el CI debe instalar desde requirements-dev.txt"
+    assert "-c constraints.txt" in ci_tests, "el CI debe fijar versiones con constraints.txt"
+    for spec in runtime_specs | dev_specs:
+        assert f'"{spec}"' not in ci_tests, f"python-application.yml no debe repetir la especificacion {spec}"
+
+
+def test_dependabot_aplaza_pyside6():
+    """PySide6 queda clavado en 6.8 LTS a proposito: la subida a 6.12 es la
+    fase 2 (salto de minor de Qt, con historial de crashes 0xC0000005). Si
+    Dependabot no lo ignora, abre PRs que no se pueden mergear."""
+    text = (WORKFLOWS.parent / "dependabot.yml").read_text(encoding="utf-8")
+    assert "pyside6" in text.lower(), "dependabot.yml debe ignorar PySide6 hasta la fase 2"
+    assert "shiboken6" in text, "shiboken6 va acoplado a PySide6: ignorarlo tambien"

@@ -12,6 +12,12 @@ updates:
       python:
         patterns:
           - "*"
+    ignore:
+      # Fase 2 pendiente: PySide6 6.12 es un salto de minor de Qt (la rama 6.11
+      # daba crashes 0xC0000005 en Windows). Se sube a mano tras validar la
+      # app empaquetada. shiboken6 va acoplado a la misma version.
+      - dependency-name: "PySide6"
+      - dependency-name: "shiboken6"
 
   # Acciones de GitHub usadas en los workflows
   - package-ecosystem: "github-actions"

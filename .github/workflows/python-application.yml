@@ -42,17 +42,23 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
+            requirements.txt
+            requirements-dev.txt
             constraints.txt
 
       - name: Install dependencies
-        # Dependencias directas (pyproject): pyaudiowpatch es solo-Windows y
-        # romperia el job en Ubuntu; los tests del motor lo fakean y no lo
-        # necesitan. El paquete no se instala: conftest añade la raiz al path.
+        # UNA sola fuente de verdad: requirements-dev.txt (que arrastra
+        # requirements.txt) + constraints.txt. Antes las especificaciones se
+        # repetian aqui y el pin duplicado de PySide6 rompia la resolucion
+        # cuando Dependabot subia versiones en los requirements.
+        # pyaudiowpatch es solo-Windows y lleva marcador sys_platform: en
+        # Ubuntu se omite solo. No se instala el paquete: conftest anade la
+        # raiz al path.
         # -c constraints.txt: el CI prueba EXACTAMENTE las versiones que se
         # empaquetan (antes instalaba rangos y podia testear otra combinacion).
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "numpy>=1.26" "scipy>=1.11" "PySide6>=6.8,<6.9" "pytest>=8.0" "pytest-cov>=5.0" -c constraints.txt
+          python -m pip install -r requirements-dev.txt -c constraints.txt
 
       - name: Compile Python source
         run: python -m compileall -q AudioEnhancer_FxStyle.py audio_enhancer tests
