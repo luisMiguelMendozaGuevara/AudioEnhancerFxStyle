@@ -798,6 +798,17 @@ class AudioEngine:
         """True si el DSP corre en un proceso hijo (el padre no hace FFT)."""
         return self._dsp_proc is not None
 
+    def dsp_child_alive(self) -> bool:
+        """False si el proceso DSP murio inesperadamente (lo vigila el watchdog).
+
+        Si el hijo muere, la bomba se queda sin salida y el audio se queda en
+        silencio sin que los streams se enteren; el watchdog del controlador
+        usa esto para detener y avisar en vez de fingir que todo va bien."""
+        if not self.use_dsp_process:
+            return True
+        proc = self._dsp_proc
+        return proc is not None and bool(proc.is_alive())
+
     def read_spectrum(self) -> list[float] | None:
         """Último espectro publicado por el hijo (o None si no hay datos)."""
         buf = self._spectrum_buf

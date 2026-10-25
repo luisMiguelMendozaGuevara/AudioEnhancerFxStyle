@@ -122,6 +122,29 @@ def test_check_streams_is_active_que_lanza_cuenta_como_caido():
     assert ctrl.check_streams() == "captura"
 
 
+def test_check_streams_detecta_dsp_hijo_caido():
+    """Si el proceso DSP muere, el watchdog lo detecta (antes el audio quedaba
+    en silencio sin aviso, con los streams 'activos')."""
+    ctrl = _ctrl_running()
+    ctrl.engine.stream = _FakeStream(True)
+    ctrl.engine.out_stream = _FakeStream(True)
+
+    class _Proc:
+        def __init__(self, alive: bool) -> None:
+            self._alive = alive
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+    ctrl.engine.use_dsp_process = True
+    ctrl.engine._dsp_proc = _Proc(False)
+    assert ctrl.check_streams() == "dsp"
+    ctrl.engine._dsp_proc = _Proc(True)
+    assert ctrl.check_streams() is None
+    ctrl.engine.use_dsp_process = False
+    ctrl.engine._dsp_proc = None
+
+
 def test_check_streams_no_inspecciona_si_no_corre():
     ctrl = _ctrl_running()
     ctrl.engine.stream = _FakeStream(False)

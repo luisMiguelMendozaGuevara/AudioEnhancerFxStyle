@@ -1155,6 +1155,13 @@ class NewMainWindow(QMainWindow):
         El controlador ya detuvo el audio (emitió 'stopped' antes). Aquí se
         avisa al usuario y se refresca la lista de dispositivos para que el
         ruteo apunte a uno válido."""
+        if reason == "dsp":
+            self._status_bar.set_status_text(
+                self._t("El proceso DSP fallo y se detuvo el audio. Pulsa Iniciar audio para reintentar."),
+                DANGER,
+            )
+            self._notify_tray(self._t("Se detuvo el audio (fallo del DSP)."))
+            return
         self._status_bar.set_status_text(
             self._t("Se perdió el dispositivo de %s. Revisa el ruteo.") % self._t(reason), DANGER
         )

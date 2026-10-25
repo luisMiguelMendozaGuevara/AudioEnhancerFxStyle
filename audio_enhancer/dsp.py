@@ -896,6 +896,14 @@ class Enhancer:
         mono = data.ndim == 1
         if mono:
             data = data[:, None]
+        # Robusteza ante muestras no finitas (driver/glitch): un solo NaN/inf
+        # envenenaria los biquads y la envolvente del limitador para SIEMPRE
+        # (salida NaN). Se sanea la entrada y se reinicia el estado dependiente
+        # de la senal: la cadena se recupera ya en este bloque (transitorio
+        # corto de rampas, igual que al cambiar de dispositivo).
+        if not np.isfinite(data).all():
+            data = np.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0)
+            self.reset_state()
         n = data.shape[0]
         if self.spectrum_enabled:
             # El analizador visual no necesita la tasa del audio: el callback
@@ -1001,10 +1009,14 @@ class Enhancer:
                 g_on = False
             self._section_on[key] = g_on
             if g_on:
+                # Q por banda con red de seguridad: si alguien asigna eq_bands
+                # directamente (sin set_eq_bands) la lista de Q puede ser mas
+                # corta; antes eso reventaba con IndexError en el hilo de audio.
+                q = self.eq_q_values[i] if i < len(self.eq_q_values) else self._eq_q_default
                 coeffs = self._coeff_cached(
                     key,
-                    (self.sample_rate, freq, round(g_db, 3), self.eq_q_values[i]),
-                    lambda freq=freq, g_db=g_db, q=self.eq_q_values[i]: self._peaking(freq, g_db, self.sample_rate, q),
+                    (self.sample_rate, freq, round(g_db, 3), q),
+                    lambda freq=freq, g_db=g_db, q=q: self._peaking(freq, g_db, self.sample_rate, q),
                 )
                 sections.append(self._section(key, *coeffs))
         if sections:

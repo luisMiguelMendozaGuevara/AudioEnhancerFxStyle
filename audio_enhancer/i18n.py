@@ -174,6 +174,10 @@ TRANSLATIONS = {
     "Bandas": "Bands",
     "Ancho (Q) del ecualizador": "EQ width (Q)",
     "Latencia objetivo: %d ms": "Target latency: %d ms",
+    "El proceso DSP fallo y se detuvo el audio. Pulsa Iniciar audio para reintentar.": (
+        "The DSP process failed and audio stopped. Click Start audio to retry."
+    ),
+    "Se detuvo el audio (fallo del DSP).": "Audio stopped (DSP failure).",
     "Hay efectos activos y ninguna protección: la salida puede recortar (distorsión). "
     "Activa el limitador o el techo de seguridad.": (
         "Effects are active with no protection: the output can clip (distortion). "

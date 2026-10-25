@@ -518,6 +518,15 @@ def test_listas_de_presets_no_acumulan_labels_fantasma(window, qapp):
     window._refresh_preset_list()  # restaurar las listas reales para otros tests
 
 
+def test_aviso_de_fallo_del_dsp_es_claro(window):
+    """Si muere el proceso DSP, el aviso habla del DSP (no de un dispositivo)
+    y no lanza discovery (no es un problema de ruteo)."""
+    window._on_stream_lost("dsp")
+    texto = window._status_bar._status_label.text()
+    assert "DSP" in texto
+    assert "dispositivo" not in texto
+
+
 def test_exportar_diagnostico_escribe_el_informe(window, tmp_path, monkeypatch):
     """El informe de soporte (version, config, dispositivos y cola del log) se
     escribe en disco y refleja el estado real."""

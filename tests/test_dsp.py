@@ -512,6 +512,34 @@ def test_eq_q_escalar_sigue_funcionando():
     assert e.eq_q == 3.0
 
 
+def test_entrada_no_finita_se_sanea_y_la_cadena_se_recupera():
+    """Un NaN/inf aislado (driver o glitch) no debe envenenar la salida para
+    siempre: se sanea la entrada y la cadena se recupera en el bloque."""
+    x = _stereo(0.2, 440.0)
+    bad = x.copy()
+    bad[5:10, 0] = np.nan
+    bad[6, 1] = np.inf
+
+    e = Enhancer()
+    warm(e, x)
+    y_bad = e.process(bad.copy())
+    assert np.isfinite(y_bad).all()
+
+    y_ok = e.process(x.copy())
+    assert np.isfinite(y_ok).all()
+    assert _rms(y_ok) == pytest.approx(_rms(x), abs=0.05)
+
+
+def test_eq_bands_asignadas_directamente_no_revientan_por_el_q():
+    """Red de seguridad: si eq_bands se asigna sin set_eq_bands, la lista de Q
+    se queda corta; el DSP no debe lanzar IndexError en el hilo de audio."""
+    e = Enhancer()
+    e.eq_bands = [20.0 * (1000.0 ** (i / 30)) for i in range(31)]
+
+    y = e.process(_stereo(0.2, 440.0))
+    assert np.isfinite(y).all()
+
+
 def test_true_peak_ventana_o_n_equivale_a_la_deslizante(monkeypatch):
     """Regresion de rendimiento: la envolvente true-peak usa filtros O(n) de
     scipy.ndimage (maximum/minimum_filter1d) en vez de la ventana deslizante

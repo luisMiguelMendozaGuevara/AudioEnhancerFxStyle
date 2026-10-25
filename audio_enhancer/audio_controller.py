@@ -246,10 +246,12 @@ class AudioController(QObject):
     # ---------- watchdog de streams (dispositivo desconectado / driver) ----------
 
     def check_streams(self) -> str | None:
-        """Motivo si un stream dejó de estar activo, o None si todo sigue vivo.
+        """Motivo si un stream dejo de estar activo (o el DSP hijo murio), o
+        None si todo sigue vivo.
 
-        Puro respecto a Qt (solo lee ``is_active()`` de los streams): se puede
-        testear con un engine falso. Devuelve "captura"/"salida"."""
+        Puro respecto a Qt: solo lee ``is_active()``/``dsp_child_alive()`` del
+        engine, asi que se puede testear con un engine falso. Devuelve
+        "captura"/"salida"/"dsp"."""
         if not self.running:
             return None
         for label, stream in (("captura", self.engine.stream), ("salida", self.engine.out_stream)):
@@ -261,6 +263,8 @@ class AudioController(QObject):
                 active = False  # stream muerto tras desconectar el dispositivo
             if not active:
                 return label
+        if not self.engine.dsp_child_alive():
+            return "dsp"
         return None
 
     def _on_watchdog(self) -> None:
@@ -269,6 +273,9 @@ class AudioController(QObject):
         reason = self.check_streams()
         if reason is None:
             return
-        logger.warning("Stream de %s detenido inesperadamente; se detiene el audio", reason)
+        if reason == "dsp":
+            logger.warning("El proceso DSP termino inesperadamente; se detiene el audio")
+        else:
+            logger.warning("Stream de %s detenido inesperadamente; se detiene el audio", reason)
         self.stop()
         self.stream_lost.emit(reason)
