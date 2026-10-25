@@ -74,18 +74,27 @@ def _ctrl_running():
     return ctrl
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="pyaudiowpatch (WASAPI) es solo Windows")
 def test_start_es_idempotente_cierra_streams_previos():
     """Un segundo start() con la cadena ya activa NO debe dejar dos capturas
-    (dos callbacks duplicaban 'capturados' y desbordaban el ring)."""
-    pytest.importorskip("pyaudiowpatch")  # el CI no instala la dep (es solo Windows)
+    (dos callbacks duplicaban 'capturados' y desbordaban el ring).
+
+    Test hermetico: se sustituyen los dos unicos puntos que tocan hardware
+    (ensure_pa / start_capture). Antes solo pasaba si pyaudiowpatch NO estaba
+    instalado (el CI no lo instalaba); al instalarlo en Windows, el test abria
+    un dispositivo real, que no existe en el runner, y tumbaba el proceso."""
     ctrl = _ctrl_running()
     ctrl.engine.stream = _FakeStream(True)  # simular captura ya abierta
     ctrl.engine.out_stream = _FakeStream(True)
     parado = []
     ctrl.engine.stop = lambda: parado.append(True)
+    ctrl.ensure_pa = lambda: None  # sin instanciar PyAudio (hardware)
+    capturas: list[tuple[int, int]] = []
+    ctrl.engine.start_capture = lambda pa, idx, rate, device_info=None: capturas.append((idx, rate))
     ctrl.start({"name": "src", "index": 1, "defaultSampleRate": 48000}, {"name": "out", "index": 2}, 60)
     assert parado == [True]  # cerró los streams previos antes de reabrir
+    # Reabre UNA sola captura, con el indice de la fuente y la tasa negociada
+    # (la fuente manda: abrir a la tasa del output desincroniza los relojes).
+    assert capturas == [(1, 48000)]
     assert ctrl._open_output_args is not None  # dejó armado el nuevo arranque
 
 
