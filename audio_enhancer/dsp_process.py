@@ -404,6 +404,12 @@ def child_main(
                 break
             try:
                 _drain_params(enhancer, params_q)
+                # Cambio de tasa en caliente: el filtro K y el tramo de 100 ms
+                # dependen de la tasa, así que el medidor se recrea (antes seguía
+                # midiendo con los coeficientes anteriores, con error silencioso).
+                tasa_actual = int(enhancer.sample_rate or 48000)
+                if medidor.sample_rate != tasa_actual:
+                    medidor = LoudnessMeter(sample_rate=tasa_actual, channels=2)
             except Exception:
                 # Un snapshot de parámetros inválido no debe matar el audio: se
                 # avisa y se sigue con los parámetros anteriores.
@@ -453,7 +459,7 @@ def child_main(
                     meter_error_logged = True
                     logger.exception("El medidor de sonoridad fallo (se desactiva el diagnostico LUFS)")
             if telemetry is not None:
-                with telemetry.get_lock():
+                with contextlib.suppress(Exception), telemetry.get_lock():
                     telemetry[0] = enhancer.level_rms
                     telemetry[1] = enhancer.level_peak
                     telemetry[2] = enhancer.level_rms_l
@@ -476,7 +482,7 @@ def child_main(
                         telemetry[9] = _finito(medidas["integrated_lufs"])
                         telemetry[10] = _finito(medidas["lra_lu"], defecto=0.0)
             if child_stats is not None:
-                with child_stats.get_lock():
+                with contextlib.suppress(Exception), child_stats.get_lock():
                     child_stats[0] = raw_empty
                     child_stats[1] = blocks
                     child_stats[2] = backlog_sum
@@ -489,7 +495,7 @@ def child_main(
                     child_timing[2] = snap["p99_ms"]
                     child_timing[3] = snap["max_ms"]
             if gr_value is not None:
-                with gr_value.get_lock():
+                with contextlib.suppress(Exception), gr_value.get_lock():
                     gr_value.value = float(enhancer.level_gr)
     finally:
         mmcss.__exit__(None, None, None)

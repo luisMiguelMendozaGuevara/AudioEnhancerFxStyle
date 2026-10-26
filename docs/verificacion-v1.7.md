@@ -165,3 +165,52 @@ que se usa.
   shelf 4-6 dB; retardo de grupo 0-0,6 / 0,2-1,5 muestras).
 - `try/finally` en los ayudantes que arrancan hilos (antes un fallo dejaba dos
   hilos zombis girando durante el resto de la sesión de tests).
+
+
+## 9. Segunda ronda de auditoría (scopes 5 y 6) y cierre
+
+Se enviaron dos revisiones más: **verificación de los 6 arreglos** y
+**mutation thinking** (31 mutaciones plausibles, ¿las caza algún test?).
+
+### 9.1 Fallos nuevos encontrados y corregidos
+
+| # | Fallo | Corrección |
+|---|---|---|
+| 7 | El mismo patrón del fallo #2 seguía en el **padre**: `_sync_telemetry()` iba **antes** de `_put(data)` en la bomba y sin `try` → un fallo de instrumentación mataba el hilo y dejaba silencio | `_put(data)` primero; `_sync_telemetry()` en su propio `try` con `logger.debug` |
+| 8 | `_local_dsp_ms.add()` dentro del `try` crítico del audio (diagnóstico antes que audio) | movido después de `_put`, con su propio `try` |
+| 9 | `_stop_dsp_process()` salía antes si no había hijo → la limpieza de estado **nunca** corría en el modo local; y las bombas no se joinaban (carrera al limpiar) | limpieza movida a `stop()` (siempre) + join de las bombas |
+| 10 | `integrated_lufs`/`loudness_range_lu` leían `self._cache[...]` **fuera** del lock → `KeyError` posible en un slot de Qt tras `reset()` | `.get(...)` con centinela |
+| 11 | El medidor del **hijo** no se recreaba al cambiar de tasa en caliente (filtro K con coeficientes viejos) | se recrea al detectar el cambio |
+| 12 | `telemetry`/`child_stats`/`gr_value` se leían/escribían sin protección de excepción (solo `child_timing` la tenía) | `contextlib.suppress` en los tres |
+
+### 9.2 Mutaciones que sobrevivían y ahora mueren
+
+De las 31 mutaciones, 13 sobrevivían. Se añadieron tests para las de mayor
+riesgo:
+
+| Mutación que sobrevivía | Test nuevo |
+|---|---|
+| Gate relativo invertido / gate absoluto eliminado | `test_el_gate_relativo_no_reabre_el_gate_absoluto` (programa a −65 con pasajes a −72) y `test_un_programa_entero_bajo_el_gate_absoluto_no_cuenta` |
+| Pesos de canal surround mal (1,41 → 1,0) o aplicados dos veces | `test_pesos_de_canal_surround_valen_1_41` (compara Ls/Rs contra L/R con la misma señal: aísla el peso) |
+| Percentil del LRA cambiado a máximo | `test_el_lra_usa_percentiles_y_no_el_maximo` (pico aislado de 1 s) |
+| Quitar el `RLock` del medidor | `test_procesar_y_leer_desde_dos_hilos_no_lanza` (escritor + lector concurrentes) |
+| Medidor de sonoridad dentro del `try` del audio | `test_un_medidor_roto_no_deja_el_audio_en_silencio` (medidor que lanza: el bloque debe llegar al ring) |
+| Lectura de telemetría fuera del lock | `test_la_telemetria_se_lee_con_el_lock_tomado` (doble que falla si se lee sin lock) |
+| Malla de 10 huecos sin LRA | `test_telemetria_de_diez_huecos_no_revienta` |
+| Techo del limitador 0,95 → 0,99 | `test_el_techo_del_limitador_por_defecto_esta_fijado` (valor de producto + true-peak real) |
+
+### 9.3 Estado final
+
+| Gate | Resultado |
+|---|---|
+| `pytest -q` | **472 passed** en ~27 s |
+| `ruff check .` | limpio |
+| `mypy` | limpio (36 archivos) |
+| `bench_dsp.py --check` | peor caso **8,6 %** del bloque (sin tocar `dsp.py`) |
+| Coste del medidor LUFS | 0,246 ms/bloque (1,15 %) |
+| Casos EBU 3341 | 1-5 pasan con margen ≤0,03 LU (tolerancia ±0,1) |
+
+Pendiente asumido (documentado, no bloqueante): el recálculo del integrado
+(1 Hz) sigue ocurriendo en el hilo de audio (≈0,3-1 ms una vez por segundo con
+historial largo) — moverlo al hilo `viz` es la mejora natural. El callback de
+PortAudio sigue sin instrumentar (se mide `Enhancer.process()`, no el callback).

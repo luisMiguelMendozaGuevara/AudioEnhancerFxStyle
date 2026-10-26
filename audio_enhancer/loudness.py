@@ -169,8 +169,9 @@ class LoudnessMeter:
       cierra un tramo (EBU Tech 3341 §2.3: en un medidor en vivo se recalcula
       desde los valores almacenados).
     - Memoria acotada: los bloques del integrado se guardan en un array que
-      crece hasta ``max_blocks`` (por defecto ~3 h a 10 bloques/s) y luego se
-      descarta el más antiguo.
+      crece hasta ``max_blocks`` (por defecto 36 000 = 1 h a 10 bloques/s) y
+      luego descarta la mitad más antigua, así que el integrado de sesiones muy
+      largas pasa a ser una ventana deslizante de la última hora.
     """
 
     def __init__(
@@ -366,7 +367,9 @@ class LoudnessMeter:
     def integrated_lufs(self) -> float:
         """Sonoridad integrada con doble gate (-70 LUFS absoluto, -10 LU relativo)."""
         self._actualizar_cache()
-        return self._cache["integrated_lufs"]
+        # .get(): entre el recálculo y esta lectura otro hilo puede haber hecho
+        # reset() y vaciado la caché (KeyError dentro de un slot de Qt).
+        return self._cache.get("integrated_lufs", -math.inf)
 
     def _integradas(self) -> tuple[float, float]:
         """Calcula (integrada, LRA) sobre las series actuales."""
@@ -411,9 +414,11 @@ class LoudnessMeter:
         """Recalcula integrada/LRA cuando entra un bloque nuevo (con tope de coste).
 
         Con historial corto (<= 10 min) se recalcula siempre: es exacto y barato.
-        A partir de ahí se limita a 1 Hz, el mínimo que exige EBU Tech 3341 §2.2
-        para el integrado: recalcular 36 000 bloques 10 veces por segundo dentro
-        del bucle de audio haría crecer el coste con la duración de la sesión.
+        A partir de ahí se limita a 1 Hz para que el coste no crezca con la
+        duración de la sesión: recalcular 36 000 bloques 10 veces por segundo
+        dentro del bucle de audio es trabajo O(n) que nadie acotó. Un medidor en
+        vivo puede actualizar el integrado a 1 Hz sin problema (la UI lo pinta
+        una vez por segundo de todos modos).
         """
         with self._lock:
             clave = (self._block_n, self._st_n)
@@ -431,7 +436,7 @@ class LoudnessMeter:
     def loudness_range_lu(self) -> float:
         """Rango de sonoridad (LRA) en LU, con gate relativo de -20 LU."""
         self._actualizar_cache()
-        return self._cache["lra_lu"]
+        return self._cache.get("lra_lu", 0.0)
 
     def snapshot(self) -> dict[str, float]:
         """Medidas actuales como dict (lista para telemetría/UI)."""

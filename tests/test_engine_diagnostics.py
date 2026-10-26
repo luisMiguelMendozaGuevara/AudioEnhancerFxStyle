@@ -367,3 +367,100 @@ def test_loudness_snapshot_tiene_las_mismas_claves_en_los_dos_caminos(engine):
         "lra_lu": 4.0,
     }
     assert set(engine.loudness_snapshot()) == claves  # con hijo
+
+
+# ---------- el audio sobrevive a un fallo del diagnóstico ----------
+
+
+def test_un_medidor_roto_no_deja_el_audio_en_silencio(engine, monkeypatch):
+    """Si la medición de sonoridad falla, el bloque debe llegar IGUAL al ring.
+
+    Es la propiedad que justifica el orden "audio primero, diagnóstico después":
+    meterla (de nuevo) dentro del try del audio dejaría la app muda para siempre
+    sin que ningún test se enterara.
+    """
+
+    class _MedidorRoto:
+        def process(self, block):  # noqa: ARG002 - firma exigida por el motor
+            raise RuntimeError("medidor simulado roto")
+
+        def reset(self):
+            raise RuntimeError("medidor simulado roto")
+
+        def snapshot(self):
+            raise RuntimeError("medidor simulado roto")
+
+    engine.configure_ring(SAMPLE_RATE)
+    monkeypatch.setattr(engine, "_local_meter", _MedidorRoto())
+    audio = _seno_estereo(1.0, -20.0)
+    pendientes = [audio[i : i + CHUNK] for i in range(0, len(audio), CHUNK)]
+
+    def falso_read_raw():
+        return pendientes.pop(0) if pendientes else None
+
+    def parar_si_vacio(*args, **kwargs):
+        if not pendientes:
+            engine._dsp_running = False
+
+    monkeypatch.setattr(engine, "_read_raw", falso_read_raw)
+    monkeypatch.setattr(engine, "_dsp_running", True, raising=False)
+    monkeypatch.setattr(
+        engine, "_put", lambda data, _orig=engine._put: (_orig(data), parar_si_vacio())[0]
+    )
+    monkeypatch.setattr(engine, "_dsp_wakeup", None, raising=False)
+
+    engine._dsp_loop_body()
+
+    assert engine.write_pos > 0, "el fallo del medidor silenció el audio"
+    assert engine._meter_error_logged is True, "el fallo del medidor no quedó registrado"
+
+
+def test_telemetria_de_diez_huecos_no_revienta(engine):
+    """Con la malla antigua (10 huecos, sin LRA) se degrada al centinela."""
+    engine._telemetry = _FakeSharedArray([0.0] * 7 + [-20.0, -21.0, -22.0])
+
+    engine._sync_telemetry()  # no debe lanzar IndexError
+
+    snap = engine.loudness_snapshot()
+    assert set(snap) == {"momentary_lufs", "short_term_lufs", "integrated_lufs", "lra_lu"}
+    assert snap["momentary_lufs"] == -1000.0
+
+
+def test_la_telemetria_se_lee_con_el_lock_tomado(engine):
+    """La lectura de la sonoridad debe ocurrir DENTRO del lock compartido.
+
+    Doble que falla si se lee sin el lock tomado: detecta una futura lectura
+    fuera de la sección crítica (que es la que puede dar un valor rasgado).
+    """
+
+    class _ArrayEstricto(_FakeSharedArray):
+        def __init__(self, values):
+            super().__init__(values)
+            self.bloqueado = False
+
+        def get_lock(self):
+            clase = self
+
+            class _Ctx:
+                def __enter__(self):
+                    clase._lock.acquire()
+                    clase.bloqueado = True
+                    return self
+
+                def __exit__(self, *exc):
+                    clase.bloqueado = False
+                    clase._lock.release()
+                    return False
+
+            return _Ctx()
+
+        def __getitem__(self, i):
+            if not self.bloqueado:
+                raise AssertionError(f"lectura de telemetry[{i}] FUERA del lock")
+            return self.values[i]
+
+    engine._telemetry = _ArrayEstricto([0.0] * 7 + [-20.0, -21.0, -22.0, 3.0])
+
+    engine._sync_telemetry()
+
+    assert engine.loudness_snapshot()["lra_lu"] == pytest.approx(3.0)

@@ -181,6 +181,8 @@ class AudioEngine:
         self._pump_mmcss: Any = None
         # Evita inundar el log si el medidor de sonoridad falla en cada bloque.
         self._meter_error_logged = False
+        # Referencias a los hilos bomba (para joinarlos al parar).
+        self._pump_threads: list[threading.Thread] = []
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -467,6 +469,19 @@ class AudioEngine:
                 logger.warning("El hilo de DSP no paró en 1 s; se abandona (daemon)")
             self._dsp_thread = None
         self._stop_dsp_process()
+        # Join de las bombas: sin esto, la limpieza de estado de abajo podía
+        # ejecutarse mientras la bomba seguía publicando telemetría (y volvía a
+        # dejar valores del dispositivo anterior).
+        for hilo in self._pump_threads:
+            hilo.join(timeout=0.5)
+        self._pump_threads = []
+        # Limpieza SIEMPRE (con o sin proceso hijo): sin esto, en el modo local
+        # la UI seguía mostrando la sonoridad del dispositivo anterior. La
+        # limpieza vive aquí y no en _stop_dsp_process, que sale antes si no hay
+        # hijo.
+        self._child_dsp_ms = {}
+        self._child_loudness = {}
+        self._local_meter.reset()
         for s in (self.stream, self.out_stream):
             if s is not None:
                 try:
@@ -738,9 +753,14 @@ class AudioEngine:
         self._set_child_priority()
         self._dsp_running = True
         # UN hilo para ambas direcciones (menos hilos Python compitiendo por el
-        # GIL con los callbacks de audio) + el de parámetros.
+        # GIL con los callbacks de audio) + el de parámetros. Se guardan las
+        # referencias para poder joinarlos al parar (sin join, la limpieza de
+        # estado podía ejecutarse mientras la bomba seguía publicando).
+        self._pump_threads = []
         for target in (self._pump, self._pump_params):
-            threading.Thread(target=target, daemon=True).start()
+            hilo = threading.Thread(target=target, daemon=True)
+            hilo.start()
+            self._pump_threads.append(hilo)
 
     def _set_child_priority(self) -> None:
         """Sube la prioridad del proceso hijo por ENCIMA de lo normal.
@@ -800,12 +820,7 @@ class AudioEngine:
             self._dsp_proc.terminate()
             self._dsp_proc.join(timeout=1.0)
         self._dsp_proc = None
-        # Limpiar el estado publicado por el hijo: tras un stop+start (cambio de
-        # dispositivo, reinicio del audio) la UI mostraba durante ~200 ms el
-        # LUFS y los tiempos del dispositivo ANTERIOR.
-        self._child_dsp_ms = {}
-        self._child_loudness = {}
-        self._local_meter.reset()
+
 
     def _pump(self) -> None:
         """Un solo hilo mueve crudo->hijo y procesado->salida.
@@ -871,10 +886,17 @@ class AudioEngine:
             if item is not None:
                 got = True
                 data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+                # AUDIO PRIMERO: la telemetría es accesoria. Un fallo del Array
+                # compartido no puede dejar sin bloque a la salida ni matar la
+                # bomba (antes `_sync_telemetry()` iba antes y sin try: una
+                # excepción ahí silenciaba el audio con una sola traza).
+                self._put(data)
                 # Niveles y espectro los publica el HIJO por memoria compartida:
                 # el padre solo los copia (sin numpy/FFT que compitan).
-                self._sync_telemetry()
-                self._put(data)
+                try:
+                    self._sync_telemetry()
+                except Exception:
+                    logger.debug("No se pudo sincronizar la telemetría", exc_info=True)
             else:
                 self._stats["out_q_empty"] += 1
             if stalled:
@@ -985,6 +1007,10 @@ class AudioEngine:
         try:
             with mmcss_pro_audio("Pro Audio"):
                 self._dsp_loop_body()
+        except Exception:
+            # Simetría con _pump: si el cuerpo del bucle revienta fuera del try
+            # interno, el hilo no debe morir sin rastro.
+            logger.exception("El hilo de DSP terminó por una excepción")
         finally:
             logger.info("Hilo de DSP detenido")
 
@@ -1005,14 +1031,18 @@ class AudioEngine:
             try:
                 t0 = time.perf_counter()
                 y = self.enhancer.process(block)
-                # Coste real por bloque (percentiles en timing_snapshot()).
-                self._local_dsp_ms.add(time.perf_counter() - t0)
                 # El audio SALE primero: medir es accesorio y no debe poder
                 # suprimir un bloque ya procesado.
                 self._put(y)
+                coste = time.perf_counter() - t0
             except Exception:
                 logger.exception("Error en el hilo de DSP")
                 continue
+            # Coste real por bloque (percentiles en timing_snapshot()).
+            try:
+                self._local_dsp_ms.add(coste)
+            except Exception:
+                logger.debug("No se pudo registrar el coste del bloque", exc_info=True)
             # Sonoridad de la salida, igual que en el proceso hijo, aislada.
             try:
                 self._local_meter.process(y)

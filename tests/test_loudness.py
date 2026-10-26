@@ -14,6 +14,8 @@ tolerancia. Medido en esta máquina: caso 1 = -22.993 LUFS (desviación 0.007 LU
 """
 
 import math
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -380,3 +382,114 @@ def test_hop_distinto_de_100_ms_mantiene_la_ventana():
     assert medidor.momentary_lufs == -math.inf
     medidor.process(bloque)  # 400 ms
     assert medidor.momentary_lufs == pytest.approx(-23.0, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# 9. Propiedades que la primera batería NO discriminaba (mutation thinking)
+# ---------------------------------------------------------------------------
+
+
+def test_el_gate_relativo_no_reabre_el_gate_absoluto():
+    """Programa silencioso (-65 LUFS) con pasajes a -72: el integrado debe ser -65.
+
+    Este test distingue el arreglo del bug histórico: con el patrón antiguo
+    (umbral relativo aplicado sobre TODOS los bloques) el umbral caía en -75
+    LUFS y los bloques de -72 entraban en la media, arrastrando el integrado a
+    ~-67. Los casos 1-5 de EBU no discriminan esto (allí el umbral relativo ya
+    excluye el silencio por sí solo).
+    """
+    medidor = _medir([(10.0, -65.0), (10.0, -72.0)])
+
+    assert medidor.integrated_lufs == pytest.approx(-65.0, abs=0.2)
+
+
+def test_un_programa_entero_bajo_el_gate_absoluto_no_cuenta():
+    """Todo por debajo de -70 LUFS => integrado sin medida (-inf), no un número."""
+    medidor = _medir([(10.0, -75.0), (10.0, -80.0)])
+
+    assert medidor.integrated_lufs == -math.inf
+
+
+def test_pesos_de_canal_surround_valen_1_41():
+    """Envolventes (Ls/Rs) pesan 1,41: +1,49 dB respecto a L/R con la MISMA señal.
+
+    Se comparan dos mediciones de la misma señal (una en L/R y otra en Ls/Rs) en
+    vez de un valor absoluto: así el test aísla el peso por canal y no depende de
+    la ganancia del filtro K ni del offset de calibración. Con los pesos mal
+    (1,0 en surround) la diferencia sería 0 dB. Es el único test multicanal del
+    módulo: en estéreo el peso es 1,0 y cualquier error en la tabla es invisible.
+    """
+    _scipy_signal()
+    amplitud = 10.0 ** (-23.0 / 20.0)
+    n = int(5.0 * FS)
+    t = np.arange(n) / float(FS)
+    base = (amplitud * np.sin(2.0 * np.pi * 1000.0 * t)).astype(np.float32)
+
+    def _medir_canales(indices: tuple[int, int], canales: int) -> float:
+        medidor = LoudnessMeter(FS, canales)
+        audio = np.zeros((n, canales), dtype=np.float32)
+        audio[:, indices[0]] = base
+        audio[:, indices[1]] = base
+        for i in range(0, n, 1024):
+            medidor.process(audio[i : i + 1024])
+        return medidor.integrated_lufs
+
+    estereo = _medir_canales((0, 1), 2)  # L/R: peso 1,0
+    surround = _medir_canales((3, 4), 5)  # Ls/Rs: peso 1,41
+
+    assert surround - estereo == pytest.approx(10.0 * math.log10(1.41), abs=0.05)
+
+
+def test_el_lra_usa_percentiles_y_no_el_maximo():
+    """Un pico aislado no debe dominar el LRA (percentil 95, no el máximo)."""
+    medidor = _medir([(40.0, -23.0), (1.0, -8.0)])
+
+    # Con percentil 100 (máximo) el LRA sería ~15 LU; con 10/95 queda bajo.
+    assert medidor.loudness_range_lu < 5.0
+    assert medidor.loudness_range_lu >= 0.0
+
+
+def test_procesar_y_leer_desde_dos_hilos_no_lanza():
+    """Escritura (hilo de DSP) y lectura (UI) concurrentes: sin excepciones.
+
+    `list(deque)` lanza RuntimeError si otro hilo hace append durante la
+    iteración: el lock del medidor existe por esto y aquí se ejercita. El bucle
+    está acotado (bloques fijos + un respiro) para que el test no dependa de la
+    velocidad de la máquina ni del GIL.
+    """
+    _scipy_signal()
+    medidor = LoudnessMeter(FS, 2)
+    bloque = _seno(0.1, -20.0)
+    # Pre-rellenar 6 s ANTES de arrancar el hilo: así el integrado ya es finito y
+    # el test no depende de cuántos bloques alcance a procesar el escritor.
+    for _ in range(60):
+        medidor.process(bloque)
+    errores: list[BaseException] = []
+    parar = threading.Event()
+
+    def escritor():
+        try:
+            while not parar.is_set():
+                medidor.process(bloque)
+                time.sleep(0.001)  # cede el GIL: el test mide concurrencia, no hambre
+        except BaseException as exc:  # noqa: BLE001 - se reporta, no se traga
+            errores.append(exc)
+
+    hilo = threading.Thread(target=escritor, daemon=True)
+    hilo.start()
+    try:
+        for i in range(120):
+            snap = medidor.snapshot()
+            assert all(not math.isnan(v) for v in snap.values())
+            if i % 10 == 0:  # las propiedades caras, de vez en cuando
+                integrada = medidor.integrated_lufs
+                # -inf es válido al principio (aún no hay bloque de 400 ms).
+                assert math.isfinite(integrada) or integrada == -math.inf
+                assert math.isfinite(integrada), "el integrado se perdió durante la concurrencia"
+                assert medidor.loudness_range_lu >= 0.0
+                assert len(medidor) >= 0
+    finally:
+        parar.set()
+        hilo.join(timeout=5)
+
+    assert not errores, f"excepcion en el hilo escritor: {errores[0]!r}"

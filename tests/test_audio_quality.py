@@ -568,3 +568,28 @@ def test_sin_escalones_entre_bloques_con_la_cadena_completa_activa():
     saltos = [abs(b - a) for a, b in zip(estables, estables[1:], strict=False)]
     assert max(saltos) < 0.5, f"escalón de {max(saltos):.2f} dB entre bloques (clic audible)"
     assert max(estables) - min(estables) < 3.0, "el nivel del tono no se estabiliza (¿oscila la dinámica?)"
+
+
+def test_el_techo_del_limitador_por_defecto_esta_fijado():
+    """El techo es un valor de PRODUCTO, no un detalle interno.
+
+    Ningún test lo fijaba: subirlo de 0,95 a 0,99 (o a 1,0) cambiaba el nivel de
+    salida real de la app sin que la suite dijera nada, porque los tests de
+    limitador inyectan su propio techo.
+    """
+    from audio_enhancer.dsp import Enhancer
+
+    e = Enhancer()
+    e.sample_rate = FS
+
+    assert e.limiter_threshold == pytest.approx(0.95, abs=0.001)  # limitador (-0.45 dBFS)
+    assert e.safety_ceiling == pytest.approx(0.99, abs=0.001)  # techo de seguridad (-0.09 dBFS)
+    assert e.safety_ceiling_enabled is True
+
+    # Y con el techo POR DEFECTO la salida nunca lo supera (true-peak x4).
+    n = np.arange(FS)
+    x = (1.6 * np.sin(2.0 * np.pi * FS / 4 * n / FS + np.pi / 4)).astype(np.float32)
+    salida = e.process(np.stack([x, x], axis=1))
+    pico = _true_peak_dbtp(salida)
+
+    assert pico <= 20.0 * math.log10(0.95) + 0.2, f"true-peak {pico:.2f} dBTP supera el techo"
