@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import threading
 from typing import Any
@@ -550,7 +551,7 @@ class NewMainWindow(QMainWindow):
             numero = float(valor) if valor is not None else -1000.0
         except (TypeError, ValueError):
             return "--"
-        if numero != numero or numero <= -100.0:  # NaN o 'sin medida'
+        if numero != numero or not math.isfinite(numero) or numero <= -100.0:  # NaN/inf/'sin medida'
             return "--"
         return "%.1f" % numero
 
@@ -585,20 +586,33 @@ class NewMainWindow(QMainWindow):
         lines += [f"- {d.get('name')} @ {d.get('defaultSampleRate')} Hz" for d in self.speakers]
         lines += ["", "== Motor ==", f"running={self.running}"]
         if self.running:
-            lines.append("stats=" + str(self.engine.stats_snapshot()))
-            # Desglose de latencia y coste del DSP: sin esto, un reporte de
-            # "se oye con retardo" o "da tirones" no se puede diagnosticar.
-            lines.append("latencia=" + LatencyBreakdown.format(self.engine.latency_breakdown()))
-            lines.append("dsp=" + format_stats(self.engine.timing_snapshot()))
-            sonoridad = self.engine.loudness_snapshot()
-            lines.append(
-                "sonoridad M=%s S=%s I=%s LUFS"
-                % (
-                    self._fmt_lufs(sonoridad.get("momentary_lufs")),
-                    self._fmt_lufs(sonoridad.get("short_term_lufs")),
-                    self._fmt_lufs(sonoridad.get("integrated_lufs")),
+            # Bloque protegido: este botón lo pulsa un usuario CON problemas; un
+            # fallo del motor no puede dejarlo sin informe (antes la excepción
+            # escapaba del slot y no se escribía ni el fichero ni el log).
+            try:
+                lines.append("stats=" + str(self.engine.stats_snapshot()))
+                # Desglose de latencia y coste del DSP: sin esto, un reporte de
+                # "se oye con retardo" o "da tirones" no se puede diagnosticar.
+                lines.append("latencia=" + LatencyBreakdown.format(self.engine.latency_breakdown()))
+                lines.append("dsp=" + format_stats(self.engine.timing_snapshot()))
+                sonoridad = self.engine.loudness_snapshot()
+                lines.append(
+                    "sonoridad M=%s S=%s I=%s LUFS (LRA %s LU)"
+                    % (
+                        self._fmt_lufs(sonoridad.get("momentary_lufs")),
+                        self._fmt_lufs(sonoridad.get("short_term_lufs")),
+                        self._fmt_lufs(sonoridad.get("integrated_lufs")),
+                        self._fmt_lufs(sonoridad.get("lra_lu")),
+                    )
                 )
-            )
+                # Estado del planificador de tiempo real (MMCSS), útil cuando
+                # el usuario reporta cortes bajo carga.
+                from ...rt_priority import describe as _rt_describe
+
+                lines.append("rt=" + str(_rt_describe()))
+            except Exception:
+                logger.exception("No se pudieron recoger las métricas del motor")
+                lines.append("motor=ERROR al recoger métricas (ver log)")
         lines += ["", "== Log (cola) =="]
         try:
             with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
@@ -1239,23 +1253,29 @@ class NewMainWindow(QMainWindow):
         # de underruns/huecos/deriva en la barra de estado.
         self._metrics_tick = (self._metrics_tick + 1) % 30
         if self._metrics_tick == 0:
-            if self.running:
-                s = self.engine.stats_snapshot()
-                text = "unders %d | huecos %d | deriva %d fr | lat %.0f ms | dsp p99 %.1f ms" % (
-                    s["output_underruns"],
-                    s["gap_blocks"],
-                    s["drift_adjust_frames"],
-                    self.engine.latency_breakdown().get("total_ms", 0.0),
-                    self.engine.timing_snapshot().get("p99_ms", 0.0),
-                )
-                # Sonoridad de la salida (BS.1770): solo si hay medida real
-                # (-1000 = silencio o ventana aún incompleta).
-                lufs = float(self.engine.loudness_snapshot().get("momentary_lufs", -1000.0))
-                if -100.0 < lufs < 10.0:
-                    text += " | %.1f LUFS" % lufs
-            else:
-                text = ""
-            self._status_bar.set_metrics(text)
+            # Aunque el motor devuelva algo inesperado, este slot de QTimer no
+            # puede lanzar: la barra se congelaría (o se caería el bucle de
+            # eventos) por un problema de instrumentación, no de audio.
+            try:
+                if self.running:
+                    s = self.engine.stats_snapshot()
+                    text = "unders %d | huecos %d | deriva %d fr | lat total %.0f ms | dsp p99 %.1f ms" % (
+                        s["output_underruns"],
+                        s["gap_blocks"],
+                        s["drift_adjust_frames"],
+                        self.engine.latency_breakdown().get("total_ms", 0.0),
+                        self.engine.timing_snapshot().get("p99_ms", 0.0),
+                    )
+                    # Sonoridad de la salida (BS.1770): solo si hay medida real
+                    # (-1000 = silencio o ventana aún incompleta).
+                    lufs = float(self.engine.loudness_snapshot().get("momentary_lufs", -1000.0))
+                    if -100.0 < lufs < 10.0:
+                        text += " | %.1f LUFS" % lufs
+                else:
+                    text = ""
+                self._status_bar.set_metrics(text)
+            except Exception:
+                logger.exception("No se pudieron actualizar las métricas de la barra")
         # Diagnóstico de cortes: cada ~10 s (300 ticks de 33 ms) se registra el
         # avance de la captura y los contadores. Si `capturados` no avanza, el
         # loopback (p. ej. el cable virtual) dejó de entregar audio; si suben

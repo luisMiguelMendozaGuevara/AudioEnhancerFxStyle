@@ -330,3 +330,53 @@ def test_coste_por_bloque_muy_por_debajo_del_presupuesto():
     por_bloque_ms = (time.perf_counter() - t0) / len(bloques) * 1000.0
 
     assert por_bloque_ms < 3.0, f"{por_bloque_ms:.3f} ms/bloque: el medidor se come el presupuesto"
+
+
+# ---------------------------------------------------------------------------
+# 8. Memoria acotada: las rutas de "desplazar la mitad" nunca se ejercitaban
+# ---------------------------------------------------------------------------
+
+
+def test_historial_acotado_desplaza_la_mitad_sin_romper_la_medida():
+    """Con `max_blocks` pequeño, el historial se recorta y sigue midiendo.
+
+    Estas ramas (crecer, desplazar por mitades, y lo mismo en la serie de corto
+    plazo) solo se alcanzaban tras HORAS de audio, así que no las cubría nada:
+    un off-by-one ahí corrompe el integrado de una sesión larga en silencio.
+    """
+    _scipy_signal()
+    medidor = LoudnessMeter(FS, 2, max_blocks=8)
+    bloque = _seno(0.1, -23.0)
+
+    for _ in range(60):  # 6 s: 60 tramos, muchas vueltas del historial
+        medidor.process(bloque)
+
+    snap = medidor.snapshot()
+
+    assert 0 < len(medidor) <= 8
+    assert snap["integrated_lufs"] == pytest.approx(-23.0, abs=0.2)
+    assert snap["momentary_lufs"] == pytest.approx(-23.0, abs=0.1)
+    assert math.isfinite(snap["lra_lu"])
+
+
+def test_parametros_degenerados_no_revientan():
+    """`hop_s=0`, tasa inválida o `max_blocks` diminuto se sanean, no lanzan."""
+    _scipy_signal()
+    for kwargs in ({"hop_s": 0.0}, {"hop_s": -1.0}, {"max_blocks": 1}, {"sample_rate": 0}, {"channels": 0}):
+        medidor = LoudnessMeter(**kwargs)
+        medidor.process(_seno(0.5, -23.0))
+        snap = medidor.snapshot()
+        assert all(not math.isnan(v) for v in snap.values()), kwargs
+
+
+def test_hop_distinto_de_100_ms_mantiene_la_ventana():
+    """Con hop de 50 ms, M sigue siendo 400 ms (8 tramos) y S 3 s (60 tramos)."""
+    _scipy_signal()
+    medidor = LoudnessMeter(FS, 2, hop_s=0.05)
+    bloque = _seno(0.05, -23.0)
+
+    for _ in range(7):  # 350 ms < 400 ms
+        medidor.process(bloque)
+    assert medidor.momentary_lufs == -math.inf
+    medidor.process(bloque)  # 400 ms
+    assert medidor.momentary_lufs == pytest.approx(-23.0, abs=0.1)

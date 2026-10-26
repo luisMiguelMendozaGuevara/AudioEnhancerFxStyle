@@ -6,11 +6,18 @@ la salida consume menos, el ring rebosa y se descarta audio (microcortes/lag).
 Con el DSP en un proceso aparte, ese trabajo no compite con el callback.
 
 Interfaz:
-    child_main(raw_q, out_q, params_q, stop_event)
+    child_main(raw_q, out_q, params_q, stop_event, gr_value=None, telemetry=None,
+               spectrum_buf=None, spec_needed=None, child_stats=None,
+               child_timing=None)
 - raw_q:   cola de bloques crudos (bytes float32 intercalados) main -> hijo.
 - out_q:   cola de bloques procesados (bytes) hijo -> main.
 - params_q: cola de snapshots de parámetros (dict) main -> hijo (el último gana).
 - stop_event: threading/multiprocessing Event para terminar.
+- gr_value: Array('f',1) con la reducción de ganancia del limitador.
+- telemetry: Array('f',>=7) con niveles; con 11 huecos, también LUFS (M/S/I/LRA).
+- spectrum_buf / spec_needed: espectro de 64 barras y bandera de visibilidad.
+- child_stats: Array('d',4) [raw_empty, blocks, backlog_sum, clipped].
+- child_timing: Array('d',4) [p50, p95, p99, max] ms de `process()` por bloque.
 """
 
 from __future__ import annotations
@@ -318,7 +325,7 @@ def child_main(
     principal, donde competiría con el callback de salida):
     - ``gr_value``: gain reduction del limitador.
     - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr] y, si la
-      malla compartida tiene 10 huecos, también [lufs_m, lufs_s, lufs_i].
+      malla compartida tiene 11 huecos, también [lufs_m, lufs_s, lufs_i, lra].
       Sonoridad medida segun ITU-R BS.1770 / EBU R 128 sobre la salida.
     - ``spectrum_buf``: 64 barras de espectro (dB), escritas por el hilo visual.
     - ``spec_needed``: bandera (padre -> hijo) de si la UI mira el espectro.
@@ -357,6 +364,7 @@ def child_main(
     clipped = 0
     proc_errors = 0
     last_proc_error_log = 0.0
+    meter_error_logged = False
     # Estadística del coste por bloque: se publica cada PUBLISH_EVERY bloques
     # (un snapshot ordena la ventana; publicarlo en cada bloque sería gastar el
     # presupuesto de 21 ms en medir en vez de procesar).
@@ -373,93 +381,128 @@ def child_main(
     # alimentar audio util) termina solo en vez de quedar huerfano.
     parent_pid = os.getppid()
     last_parent_check = 0.0
-    while not stop_event.is_set():
-        now = time.monotonic()
-        if now - last_parent_check >= 1.0:
-            last_parent_check = now
-            if not _parent_alive(parent_pid):
-                logger.warning("El proceso padre desaparecio; el DSP hijo termina")
+    # try/finally: si algo escapa del bucle (p. ej. `_drain_params` con un
+    # snapshot inválido) hay que revertir el registro MMCSS, publicar el estado
+    # final y cerrar el hilo de visualización. Antes se salía sin nada de eso.
+    try:
+        while not stop_event.is_set():
+            now = time.monotonic()
+            if now - last_parent_check >= 1.0:
+                last_parent_check = now
+                if not _parent_alive(parent_pid):
+                    logger.warning("El proceso padre desaparecio; el DSP hijo termina")
+                    break
+            try:
+                item = raw_q.get(timeout=0.1)
+            except Exception:
+                # Sin crudo: el hijo va al día. Si esto se repite, el hijo se queda
+                # sin alimentar (bomba lenta o productor parado): diagnóstico.
+                raw_empty += 1
+                _drain_params(enhancer, params_q)
+                continue
+            if item is None:  # centinela de parada
                 break
-        try:
-            item = raw_q.get(timeout=0.1)
-        except Exception:
-            # Sin crudo: el hijo va al día. Si esto se repite, el hijo se queda
-            # sin alimentar (bomba lenta o productor parado): diagnóstico.
-            raw_empty += 1
-            _drain_params(enhancer, params_q)
-            continue
-        if item is None:  # centinela de parada
-            break
-        _drain_params(enhancer, params_q)
-        try:
-            with contextlib.suppress(Exception):
-                backlog_sum += raw_q.qsize()
-            data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
-            t0 = time.perf_counter()
-            y = enhancer.process(data)
-            timing.add(time.perf_counter() - t0)
-            # Sonoridad de la señal procesada (una vez por bloque y antes de
-            # publicar telemetría, para que ambas cosas sean coherentes).
-            medidor.process(y)
-            blocks += 1
-            # Recorte: muestras que superan ±1.0 (posible recorte del driver
-            # cuando no hay limitador/techo). Barato y fuera del audio crítico.
-            clipped += int(np.count_nonzero(np.abs(y) > 1.0))
-        except Exception:
-            # Rate-limit: si process() falla en CADA bloque (p. ej. un estado
-            # corrupto), loguear por bloque inunda el log rotativo (256 KB x2)
-            # y se pierde el historial justo cuando hace falta. Se avisa del
-            # primero y luego uno cada 5 s, con el total de fallos.
-            proc_errors += 1
-            now_err = time.monotonic()
-            if proc_errors == 1 or (now_err - last_proc_error_log) >= 5.0:
-                last_proc_error_log = now_err
-                logger.exception("Error en el proceso DSP (%d fallos)", proc_errors)
-            continue
-        if telemetry is not None:
-            with telemetry.get_lock():
-                telemetry[0] = enhancer.level_rms
-                telemetry[1] = enhancer.level_peak
-                telemetry[2] = enhancer.level_rms_l
-                telemetry[3] = enhancer.level_rms_r
-                telemetry[4] = enhancer.level_peak_l
-                telemetry[5] = enhancer.level_peak_r
-                telemetry[6] = enhancer.level_gr
-                if len(telemetry) >= 10:
-                    # Medir la sonoridad de la SALIDA con los valores ya
-                    # cacheados (el recálculo del integrado está caché por
-                    # bloque, no se hace 46 veces por segundo).
-                    medidas = medidor.snapshot()
-                    telemetry[7] = _finito(medidas["momentary_lufs"])
-                    telemetry[8] = _finito(medidas["short_term_lufs"])
-                    telemetry[9] = _finito(medidas["integrated_lufs"])
+            try:
+                _drain_params(enhancer, params_q)
+            except Exception:
+                # Un snapshot de parámetros inválido no debe matar el audio: se
+                # avisa y se sigue con los parámetros anteriores.
+                logger.exception("Parametros invalidos ignorados en el proceso DSP")
+            try:
+                with contextlib.suppress(Exception):
+                    backlog_sum += raw_q.qsize()
+                data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+                t0 = time.perf_counter()
+                y = enhancer.process(data)
+                timing.add(time.perf_counter() - t0)
+                blocks += 1
+                # Recorte: muestras que superan ±1.0 (posible recorte del driver
+                # cuando no hay limitador/techo). Barato y fuera del audio crítico.
+                clipped += int(np.count_nonzero(np.abs(y) > 1.0))
+            except Exception:
+                # Rate-limit: si process() falla en CADA bloque (p. ej. un estado
+                # corrupto), loguear por bloque inunda el log rotativo (256 KB x2)
+                # y se pierde el historial justo cuando hace falta. Se avisa del
+                # primero y luego uno cada 5 s, con el total de fallos.
+                proc_errors += 1
+                now_err = time.monotonic()
+                if proc_errors == 1 or (now_err - last_proc_error_log) >= 5.0:
+                    last_proc_error_log = now_err
+                    logger.exception("Error en el proceso DSP (%d fallos)", proc_errors)
+                continue
+            # El audio sale PRIMERO: la medición de sonoridad es accesoria y
+            # jamás debe poder suprimir un bloque ya procesado (antes iba antes
+            # que esto y dentro del mismo try: un fallo del medidor dejaba el
+            # audio en silencio para siempre, sin alarma y sin recuperación).
+            try:
+                out_q.put(np.asarray(y, dtype=np.float32).tobytes())
+            except Exception:
+                proc_errors += 1
+                now_err = time.monotonic()
+                if proc_errors == 1 or (now_err - last_proc_error_log) >= 5.0:
+                    last_proc_error_log = now_err
+                    logger.exception("No se pudo publicar el bloque procesado")
+                continue
+            # Diagnóstico de sonoridad: aislado y con log limitado.
+            medidas = None
+            try:
+                medidor.process(y)
+                medidas = medidor.snapshot()
+            except Exception:
+                if not meter_error_logged:
+                    meter_error_logged = True
+                    logger.exception("El medidor de sonoridad fallo (se desactiva el diagnostico LUFS)")
+            if telemetry is not None:
+                with telemetry.get_lock():
+                    telemetry[0] = enhancer.level_rms
+                    telemetry[1] = enhancer.level_peak
+                    telemetry[2] = enhancer.level_rms_l
+                    telemetry[3] = enhancer.level_rms_r
+                    telemetry[4] = enhancer.level_peak_l
+                    telemetry[5] = enhancer.level_peak_r
+                    telemetry[6] = enhancer.level_gr
+                    if len(telemetry) >= 11:
+                        # M/S/I/LRA ya cacheados (el integrado se recalcula como
+                        # mucho 1 vez por segundo, no en cada bloque).
+                        if medidas is None:
+                            medidas = {
+                                "momentary_lufs": -1000.0,
+                                "short_term_lufs": -1000.0,
+                                "integrated_lufs": -1000.0,
+                                "lra_lu": 0.0,
+                            }
+                        telemetry[7] = _finito(medidas["momentary_lufs"])
+                        telemetry[8] = _finito(medidas["short_term_lufs"])
+                        telemetry[9] = _finito(medidas["integrated_lufs"])
+                        telemetry[10] = _finito(medidas["lra_lu"], defecto=0.0)
+            if child_stats is not None:
+                with child_stats.get_lock():
+                    child_stats[0] = raw_empty
+                    child_stats[1] = blocks
+                    child_stats[2] = backlog_sum
+                    child_stats[3] = clipped
+            if child_timing is not None and blocks % publish_every == 0:
+                snap = timing.snapshot()
+                with contextlib.suppress(Exception), child_timing.get_lock():
+                    child_timing[0] = snap["p50_ms"]
+                    child_timing[1] = snap["p95_ms"]
+                    child_timing[2] = snap["p99_ms"]
+                    child_timing[3] = snap["max_ms"]
+            if gr_value is not None:
+                with gr_value.get_lock():
+                    gr_value.value = float(enhancer.level_gr)
+    finally:
+        mmcss.__exit__(None, None, None)
         if child_stats is not None:
-            with child_stats.get_lock():
+            with contextlib.suppress(Exception), child_stats.get_lock():
                 child_stats[0] = raw_empty
                 child_stats[1] = blocks
                 child_stats[2] = backlog_sum
                 child_stats[3] = clipped
-        if child_timing is not None and blocks % publish_every == 0:
-            snap = timing.snapshot()
-            with contextlib.suppress(Exception), child_timing.get_lock():
-                child_timing[0] = snap["p50_ms"]
-                child_timing[1] = snap["p95_ms"]
-                child_timing[2] = snap["p99_ms"]
-                child_timing[3] = snap["max_ms"]
-        if gr_value is not None:
-            with gr_value.get_lock():
-                gr_value.value = float(enhancer.level_gr)
-        out_q.put(np.asarray(y, dtype=np.float32).tobytes())
-    mmcss.__exit__(None, None, None)
-    if child_stats is not None:
-        with contextlib.suppress(Exception), child_stats.get_lock():
-            child_stats[0] = raw_empty
-            child_stats[1] = blocks
-            child_stats[2] = backlog_sum
-            child_stats[3] = clipped
-    stop_event.set()
-    viz.join(timeout=1.0)
-    logger.info("Proceso DSP (hijo) detenido")
+        stop_event.set()
+        with contextlib.suppress(Exception):
+            viz.join(timeout=1.0)
+        logger.info("Proceso DSP (hijo) detenido")
 
 
 def _viz_loop(enhancer, spectrum_buf, spec_needed, stop_event) -> None:

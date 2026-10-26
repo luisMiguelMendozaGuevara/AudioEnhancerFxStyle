@@ -4,6 +4,54 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.7.0] — en desarrollo (rama `feat/v1.7-diagnostics`)
+
+Instrumentación y medición normativa. **No cambia el sonido** (el DSP no se
+toca): añade lo necesario para poder afirmar y comprobar lo que la app hace.
+
+### Añadido — medición de sonoridad (ITU-R BS.1770 / EBU R 128)
+- `audio_enhancer/loudness.py`: filtro K (coeficientes idénticos a la tabla del
+  anexo 1 de BS.1770-4 a 48 kHz), sonoridad **momentánea** (400 ms), de **corto
+  plazo** (3 s), **integrada** con doble gate (−70 LUFS absoluto, −10 LU
+  relativo) y **rango de sonoridad** (gate −20 LU).
+- Validado contra la tabla 1 de **EBU Tech 3341-2023** (casos 1-5, tolerancia
+  oficial ±0,1 LUFS): medido −22,993 / −32,993 / −23,014 / −23,014 / −22,979.
+- La sonoridad de la **salida** se publica por memoria compartida (huecos 7..10
+  de la telemetría) y se muestra en la barra de estado (`-16.4 LUFS`) y en el
+  informe de diagnóstico (`sonoridad M=… S=… I=… LUFS (LRA … LU)`).
+
+### Añadido — diagnóstico de latencia y de tiempo real
+- `audio_enhancer/diagnostics.py`: `RollingStats` (p50/p95/p99/max con ventana
+  acotada) y `LatencyBreakdown` (captura + ring + cola del hijo + salida, en ms).
+- `AudioEngine.latency_breakdown()` y `AudioEngine.timing_snapshot()`: la barra
+  de estado muestra latencia total y `dsp p99`; el informe exportado añade las
+  líneas `latencia=`, `dsp=` y `rt=` (estado de MMCSS).
+- `audio_enhancer/rt_priority.py`: registro del hilo de audio en **MMCSS**
+  (`avrt.dll`, tarea "Pro Audio" para el DSP y "Audio" para la bomba), con
+  reversión garantizada y degradación silenciosa fuera de Windows.
+
+### Añadido — red de seguridad de calidad de audio
+- `tests/test_audio_quality.py`: THD+N del camino neutro (**medido −151 dB**),
+  ganancia del EQ frente a la teórica (**error 0,08 dB**), techo del limitador
+  con picos inter-muestra (**−0,446 dBTP** con true-peak ×4 independiente),
+  ausencia de NaN con parámetros extremos, causalidad/retardo de grupo
+  (**0,09 muestras** en neutro) y estabilidad con la cadena completa activa.
+
+### Corregido (encontrado por las auditorías de esta iteración)
+- El gate relativo del integrado se aplicaba sobre todos los bloques y podía
+  **reabrir** el gate absoluto; ahora los dos gates se acumulan (BS.1770-4 §2.4).
+- `LoudnessMeter` usa estado `zi` con la forma que exige scipy para `axis=0`
+  (con 1 canal reventaba; funcionaba con 2 por coincidencia).
+- La medición de sonoridad ya **no puede suprimir audio**: el bloque procesado
+  se publica antes y la medición va en su propio `try`.
+- `_sync_telemetry` leía la sonoridad **dos veces**, la segunda fuera del lock.
+- Los `try/finally` de MMCSS garantizan la reversión aunque el bucle salga por
+  excepción; una excepción en la bomba ya no mata el audio en silencio.
+- El recálculo del integrado está acotado (exacto con historial corto, 1 Hz a
+  partir de 10 min) para no crecer con la duración de la sesión.
+- La UI protege el tick de métricas y el informe de diagnóstico: un fallo de
+  instrumentación ya no puede congelar la barra ni dejar al usuario sin informe.
+
 ## [1.6.1] — 2026-10-25
 
 Versión de **corrección de fallos** sobre 1.6.0 (sin cambios de esquema de

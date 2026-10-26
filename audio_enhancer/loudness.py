@@ -27,6 +27,7 @@ solo las energías por bloque. El coste por bloque son dos biquads por canal
 from __future__ import annotations
 
 import math
+import threading
 from collections import deque
 from typing import Any
 
@@ -64,6 +65,10 @@ MOMENTARY_WINDOW_S = 0.4
 SHORT_TERM_WINDOW_S = 3.0
 # Paso de actualización: 100 ms => 75 % de solape en bloques de 400 ms.
 HOP_S = 0.1
+# El integrado y el LRA se recalculan como máximo una vez por segundo: EBU Tech
+# 3341 §2.2 pide >=1 Hz para el integrado, y recalcularlos en cada tramo (10 Hz)
+# haría crecer el coste con la duración de la sesión DENTRO del bucle de audio.
+REFRESH_S = 1.0
 
 # Pesos por canal de BS.1770 (G_i). El LFE se excluye (no ponderado): EBU
 # Tech 3341 §2.10 lo prohíbe explícitamente en un medidor 'EBU Mode'.
@@ -173,17 +178,41 @@ class LoudnessMeter:
         sample_rate: int = SAMPLE_RATE,
         channels: int = 2,
         hop_s: float = HOP_S,
-        max_blocks: int = 108_000,
+        max_blocks: int = 36_000,
     ) -> None:
-        self.sample_rate = int(sample_rate) if sample_rate else SAMPLE_RATE
+        # Validación de entrada: son parámetros públicos y un 0 o un NaN aquí
+        # reventaría dentro del bucle de audio (división por cero).
+        try:
+            tasa = int(sample_rate)
+            paso = float(hop_s)
+            maximo = int(max_blocks)
+        except (TypeError, ValueError):
+            tasa, paso, maximo = SAMPLE_RATE, HOP_S, 36_000
+        if not math.isfinite(tasa) or tasa <= 0:
+            tasa = SAMPLE_RATE
+        if not math.isfinite(paso) or paso <= 0.0:
+            paso = HOP_S
+        if maximo < 8:
+            maximo = 8
+        self.sample_rate = tasa
         self.channels = max(1, min(int(channels), len(_CHANNEL_WEIGHTS)))
-        self.hop_frames = max(1, int(round(hop_s * self.sample_rate)))
+        self.hop_frames = max(1, int(round(paso * self.sample_rate)))
         self._sos = k_weighting_sos(self.sample_rate)
         weights = np.asarray(_CHANNEL_WEIGHTS[: self.channels], dtype=np.float64)
         self._weights = weights
-        self._momentary_hops = max(1, int(round(MOMENTARY_WINDOW_S / hop_s)))
-        self._short_term_hops = max(1, int(round(SHORT_TERM_WINDOW_S / hop_s)))
-        self._max_blocks = max(self._momentary_hops, int(max_blocks))
+        self._momentary_hops = max(1, int(round(MOMENTARY_WINDOW_S / paso)))
+        self._short_term_hops = max(1, int(round(SHORT_TERM_WINDOW_S / paso)))
+        self._max_blocks = max(self._momentary_hops, maximo)
+        # Recalculo del integrado/LRA: exacto con historial corto, estrangulado a
+        # 1 Hz cuando el historial ya es largo (así el coste está acotado sin
+        # perder precisión en sesiones normales).
+        self._refresh_hops = max(1, int(round(REFRESH_S / paso)))
+        self._umbral_lento = 6000  # ~10 min de audio (10 bloques/s)
+        # El medidor se escribe desde el hilo de DSP y se lee desde la UI (en el
+        # modo sin proceso hijo): sin lock, `list(deque)` puede lanzar
+        # "deque mutated during iteration" dentro de un slot de Qt. El lock es
+        # reentrante porque las propiedades se llaman entre sí y desde snapshot().
+        self._lock = threading.RLock()
         # Energías por tramo: z_i por canal, sin ponderar por G_i (los pesos se
         # aplican al agregar). Así el mismo tramo sirve para M, S e I.
         self._hops: deque[np.ndarray] = deque(maxlen=self._short_term_hops)
@@ -200,6 +229,9 @@ class LoudnessMeter:
         self._st_n = 0
         self._cache_key: tuple[int, int] = (-1, -1)
         self._cache: dict[str, float] = {}
+        # Contador total de tramos cerrados: marca cuándo toca recalcular.
+        self._hop_counter = 0
+        self._cache_hop = -1
         self._zi: np.ndarray | None = None
         self._acc = np.zeros(self.channels, dtype=np.float64)
         self._acc_n = 0
@@ -209,23 +241,30 @@ class LoudnessMeter:
 
     def reset(self) -> None:
         """Reinicia medidas (equivale al 'reset' de un medidor EBU)."""
-        self._hops.clear()
-        self._reiniciar_acumuladores()
-        self._acc = np.zeros(self.channels, dtype=np.float64)
-        self._acc_n = 0
-        # Estado del filtro K: ceros => el primer bloque no arrastra transitorio
-        # de una medición anterior (p. ej. tras cambiar de dispositivo).
-        self._zi = np.zeros((2, self.channels, 2), dtype=np.float64)
+        with self._lock:
+            self._hops.clear()
+            self._reiniciar_acumuladores()
+            self._acc = np.zeros(self.channels, dtype=np.float64)
+            self._acc_n = 0
+            # Estado del filtro K: ceros => el primer bloque no arrastra
+            # transitorio de una medición anterior (p. ej. tras cambiar de
+            # dispositivo). Forma (secciones, orden, canales): es la que exige
+            # scipy para axis=0. Con (secciones, canales, orden) funciona por
+            # coincidencia con 2 canales y REVIENTA con 1 (lo cazó el test de
+            # parámetros degenerados).
+            self._zi = np.zeros((self._sos.shape[0], 2, self.channels), dtype=np.float64)
 
     def reset_integrated(self) -> None:
         """Reinicia solo el integrado y el LRA (M y S siguen midiendo)."""
-        self._reiniciar_acumuladores()
+        with self._lock:
+            self._reiniciar_acumuladores()
 
     def _reiniciar_acumuladores(self) -> None:
         """Vacía bloques integrados y serie de corto plazo, e invalida la caché."""
         self._block_n = 0
         self._st_n = 0
         self._cache_key = (-1, -1)
+        self._cache_hop = -1  # fuerza recálculo en la próxima lectura
         self._cache = {}
 
     # ---------- medida ----------
@@ -234,6 +273,11 @@ class LoudnessMeter:
         """Procesa un bloque de audio ``(N, canales)`` y actualiza las medidas."""
         if block is None or block.size == 0:
             return
+        with self._lock:
+            self._procesar(block)
+
+    def _procesar(self, block: np.ndarray) -> None:
+        """Cuerpo de :meth:`process` (ya con el lock tomado)."""
         datos = np.asarray(block, dtype=np.float64)
         if datos.ndim == 1:
             datos = datos[:, None]
@@ -261,6 +305,7 @@ class LoudnessMeter:
         energia = self._acc / float(self._acc_n)  # z_i medio del tramo
         self._acc = np.zeros(self.channels, dtype=np.float64)
         self._acc_n = 0
+        self._hop_counter += 1
         self._hops.append(energia)
         # Bloque de 400 ms (solo cuando hay ventana completa).
         if len(self._hops) >= self._momentary_hops:
@@ -281,27 +326,30 @@ class LoudnessMeter:
                 self._block_energy = nuevo
             else:
                 # Desplazar la mitad: amortizado (una vez cada miles de bloques).
-                mitad = self._block_n // 2
-                self._block_energy[:mitad] = self._block_energy[mitad : self._block_n]
-                self._block_n = mitad
+                # ``max(1, ...)`` evita el caso degenerado mitad == 0 (con
+                # max_blocks diminutos) que haría fallar el broadcast de numpy.
+                mitad = max(1, self._block_n // 2)
+                self._block_energy[: self._block_n - mitad] = self._block_energy[mitad : self._block_n]
+                self._block_n -= mitad
         self._block_energy[self._block_n] = energia
         self._block_n += 1
 
     def _empujar_st(self, energia: float) -> None:
         """Añade una posición de sonoridad de corto plazo (memoria acotada)."""
         if self._st_n == self._st_energy.size:
-            mitad = self._st_n // 2
-            self._st_energy[:mitad] = self._st_energy[mitad : self._st_n]
-            self._st_n = mitad
+            mitad = max(1, self._st_n // 2)
+            self._st_energy[: self._st_n - mitad] = self._st_energy[mitad : self._st_n]
+            self._st_n -= mitad
         self._st_energy[self._st_n] = energia
         self._st_n += 1
 
     # ---------- lecturas ----------
 
     def _ventana_energia(self, tramos: int) -> float:
-        if len(self._hops) < tramos:
-            return -1.0  # sin ventana completa: medida no válida
-        reciente = list(self._hops)[-tramos:]
+        with self._lock:
+            if len(self._hops) < tramos:
+                return -1.0  # sin ventana completa: medida no válida
+            reciente = list(self._hops)[-tramos:]
         return float(np.mean(np.asarray(reciente), axis=0) @ self._weights)
 
     @property
@@ -328,14 +376,18 @@ class LoudnessMeter:
             absolutos = energias[energias > 0.0]
             if absolutos.size:
                 niveles = LOUDNESS_OFFSET_DB + 10.0 * np.log10(np.maximum(absolutos, 1e-30))
-                # Gate absoluto (-70 LUFS) y después relativo (-10 LU).
+                # Gate ABSOLUTO (-70 LUFS): define el conjunto J_a sobre el que se
+                # calcula el umbral relativo (BS.1770-4 §2.4, EBU Tech 3341 §2.3).
                 pasa_abs = niveles > GATE_ABSOLUTE_LUFS
                 if pasa_abs.any():
                     energia_abs = float(np.mean(absolutos[pasa_abs]))
                     umbral_rel = energy_to_lufs(energia_abs) + GATE_RELATIVE_LU
-                    pasa_rel = niveles > umbral_rel
-                    if pasa_rel.any():
-                        integrada = energy_to_lufs(float(np.mean(absolutos[pasa_rel])))
+                    # Gate RELATIVO (-10 LU): se aplica SOBRE J_a, nunca lo reabre
+                    # (antes se comparaba contra todos los bloques y un programa
+                    # muy silencioso podía colar bloques que el absoluto excluía).
+                    pasa = pasa_abs & (niveles > umbral_rel)
+                    if pasa.any():
+                        integrada = energy_to_lufs(float(np.mean(absolutos[pasa])))
         return integrada, self._lra()
 
     def _lra(self) -> float:
@@ -348,24 +400,32 @@ class LoudnessMeter:
         if not pasa_abs.any():
             return 0.0
         umbral_rel = energy_to_lufs(float(np.mean(energia[pasa_abs]))) + LRA_GATE_RELATIVE_LU
-        niveles = niveles[niveles > umbral_rel]
+        # Igual que en el integrado: los dos gates se acumulan, no se sustituyen.
+        niveles = niveles[pasa_abs & (niveles > umbral_rel)]
         if niveles.size < 2:
             return 0.0
         bajo, alto = np.percentile(niveles, [10.0, 95.0])
         return float(max(0.0, alto - bajo))
 
     def _actualizar_cache(self) -> None:
-        """Recalcula integrada/LRA solo si han entrado tramos nuevos.
+        """Recalcula integrada/LRA cuando entra un bloque nuevo (con tope de coste).
 
-        La UI llama a snapshot() a 10 Hz; sin esta caché los percentiles del LRA
-        se recalcularían dos veces por segundo sobre toda la sesión.
+        Con historial corto (<= 10 min) se recalcula siempre: es exacto y barato.
+        A partir de ahí se limita a 1 Hz, el mínimo que exige EBU Tech 3341 §2.2
+        para el integrado: recalcular 36 000 bloques 10 veces por segundo dentro
+        del bucle de audio haría crecer el coste con la duración de la sesión.
         """
-        clave = (self._block_n, self._st_n)
-        if clave == self._cache_key:
-            return
-        integrada, lra = self._integradas()
-        self._cache = {"integrated_lufs": integrada, "lra_lu": lra}
-        self._cache_key = clave
+        with self._lock:
+            clave = (self._block_n, self._st_n)
+            if clave == self._cache_key:
+                return
+            paso_minimo = 1 if self._block_n <= self._umbral_lento else self._refresh_hops
+            if self._cache_hop >= 0 and (self._hop_counter - self._cache_hop) < paso_minimo:
+                return
+            integrada, lra = self._integradas()
+            self._cache = {"integrated_lufs": integrada, "lra_lu": lra}
+            self._cache_key = clave
+            self._cache_hop = self._hop_counter
 
     @property
     def loudness_range_lu(self) -> float:
@@ -376,16 +436,21 @@ class LoudnessMeter:
     def snapshot(self) -> dict[str, float]:
         """Medidas actuales como dict (lista para telemetría/UI)."""
         self._actualizar_cache()
+        with self._lock:
+            cache = dict(self._cache)
+            momentanea = self.momentary_lufs
+            corto = self.short_term_lufs
         return {
-            "momentary_lufs": self.momentary_lufs,
-            "short_term_lufs": self.short_term_lufs,
-            "integrated_lufs": self._cache["integrated_lufs"],
-            "lra_lu": self._cache["lra_lu"],
+            "momentary_lufs": momentanea,
+            "short_term_lufs": corto,
+            "integrated_lufs": cache.get("integrated_lufs", -math.inf),
+            "lra_lu": cache.get("lra_lu", 0.0),
         }
 
     def __len__(self) -> int:
-        """Número de bloques de 400 ms medidos (los que usa el integrado)."""
-        return self._block_n
+        """Número de bloques de 400 ms en el historial del integrado."""
+        with self._lock:
+            return self._block_n
 
     def __repr__(self) -> str:  # pragma: no cover - ayuda de depuración
         datos: Any = self.snapshot()

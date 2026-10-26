@@ -10,8 +10,6 @@ Regla de la iteración: el módulo puro se prueba aparte (test_diagnostics.py);
 aquí solo se prueba que el cableado devuelve lo que dice devolver.
 """
 
-import contextlib
-import math
 import queue
 import threading
 from types import SimpleNamespace
@@ -191,10 +189,14 @@ def _procesar_en_hilo(child_timing, bloques_esperados=8):
         daemon=True,
     )
     hilo.start()
-    for _ in range(bloques_esperados):
-        assert out_q.get(timeout=10) is not None
-    stop.set()
-    hilo.join(timeout=5)
+    try:
+        for _ in range(bloques_esperados):
+            assert out_q.get(timeout=10) is not None
+    finally:
+        # Sin este finally, un fallo deja vivos el hilo del hijo y su hilo "viz"
+        # girando a 10 Hz durante el resto de la sesión de tests.
+        stop.set()
+        hilo.join(timeout=5)
 
 
 def test_child_main_publica_percentiles_del_dsp():
@@ -206,12 +208,14 @@ def test_child_main_publica_percentiles_del_dsp():
     """
     child_timing = _FakeSharedArray([0.0, 0.0, 0.0, 0.0])
 
-    with contextlib.suppress(Exception):
-        _procesar_en_hilo(child_timing, bloques_esperados=8)
+    _procesar_en_hilo(child_timing, bloques_esperados=8)
 
     p50, p95, p99, pico = child_timing.values
     assert p50 > 0.0, "el hijo no publicó tiempos (child_timing sin escribir)"
     assert p50 <= p95 <= p99 <= pico
+    # Magnitud, no solo signo: silencio por la cadena por defecto no puede costar
+    # 25 ms (el presupuesto entero del bloque) ni microsegundos (unidades mal).
+    assert 0.05 <= p50 <= 10.0, f"p50={p50:.3f} ms fuera de un rango plausible"
 
 
 # ---------- sonoridad (BS.1770) publicada por el hijo ----------
@@ -242,7 +246,7 @@ def test_child_main_publica_la_sonoridad_de_la_salida():
     out_q = queue.Queue()
     params_q = queue.Queue()
     stop = threading.Event()
-    telemetria = _FakeSharedArray([0.0] * 10)
+    telemetria = _FakeSharedArray([0.0] * 11)
     audio = _seno_estereo(12.0, -23.0)
     bloques = [audio[i : i + CHUNK] for i in range(0, len(audio), CHUNK)]
     for bloque in bloques:
@@ -260,14 +264,17 @@ def test_child_main_publica_la_sonoridad_de_la_salida():
     hilo.join(timeout=5)
 
     momentanea, corto_plazo, integrada = (telemetria.values[7], telemetria.values[8], telemetria.values[9])
-    assert momentanea == pytest.approx(-23.0, abs=0.5), f"M={momentanea:.2f} LUFS"
-    assert corto_plazo == pytest.approx(-23.0, abs=0.5), f"S={corto_plazo:.2f} LUFS"
-    assert integrada == pytest.approx(-23.0, abs=0.5), f"I={integrada:.2f} LUFS"
+    rango = telemetria.values[10]
+    assert momentanea == pytest.approx(-23.0, abs=0.15), f"M={momentanea:.2f} LUFS"
+    assert corto_plazo == pytest.approx(-23.0, abs=0.15), f"S={corto_plazo:.2f} LUFS"
+    assert integrada == pytest.approx(-23.0, abs=0.15), f"I={integrada:.2f} LUFS"
+    # LRA de un tono constante: 0 LU (publicado en el hueco 10).
+    assert rango == pytest.approx(0.0, abs=0.2), f"LRA={rango:.2f} LU"
 
 
 def test_engine_expone_la_sonoridad_del_hijo(engine):
     """_sync_telemetry copia los huecos 7..9 y loudness_snapshot() los publica."""
-    engine._telemetry = _FakeSharedArray([0.0] * 7 + [-23.0, -24.5, -22.0])
+    engine._telemetry = _FakeSharedArray([0.0] * 7 + [-23.0, -24.5, -22.0, 3.5])
     engine._sync_telemetry()
 
     snap = engine.loudness_snapshot()
@@ -275,6 +282,7 @@ def test_engine_expone_la_sonoridad_del_hijo(engine):
     assert snap["momentary_lufs"] == pytest.approx(-23.0)
     assert snap["short_term_lufs"] == pytest.approx(-24.5)
     assert snap["integrated_lufs"] == pytest.approx(-22.0)
+    assert snap["lra_lu"] == pytest.approx(3.5)
 
 
 def test_engine_sin_telemetria_de_sonoridad_no_falla(engine):
@@ -282,10 +290,11 @@ def test_engine_sin_telemetria_de_sonoridad_no_falla(engine):
     engine._telemetry = _FakeSharedArray([0.0] * 7)
     engine._sync_telemetry()
 
+    # Contrato unico en ambos caminos: -1000.0 = "sin medida" (no -inf).
     assert engine.loudness_snapshot() == {
-        "momentary_lufs": -math.inf,
-        "short_term_lufs": -math.inf,
-        "integrated_lufs": -math.inf,
+        "momentary_lufs": -1000.0,
+        "short_term_lufs": -1000.0,
+        "integrated_lufs": -1000.0,
         "lra_lu": 0.0,
     }
 
@@ -303,3 +312,58 @@ def test_el_medidor_local_mide_la_salida_del_hilo_de_dsp(engine):
 
     assert snap["momentary_lufs"] == pytest.approx(-23.0, abs=0.3)
     assert snap["integrated_lufs"] == pytest.approx(-23.0, abs=0.3)
+
+
+# ---------- cableado real del hilo de DSP (lo que la suite NO cubría) ----------
+
+
+def test_dsp_loop_body_alimenta_el_ring_y_mide(engine, monkeypatch):
+    """`_dsp_loop_body` de verdad: lee, procesa, publica, mide y cuenta tiempos.
+
+    Antes este cableado no lo ejecutaba ningún test: se podía borrar
+    `self._local_meter.process(y)` (o `self._put(y)`) y las 445 pruebas seguían
+    verdes con el diagnóstico (o el audio) muerto en el modo sin proceso hijo.
+    """
+    engine.configure_ring(SAMPLE_RATE)
+    audio = _seno_estereo(6.0, -23.0)
+    bloques = [audio[i : i + CHUNK] for i in range(0, len(audio), CHUNK)]
+    pendientes = list(bloques)
+
+    def falso_read_raw():
+        return pendientes.pop(0) if pendientes else None
+
+    monkeypatch.setattr(engine, "_read_raw", falso_read_raw)
+    monkeypatch.setattr(engine, "_dsp_running", True, raising=False)
+
+    def parar_cuando_no_haya(*args, **kwargs):
+        if not pendientes:
+            engine._dsp_running = False
+
+    monkeypatch.setattr(engine, "_put", lambda data, _orig=engine._put: (_orig(data), parar_cuando_no_haya())[0])
+    monkeypatch.setattr(engine, "_dsp_wakeup", None, raising=False)
+
+    engine._dsp_loop_body()
+
+    # 1) El audio llegó al ring: hay frames escritos.
+    assert engine.write_pos > 0, "el hilo de DSP no publicó audio"
+    # 2) El coste por bloque se midió (percentiles con muestras).
+    assert engine._local_dsp_ms.count == len(bloques), "no se midió el coste por bloque"
+    assert engine.timing_snapshot()["max_ms"] > 0.0
+    # 3) El medidor local mide la salida (sonoridad real, no centinela).
+    lufs = engine.loudness_snapshot()["momentary_lufs"]
+    assert -30.0 < lufs < -15.0, f"sonoridad local fuera de rango: {lufs}"
+
+
+def test_loudness_snapshot_tiene_las_mismas_claves_en_los_dos_caminos(engine):
+    """Contrato único: 4 claves siempre (antes el camino del hijo devolvía 3)."""
+    claves = {"momentary_lufs", "short_term_lufs", "integrated_lufs", "lra_lu"}
+
+    assert set(engine.loudness_snapshot()) == claves  # sin hijo
+
+    engine._child_loudness = {
+        "momentary_lufs": -20.0,
+        "short_term_lufs": -21.0,
+        "integrated_lufs": -22.0,
+        "lra_lu": 4.0,
+    }
+    assert set(engine.loudness_snapshot()) == claves  # con hijo

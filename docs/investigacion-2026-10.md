@@ -229,11 +229,11 @@ muestra**. Antes de plantear numba/Rust: medir con `benchmarks/bench_dsp.py`.
 ## 6. Roadmap propuesto
 
 **v1.7 — "medir y no romper"** (riesgo bajo, todo verificable)
-1. Desglose de latencia instrumentado (captura / ring / IPC / DSP / render) visible en Ajustes.
-2. Contadores de xrun + p99 del callback.
+1. Desglose de latencia instrumentado (captura / ring / cola del hijo / render) visible en la **barra de estado** y en el informe de diagnóstico exportado.
+2. Contadores de xrun + p99 del **coste de `Enhancer.process()` por bloque** (el callback de PortAudio sigue sin instrumentar: es backlog).
 3. MMCSS "Pro Audio" en el hilo DSP.
 4. Tests de calidad objetiva + golden espectrales.
-5. Medidor LUFS-M/S + true-peak en UI (solo medición, sin cambiar el AGC).
+5. Medidor LUFS-M/S/I + LRA en UI (solo medición, sin cambiar el AGC). El true-peak en UI queda pendiente.
 6. Curva de respuesta resultante dibujada en la UI.
 7. Firma con SignPath + onedir como distribución principal.
 

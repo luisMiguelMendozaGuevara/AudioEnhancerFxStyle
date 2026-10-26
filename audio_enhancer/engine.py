@@ -9,6 +9,7 @@ orquestado desde el hilo de la UI.
 
 import contextlib
 import logging
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -23,7 +24,7 @@ from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, SAMPLE_RATE, STARTU
 from .diagnostics import RollingStats
 from .diagnostics import latency_breakdown as _latency_breakdown
 from .loudness import LoudnessMeter
-from .rt_priority import mmcss_pro_audio
+from .rt_priority import AVRT_PRIORITY_HIGH, mmcss_pro_audio
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -178,6 +179,8 @@ class AudioEngine:
         self._local_meter = LoudnessMeter(sample_rate=SAMPLE_RATE, channels=2)
         # Registro MMCSS del hilo que alimenta la salida (se revierte al parar).
         self._pump_mmcss: Any = None
+        # Evita inundar el log si el medidor de sonoridad falla en cada bloque.
+        self._meter_error_logged = False
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -271,11 +274,16 @@ class AudioEngine:
         """Sonoridad LUFS de la señal procesada (M, S, I y LRA).
 
         Con proceso hijo devuelve lo publicado por él; sin él, la medición
-        local del hilo de DSP. -1000.0 significa 'sin medida' (silencio o aún
-        sin ventana completa)."""
-        if self._child_loudness:
-            return dict(self._child_loudness)
-        return self._local_meter.snapshot()
+        local del hilo de DSP. Contrato único en ambos caminos: 4 claves y
+        -1000.0 como 'sin medida' (silencio o ventana aún incompleta)."""
+        datos = self._child_loudness or self._local_meter.snapshot()
+        salida: dict[str, float] = {}
+        for clave in ("momentary_lufs", "short_term_lufs", "integrated_lufs"):
+            valor = float(datos.get(clave, -1000.0))
+            salida[clave] = valor if math.isfinite(valor) and valor > -100.0 else -1000.0
+        lra = float(datos.get("lra_lu", 0.0) or 0.0)
+        salida["lra_lu"] = lra if math.isfinite(lra) else 0.0
+        return salida
 
     def latency_breakdown(self) -> dict[str, float]:
         """Desglose de la latencia del pipeline en ms (diagnóstico de la UI).
@@ -698,9 +706,9 @@ class AudioEngine:
         # El FFT del espectro y la medición de niveles se hacen en el HIJO (su
         # GIL): si se hacen en el padre compiten con el callback de salida y
         # dañan el audio justo cuando el espectro está visible.
-        # 10 huecos: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr, lufs_m, lufs_s, lufs_i].
-        # Los tres últimos son sonoridad BS.1770 de la salida (medidor EBU).
-        self._telemetry = ctx.Array("f", 10)
+        # 11 huecos: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr, lufs_m, lufs_s, lufs_i, lra].
+        # Los cuatro últimos son sonoridad BS.1770 de la salida (medidor EBU).
+        self._telemetry = ctx.Array("f", 11)
         self._spectrum_buf = ctx.Array("f", 64)
         self._spec_needed = ctx.Value("b", 0)
         # Diagnóstico (Paso 0) del hijo: [raw_empty, blocks, backlog_sum,
@@ -792,6 +800,12 @@ class AudioEngine:
             self._dsp_proc.terminate()
             self._dsp_proc.join(timeout=1.0)
         self._dsp_proc = None
+        # Limpiar el estado publicado por el hijo: tras un stop+start (cambio de
+        # dispositivo, reinicio del audio) la UI mostraba durante ~200 ms el
+        # LUFS y los tiempos del dispositivo ANTERIOR.
+        self._child_dsp_ms = {}
+        self._child_loudness = {}
+        self._local_meter.reset()
 
     def _pump(self) -> None:
         """Un solo hilo mueve crudo->hijo y procesado->salida.
@@ -806,12 +820,21 @@ class AudioEngine:
         en operación normal: solo el desborde del ring crudo (~1 s de margen,
         ``raw_ring_drops``) puede descartar audio."""
         self._set_thread_priority()
-        # MMCSS "Audio": el hilo que alimenta la salida se registra en el
-        # planificador multimedia, así el repintado de la Qt no lo desplaza
-        # (sin registro, el ring se vacía y el callback inserta silencio).
-        # No-op fuera de Windows o si avrt.dll no está disponible.
-        self._pump_mmcss = mmcss_pro_audio("Audio")
-        self._pump_mmcss.__enter__()
+        # MMCSS "Audio" con prioridad HIGH (no CRITICAL): este hilo copia bytes y
+        # comparte `self.lock` con los callbacks de PortAudio; CRITICAL se reserva
+        # al hilo que procesa el DSP. Con `with` el registro se revierte aunque
+        # el bucle salga por excepción.
+        self._pump_mmcss = mmcss_pro_audio("Audio", priority=AVRT_PRIORITY_HIGH)
+        try:
+            with self._pump_mmcss:
+                self._pump_loop()
+        except Exception:
+            # Sin este log, una excepción aquí mataba el hilo de audio en
+            # silencio (los streams siguen activos y el watchdog no lo ve).
+            logger.exception("La bomba de audio terminó por una excepción")
+
+    def _pump_loop(self) -> None:
+        """Cuerpo del hilo bomba (ver :meth:`_pump`)."""
         pending = None  # bloque ya leído que no pudo entregarse (cola llena)
         while self._dsp_running:
             raw_q = self._raw_q
@@ -858,7 +881,6 @@ class AudioEngine:
                 self._pump_wait(0.002)  # hijo atrasado: reintentar sin quemar CPU
             elif block is None and not got:
                 self._pump_wait(0.005)  # despierta al llegar crudo o salida
-        self._pump_mmcss.__exit__(None, None, None)
 
     def _pump_wait(self, timeout: float) -> None:
         """Espera de la bomba por EVENTO (crudo nuevo o salida del hijo) con
@@ -886,15 +908,16 @@ class AudioEngine:
             e.level_peak_l = t[4]
             e.level_peak_r = t[5]
             e.level_gr = t[6]
-            # Sonoridad de la salida (huecos 7..9), si el hijo los publica. Se
+            # Sonoridad de la salida (huecos 7..10), si el hijo los publica. Se
             # leen DENTRO del lock: un Array('f') compartido no garantiza
-            # lectura atómica de un float fuera de él.
-            con_sonoridad = len(t) >= 10
-            if con_sonoridad:
+            # lectura atómica de un float fuera de él. (Antes este bloque estaba
+            # DUPLICADO fuera del lock, deshaciendo la garantía.)
+            if len(t) >= 11:
                 self._child_loudness = {
                     "momentary_lufs": float(t[7]),
                     "short_term_lufs": float(t[8]),
                     "integrated_lufs": float(t[9]),
+                    "lra_lu": float(t[10]),
                 }
         # Tiempos de proceso del hijo (4 doubles): copia barata, sin numpy.
         ct = self._child_timing
@@ -905,14 +928,6 @@ class AudioEngine:
                     "p95_ms": float(ct[1]),
                     "p99_ms": float(ct[2]),
                     "max_ms": float(ct[3]),
-                }
-        # Sonoridad de la salida (huecos 7..9), si el hijo los publica.
-        if len(t) >= 10:
-            with contextlib.suppress(Exception):
-                self._child_loudness = {
-                    "momentary_lufs": float(t[7]),
-                    "short_term_lufs": float(t[8]),
-                    "integrated_lufs": float(t[9]),
                 }
 
     def has_dsp_process(self) -> bool:
@@ -965,9 +980,16 @@ class AudioEngine:
         """Hilo dedicado: lee crudo, procesa y alimenta el ring de salida."""
         logger.info("Hilo de DSP iniciado")
         # Mismo registro MMCSS que el hijo: este camino (sin proceso aparte) es
-        # el que usan los tests y el modo AUDIO_ENHANCER_NO_DSP_PROCESS.
-        mmcss = mmcss_pro_audio("Pro Audio")
-        mmcss.__enter__()
+        # el que usan los tests y el modo AUDIO_ENHANCER_NO_DSP_PROCESS. Con
+        # `with` el registro se revierte aunque el bucle salga por excepción.
+        try:
+            with mmcss_pro_audio("Pro Audio"):
+                self._dsp_loop_body()
+        finally:
+            logger.info("Hilo de DSP detenido")
+
+    def _dsp_loop_body(self) -> None:
+        """Cuerpo del hilo de DSP (ver :meth:`_dsp_loop`)."""
         while self._dsp_running:
             block = self._read_raw()
             if block is None:
@@ -985,13 +1007,19 @@ class AudioEngine:
                 y = self.enhancer.process(block)
                 # Coste real por bloque (percentiles en timing_snapshot()).
                 self._local_dsp_ms.add(time.perf_counter() - t0)
-                # Sonoridad de la salida, igual que en el proceso hijo.
-                self._local_meter.process(y)
+                # El audio SALE primero: medir es accesorio y no debe poder
+                # suprimir un bloque ya procesado.
                 self._put(y)
             except Exception:
                 logger.exception("Error en el hilo de DSP")
-        mmcss.__exit__(None, None, None)
-        logger.info("Hilo de DSP detenido")
+                continue
+            # Sonoridad de la salida, igual que en el proceso hijo, aislada.
+            try:
+                self._local_meter.process(y)
+            except Exception:
+                if not self._meter_error_logged:
+                    self._meter_error_logged = True
+                    logger.exception("El medidor de sonoridad falló (diagnóstico LUFS desactivado)")
 
     def _out_callback(self, in_data, frame_count, time_info, status):
         if self.ring is None or self._pa_mod is None:

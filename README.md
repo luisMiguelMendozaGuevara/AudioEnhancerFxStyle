@@ -20,6 +20,12 @@ Real-time audio enhancer for Windows inspired by FxSound. Captures rendered audi
 - **Isolated DSP Child Process**: runs DSP and FFT spectrum analysis outside the main UI/PortAudio GIL, with adaptive 64-bar spectrum analyzer, stereo L/R + gain-reduction meters, and stream watchdog.
 - **Low-latency Ring Buffer**: cubic Hermite fractional resampling for clock-drift compensation (up to ±3% skew), grace-repeat crossfades on partial underruns, and automatic 250 ms stability boost.
 - **Built-in & Custom Presets (v2)**: automatic v1→v2 migration, JSON import/export, **automatic per-output-device preset memory**, and instant A/B bypass comparison.
+- **Loudness metering (ITU-R BS.1770 / EBU R 128)**: K-weighted momentary,
+  short-term and gated integrated loudness (LUFS) plus loudness range, measured
+  on the output and shown in the status bar and the exported diagnostics report.
+- **Built-in diagnostics**: latency breakdown per stage (capture block, ring
+  cushion, DSP queue, output block), per-block DSP percentiles (p50/p95/p99),
+  xrun counters and MMCSS ("Pro Audio") registration for the audio threads.
 - **Modern PySide6 Interface**: bilingual English / Spanish UI with Dark and Light themes and system tray integration.
 
 ## Interface Language

@@ -37,20 +37,30 @@ class FakeAvrt:
     def __init__(self, handle: int = 1) -> None:
         self.handle = handle
         self.revert_calls = 0
+        self.characteristic_calls = 0
         self.priority_calls: list[tuple[int, int]] = []
+        self.priority_result = 1
+        self.events: list[str] = []
         self.task_name = ""
         self.task_index = 0
+        self.task_index_out = 0
 
         def set_characteristics(name: str, index_ptr: object) -> int:
+            self.characteristic_calls += 1
+            self.events.append("set")
             self.task_name = str(name)
             self.task_index = _dword_apuntado(index_ptr)
+            if self.task_index_out and getattr(index_ptr, "_obj", None) is not None:
+                index_ptr._obj.value = self.task_index_out
             return self.handle
 
         def set_priority(hnd: int, priority: int) -> int:
+            self.events.append("priority")
             self.priority_calls.append((hnd, priority))
-            return 1
+            return self.priority_result
 
         def revert(hnd: int) -> int:
+            self.events.append("revert")
             self.revert_calls += 1
             return 1
 
@@ -194,3 +204,102 @@ def test_enter_y_exit_son_idempotentes(monkeypatch):
     hilo.__exit__(None, None, None)  # doble salida: revierte una sola vez
     assert fake.revert_calls == 1
     assert hilo.registered is False
+
+
+# ---------- huecos que la primera versión no cubría --------------
+
+
+def test_mmcss_available_es_verdadero_cuando_avrt_carga(monkeypatch):
+    """`mmcss_available()` debe devolver True con avrt disponible.
+
+    Antes solo se probaba el camino de fallo: se podía dejar un `return False`
+    cableado y los 11 tests seguían verdes (la UI diría "sin MMCSS" siempre).
+    """
+    avrt = FakeAvrt()
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: avrt)
+
+    assert rt_priority.mmcss_available() is True
+
+
+def test_mmcss_available_es_falso_si_avrt_no_carga(monkeypatch):
+    """Y False cuando la DLL no está: el camino contrario, probado explícitamente."""
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: None)
+
+    assert rt_priority.mmcss_available() is False
+
+
+def test_orden_de_llamadas_set_priority_revert(monkeypatch):
+    """El orden importa: característica -> prioridad -> revert (nunca al revés)."""
+    avrt = FakeAvrt()
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: avrt)
+    monkeypatch.setattr(ctypes, "WinDLL", _fake_win_dll(avrt), raising=False)
+
+    with rt_priority.mmcss_pro_audio("Pro Audio") as hilo:
+        assert hilo.registered is True
+
+    assert avrt.events == ["set", "priority", "revert"]
+
+
+def test_si_falla_la_prioridad_se_mantiene_el_registro_y_se_revierte(monkeypatch):
+    """Contrato documentado: AvSetMmThreadPriority=0 NO cancela el registro."""
+    avrt = FakeAvrt()
+    avrt.priority_result = 0
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: avrt)
+    monkeypatch.setattr(ctypes, "WinDLL", _fake_win_dll(avrt), raising=False)
+
+    with rt_priority.mmcss_pro_audio("Pro Audio") as hilo:
+        assert hilo.registered is True
+
+    assert avrt.revert_calls == 1
+
+
+def test_el_task_index_devuelto_por_windows_se_expone(monkeypatch):
+    """El índice que escribe avrt.dll debe llegar a la propiedad (antes era 0 fijo)."""
+    avrt = FakeAvrt()
+    avrt.task_index_out = 7
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: avrt)
+    monkeypatch.setattr(ctypes, "WinDLL", _fake_win_dll(avrt), raising=False)
+
+    with rt_priority.mmcss_pro_audio("Pro Audio") as hilo:
+        assert hilo.task_index == 7
+
+
+def test_una_excepcion_dentro_del_bloque_revierte_el_registro(monkeypatch):
+    """Si el cuerpo del `with` lanza, MMCSS se revierte igualmente."""
+    avrt = FakeAvrt()
+    monkeypatch.setattr(rt_priority, "_load_avrt", lambda: avrt)
+    monkeypatch.setattr(ctypes, "WinDLL", _fake_win_dll(avrt), raising=False)
+
+    try:
+        with rt_priority.mmcss_pro_audio("Pro Audio"):
+            raise RuntimeError("fallo simulado en el cuerpo")
+    except RuntimeError:
+        pass
+
+    assert avrt.revert_calls == 1
+    assert avrt.events[-1] == "revert"
+
+
+def test_elevate_thread_priority_falla_si_set_thread_priority_devuelve_cero(monkeypatch):
+    """El único camino que devuelve False (handle válido, set falla) sin cubrir antes."""
+    llamadas = {"close": 0}
+
+    def open_thread(*args, **kwargs):
+        return 1234
+
+    def set_thread_priority(handle, prioridad):
+        return 0
+
+    def close(handle):
+        llamadas["close"] += 1
+        return 1
+
+    fake_kernel32 = SimpleNamespace(
+        OpenThread=open_thread,
+        SetThreadPriority=set_thread_priority,
+        CloseHandle=close,
+    )
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=fake_kernel32), raising=False)
+
+    assert rt_priority.elevate_thread_priority() is False
+    assert llamadas["close"] == 1, "el handle debe cerrarse aunque falle la prioridad"
