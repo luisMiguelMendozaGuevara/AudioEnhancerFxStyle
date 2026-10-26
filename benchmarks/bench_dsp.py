@@ -17,6 +17,7 @@ Escenarios:
                 señal moderada por debajo de umbrales (caso común)
     full_hot    cadena completa con señal sobre umbrales (compresión y
                 limitación activas, peor caso de CPU)
+    full_hot_leveling  igual que full_hot con el AGC por LUFS activo (filtro K)
     full_hot_sin_limiter  igual pero con el limitador APAGADO y señal que
                 cruza el techo de seguridad en todos los bloques
     spectrum    compute_spectrum() por tick (hilo de UI, no callback)
@@ -146,6 +147,12 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
             _make_enhancer(volume=1.4),
             lambda _i: hot,
         ),
+        # Leveling por sonoridad (BS.1770): añade el filtro K (2 biquads) y las
+        # envolventes lentas. Es el escenario que vigila ese coste en el tiempo.
+        "full_hot_leveling": (
+            _make_enhancer(volume=1.4, leveling=10.0),
+            lambda _i: hot,
+        ),
         # Peor caso del techo de seguridad: limitador musical APAGADO con
         # señal que cruza el techo en todos los bloques (el look-ahead entra
         # como techo 0.99; mismo coste que el limitador true-peak activo).
@@ -189,18 +196,18 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
 def _print_table(results: dict) -> None:
     meta = results["_meta"]
     print(f"_DSP benchmark — bloque de {meta['block_ms']} ms ({meta['chunk']} muestras @ {meta['sample_rate']} Hz)_\n")
-    header = f"{'escenario':<10} {'p50 µs':>9} {'p95 µs':>9} {'max µs':>9} {'alloc B/blk':>12} {'%bloque(p95)':>13}"
+    header = f"{'escenario':<18} {'p50 µs':>9} {'p95 µs':>9} {'max µs':>9} {'alloc B/blk':>12} {'%bloque(p95)':>13}"
     print(header)
     print("-" * len(header))
     budget_us = meta["block_ms"] * 1000.0
-    for name in ("bypass", "eq_only", "full", "full_hot", "full_hot_sin_limiter", "spectrum"):
+    for name in ("bypass", "eq_only", "full", "full_hot", "full_hot_leveling", "full_hot_sin_limiter", "spectrum"):
         entry = results.get(name)
         if not entry:
             continue
         pct = entry["p95_us"] / budget_us * 100.0
         alloc = entry.get("alloc_b_per_block", "-")
         print(
-            f"{name:<10} {entry['p50_us']:>9.1f} {entry['p95_us']:>9.1f} "
+            f"{name:<18} {entry['p50_us']:>9.1f} {entry['p95_us']:>9.1f} "
             f"{entry['max_us']:>9.1f} {alloc:>12} {pct:>12.2f}%"
         )
 

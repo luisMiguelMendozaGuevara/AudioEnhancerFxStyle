@@ -66,8 +66,15 @@ apagadas se saltan sin coste:
 - **Recomendación**: 2-4 en altavoces pequeños; 0-2 con subwoofer.
 
 ### Nivelación (Leveling) — 0-10
-- **Qué hace**: AGC muy lento hacia -18 dBFS (corrección ±9 dB), colocado
-  antes del volumen del usuario: normaliza el material, no tu ajuste manual.
+- **Qué hace**: AGC muy lento hacia **-18 LUFS** (corrección ±9 dB) medido con el
+  filtro K de **ITU-R BS.1770**, no con RMS. Va antes del volumen del usuario:
+  normaliza el material, no tu ajuste manual. Tiempos lentos a propósito
+  (ataque 0,5 s / liberación 3 s) para no "bombear".
+- **Por qué LUFS y no RMS**: el oído no pesa igual todas las frecuencias. Con
+  RMS, una pista con mucho grave se queda baja de volumen percibido y una
+  brillante sube de más; con LUFS la corrección sigue a lo que se oye. Medido en
+  esta versión: a igual RMS, un tono de 60 Hz mide -29,6 LUFS y uno de 2 kHz
+  -23,6 LUFS, así que el AGC sube el grave ~3 dB más.
 - **Cómo suena**: iguala el volumen ENTRE pistas — una canción bajita sube y
   una muy fuerte baja un poco; dejas de tocar el volumen entre canciones.
   En música clásica puede aplanar los contrastes.

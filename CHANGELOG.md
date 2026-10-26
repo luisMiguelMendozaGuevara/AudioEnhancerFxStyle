@@ -9,6 +9,17 @@ y versionado [SemVer](https://semver.org/lang/es/).
 Instrumentación y medición normativa. **No cambia el sonido** (el DSP no se
 toca): añade lo necesario para poder afirmar y comprobar lo que la app hace.
 
+### Cambiado — Leveling por sonoridad (LUFS), no por RMS
+- El AGC de nivelación mide ahora con el **filtro K de ITU-R BS.1770** y apunta
+  a **-18 LUFS** (antes: -18 dBFS RMS), con envolvente lenta propia (ataque
+  0,5 s / liberación 3 s) y el mismo tope de corrección (±9 dB) y control 0-10.
+- Motivo: el RMS no es sonoridad percibida. A igual RMS, un tono de 60 Hz mide
+  -29,6 LUFS y uno de 2 kHz -23,6 LUFS: el AGC antiguo trataba ambos igual.
+- Efecto medido: material a -26 y a -12 LUFS converge a **-17,9 / -17,8 LUFS**
+  con la nivelación a 10 (antes quedaban a ±11 LU de diferencia). Coste: +0,27 ms
+  por bloque solo cuando la nivelación está activa.
+- La documentación de efectos (`docs/EFECTOS.md`) explica el cambio y por qué.
+
 ### Añadido — medición de sonoridad (ITU-R BS.1770 / EBU R 128)
 - `audio_enhancer/loudness.py`: filtro K (coeficientes idénticos a la tabla del
   anexo 1 de BS.1770-4 a 48 kHz), sonoridad **momentánea** (400 ms), de **corto

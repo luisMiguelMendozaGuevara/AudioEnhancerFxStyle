@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from .constants import SAMPLE_RATE
+from .loudness import LOUDNESS_OFFSET_DB
 
 logger = logging.getLogger("audio_enhancer.dsp")
 
@@ -167,9 +168,18 @@ def default_effects() -> dict[str, float]:
 # del boost. Sube los pasajes bajos sin tocar los picos.
 DYNAMIC_BOOST_TARGET_DB = -18.0
 DYNAMIC_BOOST_MAX_DB = 12.0
-# Leveling (AGC lento): objetivo y tope de la corrección (sube/baja).
-LEVELING_TARGET_DB = -18.0
+# Leveling (AGC por SONORIDAD, no por RMS): objetivo en LUFS segun ITU-R
+# BS.1770 (el oido pesa distinto las frecuencias y eso el RMS no lo sabe) y
+# tope de la corrección. Los tiempos son LENTOS a propósito: es un AGC de
+# material (entre pistas), no un compresor; con ataque/release rápidos se oiría
+# "bombear" y se aplanarían los contrastes musicales.
+LEVELING_TARGET_LUFS = -18.0
 LEVELING_MAX_DB = 9.0
+LEVELING_ATTACK_S = 0.5
+LEVELING_RELEASE_S = 3.0
+# Alias histórico (v1.6 usaba un objetivo en dBFS RMS): se mantiene por
+# compatibilidad de imports, pero el AGC ya no mide RMS.
+LEVELING_TARGET_DB = LEVELING_TARGET_LUFS
 # Tiempos de la envolvente (segundos): ataque rápido y release lento.
 ENV_ATTACK_S = 0.005
 ENV_RELEASE_S = 0.35
@@ -444,6 +454,10 @@ class Enhancer:
         # arrays zi de scipy para los biquads y tuplas (y_last, x_last) para
         # los pasos-altos de 1 polo (implementación numpy).
         self._exc_zi: dict[str, Any] = {}
+        # Caché de los coeficientes del filtro K (Leveling por LUFS): depende de
+        # la tasa, así que se recalcula cuando cambia.
+        self._lv_sos: Any = None
+        self._lv_rate: int = 0
         # Ambience (Fase 3): historial para las reflexiones tempranas.
         self._amb_hist: np.ndarray | None = None
         # Surround (Fase 3): factor del guard de correlación (suavizado).
@@ -531,6 +545,9 @@ class Enhancer:
         self._dc_ch = 0
         self._env_zi = {}
         self._exc_zi = {}
+        # Caché del filtro K (BS.1770) del Leveling: depende de la tasa.
+        self._lv_sos = None
+        self._lv_rate = 0
         self._amb_hist = None
         self._sr_boost = 0.0
         self.spectrum = None
@@ -1259,20 +1276,56 @@ class Enhancer:
         gain = (10.0 ** (boost_db / 20.0)).astype(np.float32)
         return (y * gain[:, None]).astype(np.float32, copy=False)
 
-    def _leveling(self, y: np.ndarray, block_sec: float) -> np.ndarray:
-        """AGC lento: iguala el volumen del material hacia un objetivo.
+    def _loudness_env_db(self, y: np.ndarray) -> np.ndarray:
+        """Sonoridad instantánea (LUFS) por muestra, con el filtro K de BS.1770.
 
-        Envolvente RMS lenta -> corrección (objetivo - env) acotada a ±9 dB,
-        escalada por ``amount`` 0-10 (0 = apagado). Va ANTES del volumen del
-        usuario: normaliza el material, no su ajuste manual."""
+        Es la misma ponderación que el medidor LUFS (misma tabla de coeficientes),
+        pero aquí SIN gating y con envolvente lenta (ataque 0,5 s / release 3 s):
+        lo que el AGC necesita es "cuánto suena esto", no el integrado del
+        programa. El estado del filtro y de las envolventes persiste entre
+        bloques por ``slot``, así que no hay saltos en las fronteras.
+        """
+        fs = int(self.sample_rate) or 48000
+        sos = self._lv_sos
+        if sos is None or self._lv_rate != fs:
+            from .loudness import k_weighting_sos
+
+            sos = k_weighting_sos(fs)
+            self._lv_sos = sos
+            self._lv_rate = fs
+        # Dos secciones del filtro K con estado propio (slots distintos de los
+        # que usan Clarity/Bass exciter).
+        x = self._apply_biquad(y, "lvk1", (sos[0][0], sos[0][1], sos[0][2], sos[0][4], sos[0][5]))
+        x = self._apply_biquad(x, "lvk2", (sos[1][0], sos[1][1], sos[1][2], sos[1][4], sos[1][5]))
+        # Suma de canales SIN normalizar: es lo que manda BS.1770 (G_i = 1 en L/R).
+        potencia = np.sum(x * x, axis=1) if x.ndim > 1 else x * x
+        pole_att = math.exp(-1.0 / (fs * LEVELING_ATTACK_S))
+        pole_rel = math.exp(-1.0 / (fs * LEVELING_RELEASE_S))
+        rapido, self._env_zi["lvl_att"] = _onepole_lp(potencia, pole_att, self._env_zi.get("lvl_att", 0.0))
+        lento, self._env_zi["lvl_rel"] = _onepole_lp(potencia, pole_rel, self._env_zi.get("lvl_rel", 0.0))
+        envolvente = np.maximum(rapido, lento)
+        return LOUDNESS_OFFSET_DB + 10.0 * np.log10(np.maximum(envolvente, 1e-12))
+
+    def _leveling(self, y: np.ndarray, block_sec: float) -> np.ndarray:
+        """AGC lento por SONORIDAD (LUFS): iguala el volumen hacia el objetivo.
+
+        Antes medía RMS, y el RMS no es sonoridad: dos pistas con el mismo RMS
+        pueden diferir 6 LU o más según su contenido espectral (un bajo a 60 Hz
+        "mide" mucho más en RMS de lo que suena). Aquí se mide con el filtro K
+        de BS.1770, así que el AGC sube lo que el oído percibe bajo, no lo que
+        más energía tiene.
+
+        Corrección acotada a ±``LEVELING_MAX_DB`` y escalada por ``amount`` 0-10
+        (0 = apagado). Va ANTES del volumen del usuario: normaliza el material,
+        no su ajuste manual."""
         amount = self._smooth_effect("leveling", float(self.leveling), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            if self._env_zi:
-                self._env_zi.pop("lv_att", None)
-                self._env_zi.pop("lv_rel", None)
+            for clave in ("lvl_att", "lvl_rel", "lvk1", "lvk2"):
+                self._env_zi.pop(clave, None)
+                self._exc_zi.pop(clave, None)
             return y
-        env_db = self._env_db(self._rms_envelope(y, "lv"))
-        corr_db = np.clip(LEVELING_TARGET_DB - env_db, -LEVELING_MAX_DB, LEVELING_MAX_DB) * (amount / EFFECT_MAX)
+        lufs = self._loudness_env_db(y)
+        corr_db = np.clip(LEVELING_TARGET_LUFS - lufs, -LEVELING_MAX_DB, LEVELING_MAX_DB) * (amount / EFFECT_MAX)
         if float(np.abs(corr_db).max()) <= 1e-3:
             return y
         gain = (10.0 ** (corr_db / 20.0)).astype(np.float32)
