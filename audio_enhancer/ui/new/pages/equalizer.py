@@ -344,7 +344,8 @@ class MetricsPanel(QFrame):
 
     Antes vivían en la barra inferior, donde solo cabía una línea de texto y se
     cortaba con nombres de dispositivo largos. Aquí se muestran como campos
-    independientes, cada uno con su unidad, en dos filas de cuatro:
+    independientes, cada uno con su unidad, en una rejilla de tres por tres
+    ordenada por tema (columna = qué está pasando):
 
     - Underruns: veces que la salida se quedó sin datos (cortes).
     - Huecos: bloques en los que hubo que insertar silencio.
@@ -354,22 +355,31 @@ class MetricsPanel(QFrame):
     - DSP p99: percentil 99 del coste de `process()` por bloque (vs 21,3 ms).
     - LUFS: sonoridad momentánea de la salida (ITU-R BS.1770).
     - LRA: rango de sonoridad (lo que varía el nivel dentro del material).
+    - Frecuencia: frecuencia de muestreo del ring (antes en la barra inferior).
 
-    Es de solo lectura: no toca el DSP, solo pinta números que ya calcula el
-    motor.
+    Las filas van: cortes, tiempos, nivel. Es de solo lectura: no toca el DSP,
+    solo pinta números que ya calcula el motor.
     """
 
-    # (clave interna, etiqueta traducible, formato)
-    _CAMPOS = (
-        ("underruns", "Underruns", "%d"),
-        ("huecos", "Huecos", "%d"),
-        ("deriva", "Deriva", "%d fr"),
-        ("latencia", "Latencia", "%.0f ms"),
-        ("objetivo", "Objetivo", "%.0f ms"),
-        ("dsp_p99", "DSP p99", "%.1f ms"),
-        ("lufs", "LUFS", "%.1f"),
-        ("lra", "LRA", "%.1f LU"),
+    # Filas de la rejilla (3x3). Cada campo: (clave interna, etiqueta, formato).
+    _FILAS = (
+        (
+            ("underruns", "Underruns", "%d"),
+            ("latencia", "Latencia", "%.0f ms"),
+            ("lufs", "LUFS", "%.1f"),
+        ),
+        (
+            ("huecos", "Huecos", "%d"),
+            ("objetivo", "Objetivo", "%.0f ms"),
+            ("lra", "LRA", "%.1f LU"),
+        ),
+        (
+            ("deriva", "Deriva", "%d fr"),
+            ("dsp_p99", "DSP p99", "%.1f ms"),
+            ("frecuencia", "Frecuencia", "%s"),
+        ),
     )
+    _CAMPOS = tuple(campo for fila in _FILAS for campo in fila)
     _VACIO = "--"
     # Umbral de aviso del coste del DSP: la mitad del bloque de 21,3 ms. A partir
     # de ahí un pico de CPU empieza a acercarse a los 21,3 ms que dura el bloque.
@@ -388,23 +398,23 @@ class MetricsPanel(QFrame):
         grid.setContentsMargins(Theme.SPACING_MD, Theme.SPACING_MD, Theme.SPACING_MD, Theme.SPACING_MD)
         grid.setHorizontalSpacing(Theme.SPACING_LG)
         grid.setVerticalSpacing(Theme.SPACING_XS)
-        for i, (clave, etiqueta, _formato) in enumerate(self._CAMPOS):
-            fila, columna = divmod(i, 4)
-            titulo = QLabel(self._t(etiqueta))
-            titulo.setStyleSheet(
-                f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
-            )
-            valor = QLabel(self._VACIO)
-            valor.setStyleSheet(
-                f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_LG}px; "
-                f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
-            )
-            grid.addWidget(titulo, fila * 2, columna)
-            grid.addWidget(valor, fila * 2 + 1, columna)
-            self._valores[clave] = valor
-        # Las cuatro columnas se reparten el ancho del panel por igual (antes
+        for indice_fila, fila in enumerate(self._FILAS):
+            for columna, (clave, etiqueta, _formato) in enumerate(fila):
+                titulo = QLabel(self._t(etiqueta))
+                titulo.setStyleSheet(
+                    f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
+                )
+                valor = QLabel(self._VACIO)
+                valor.setStyleSheet(
+                    f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_LG}px; "
+                    f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
+                )
+                grid.addWidget(titulo, indice_fila * 2, columna)
+                grid.addWidget(valor, indice_fila * 2 + 1, columna)
+                self._valores[clave] = valor
+        # Las tres columnas se reparten el ancho del panel por igual (antes
         # quedaban amontonadas a la izquierda y sobraba medio panel vacío).
-        for columna in range(4):
+        for columna in range(len(self._FILAS[0])):
             grid.setColumnStretch(columna, 1)
 
     def set_metrics(self, **valores: float | None) -> None:
@@ -429,8 +439,22 @@ class MetricsPanel(QFrame):
                 # -1000 = silencio o ventana incompleta (centinela del motor).
                 etiqueta.setText(self._VACIO)
                 continue
-            etiqueta.setText(formato % valor)
+            if clave == "frecuencia":
+                etiqueta.setText(self._texto_frecuencia(valor))
+            else:
+                etiqueta.setText(formato % valor)
             etiqueta.setStyleSheet(self._estilo(self._en_aviso(clave, valor)))
+
+    @staticmethod
+    def _texto_frecuencia(rate_hz: float) -> str:
+        """48 kHz y no 48.0; 44.1 kHz con decimal cuando no es múltiplo de 1000."""
+        if rate_hz <= 0:
+            return MetricsPanel._VACIO
+        if rate_hz >= 1000 and rate_hz % 1000 == 0:
+            return "%d kHz" % round(rate_hz / 1000)
+        if rate_hz >= 1000:
+            return "%.1f kHz" % (rate_hz / 1000.0)
+        return "%d Hz" % round(rate_hz)
 
     @classmethod
     def _en_aviso(cls, clave: str, valor: float) -> bool:

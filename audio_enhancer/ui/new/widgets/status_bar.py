@@ -1,9 +1,12 @@
 """Barra de estado persistente en la parte inferior.
 
-Muestra: estado de procesamiento, ruta de audio y sample rate. Las métricas del
-motor (underruns, huecos, deriva, latencia, DSP, LUFS) se movieron a la página
-Ecualizador, donde se ven todas juntas y no las corta una ruta de dispositivo
-larga.
+Muestra solo lo que no cambia cada segundo: estado de procesamiento y ruta de
+audio. Las métricas del motor (underruns, huecos, deriva, latencia, DSP, LUFS,
+frecuencia de muestreo) se movieron a la página Ecualizador, donde se ven todas
+juntas y no las corta una ruta de dispositivo larga.
+
+La ruta NO se repite en el texto de estado: antes decía "Activo (ring buffer):
+entrada -> salida" a la izquierda y la misma ruta otra vez a la derecha.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from ..theme.colors import Theme
 
 
 class AppStatusBar(QWidget):
-    """Barra de estado inferior persistente."""
+    """Barra de estado inferior persistente (estado + ruta)."""
 
     def __init__(self, t=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -43,6 +46,7 @@ class AppStatusBar(QWidget):
         )
         layout.addWidget(self._status_label)
 
+        # La ruta va a la derecha; el hueco del medio absorbe el espacio libre.
         layout.addStretch()
 
         self._route_label = QLabel("")
@@ -50,16 +54,6 @@ class AppStatusBar(QWidget):
             f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
         )
         layout.addWidget(self._route_label)
-
-        self._sep1 = QLabel("|")
-        self._sep1.setStyleSheet(f"color: {Theme.BORDER}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;")
-        layout.addWidget(self._sep1)
-
-        self._sr_label = QLabel("48 kHz")
-        self._sr_label.setStyleSheet(
-            f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
-        )
-        layout.addWidget(self._sr_label)
 
     def set_processing(self, active: bool) -> None:
         if active:
@@ -74,12 +68,6 @@ class AppStatusBar(QWidget):
             self._route_label.setText(f"{input_name}  ->  {output_name}")
         else:
             self._route_label.setText("")
-
-    def set_sample_rate(self, rate: int) -> None:
-        if rate >= 1000:
-            self._sr_label.setText(f"{rate // 1000} kHz")
-        else:
-            self._sr_label.setText(f"{rate} Hz")
 
     def set_status_text(self, text: str, color: str = "") -> None:
         self._last_status = (text, color)

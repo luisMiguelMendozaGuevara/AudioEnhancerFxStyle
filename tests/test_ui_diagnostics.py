@@ -106,13 +106,36 @@ def test_el_panel_del_ecualizador_muestra_las_metricas(window):
 
 
 def test_la_barra_inferior_ya_no_lleva_metricas(window):
-    """La barra de estado queda con estado, ruta y sample rate (sin métricas)."""
+    """La barra de estado queda con estado y ruta (sin métricas ni frecuencia)."""
     barra = window._status_bar
 
-    assert not hasattr(barra, "_metrics_label")
-    assert not hasattr(barra, "_latency_label")
-    assert not hasattr(barra, "set_metrics")
-    assert not hasattr(barra, "set_latency")
+    for atributo in ("_metrics_label", "_latency_label", "_sr_label", "_sep1"):
+        assert not hasattr(barra, atributo)
+    for metodo in ("set_metrics", "set_latency", "set_sample_rate"):
+        assert not hasattr(barra, metodo)
+
+
+def test_la_frecuencia_de_muestreo_esta_en_el_panel(window):
+    """48 kHz vive en el panel del Ecualizador, también antes del primer tick."""
+    window._on_audio_started("CABLE Input", "Altavoces", 48000)
+
+    assert window._pages["equalizer"].metric_text("frecuencia") == "48 kHz"
+    assert window._status_bar._route_label.text() == "CABLE Input  ->  Altavoces"
+    # La ruta NO se repite en el texto de estado de la izquierda.
+    assert "CABLE Input" not in window._status_bar._status_label.text()
+    assert "->" not in window._status_bar._status_label.text()
+
+
+@pytest.mark.parametrize(
+    ("rate", "esperado"),
+    [(48000, "48 kHz"), (44100, "44.1 kHz"), (96000, "96 kHz"), (8000, "8 kHz"), (0, "--")],
+)
+def test_formato_de_la_frecuencia(window, rate, esperado):
+    """Múltiplos de 1000 sin decimales; el resto con un decimal."""
+    panel = window._pages["equalizer"]._metrics
+    panel.set_metrics(frecuencia=float(rate))
+
+    assert panel.text_of("frecuencia") == esperado
 
 
 def test_el_panel_vuelve_a_guiones_cuando_se_para(window):

@@ -1164,7 +1164,9 @@ class NewMainWindow(QMainWindow):
         self.state.output_device = out_name
         self._status_bar.set_processing(True)
         self._status_bar.set_route(src_name, out_name)
-        self._status_bar.set_sample_rate(rate)
+        # La frecuencia de muestreo vive en el panel del Ecualizador: se siembra
+        # ya para no esperar al primer tick de métricas (1 s).
+        self._pages["equalizer"].set_metrics(frecuencia=float(rate))
         self._header_status.setText("ACTIVE")
         self._header_status.setStyleSheet(
             f"color: {Theme.SUCCESS}; font-size: {Theme.FONT_SIZE_MD}px; "
@@ -1175,7 +1177,9 @@ class NewMainWindow(QMainWindow):
     def _on_output_ready(self, latency: float) -> None:
         """Salida abierta tras el prefill: punto de operación estable."""
         self._pages["home"].set_start_enabled(True)  # fin del prefill
-        self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
+        # Sin nombres: la ruta ya se muestra a la derecha de la misma barra. La
+        # notificación de la bandeja sí los lleva (fuera de contexto no se ve).
+        self._status_bar.set_status_text(self._t("Activo (ring buffer)"), OK)
         self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
         self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)
 
@@ -1274,6 +1278,7 @@ class NewMainWindow(QMainWindow):
                         # panel lo muestra como "--".
                         lufs=sonoridad.get("momentary_lufs", -1000.0),
                         lra=sonoridad.get("lra_lu", 0.0),
+                        frecuencia=float(tasa),
                     )
                 else:
                     self._pages["equalizer"].clear_metrics()
