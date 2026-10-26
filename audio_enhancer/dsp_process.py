@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -28,9 +29,25 @@ import numpy as np
 
 from .constants import CHUNK
 from .diagnostics import RollingStats
+from .loudness import LoudnessMeter
 from .rt_priority import mmcss_pro_audio
 
 logger = logging.getLogger("audio_enhancer.dsp_process")
+
+
+def _finito(valor: float, defecto: float = -1000.0) -> float:
+    """Valor publicable en la telemetría compartida (float32, sin inf/NaN).
+
+    El integrado de un silencio es -inf y un Array('f') no lo representa: se
+    sustituye por un suelo inequívoco (-1000 LUFS) para que la UI lo muestre
+    como "--" sin tener que interpretar NaN."""
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return float(defecto)
+    if not math.isfinite(numero):
+        return float(defecto)
+    return numero
 
 
 def _parent_alive(parent_pid: int) -> bool:
@@ -39,7 +56,7 @@ def _parent_alive(parent_pid: int) -> bool:
     Si el principal muere a lo bruto (Administrador de tareas o crash nativo),
     este hijo seguiria capturando/procesando en silencio para siempre. Ante
     cualquier duda devuelve True: nunca se mata al hijo por un fallo de la
-    comprobacion."""
+    comprobacion."""""
     if os.name != "nt":
         return True
     try:
@@ -300,7 +317,9 @@ def child_main(
     memoria compartida lo que consume la UI (para no hacerlo en el proceso
     principal, donde competiría con el callback de salida):
     - ``gr_value``: gain reduction del limitador.
-    - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr].
+    - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr] y, si la
+      malla compartida tiene 10 huecos, también [lufs_m, lufs_s, lufs_i].
+      Sonoridad medida segun ITU-R BS.1770 / EBU R 128 sobre la salida.
     - ``spectrum_buf``: 64 barras de espectro (dB), escritas por el hilo visual.
     - ``spec_needed``: bandera (padre -> hijo) de si la UI mira el espectro.
     - ``child_stats``: [raw_empty, blocks, backlog_sum, clipped] (diagnóstico).
@@ -310,6 +329,10 @@ def child_main(
 
     enhancer = Enhancer()
     _drain_params(enhancer, params_q)
+    # Medidor de sonoridad ('EBU Mode'): mide la SALIDA (lo que oye el usuario),
+    # no la entrada, para que sirva de referencia y de base al AGC futuro.
+    # Coste medido: ~0.13 ms por bloque de 1024 (0.6 % del presupuesto).
+    medidor = LoudnessMeter(sample_rate=enhancer.sample_rate or 48000, channels=2)
     # Pre-importar scipy AQUÍ, antes del primer bloque: si no, la primera
     # llamada a process() importa scipy.signal/ndimage DENTRO del bucle de
     # audio y retrasa el primer bloque varios segundos (huecos al iniciar).
@@ -375,6 +398,9 @@ def child_main(
             t0 = time.perf_counter()
             y = enhancer.process(data)
             timing.add(time.perf_counter() - t0)
+            # Sonoridad de la señal procesada (una vez por bloque y antes de
+            # publicar telemetría, para que ambas cosas sean coherentes).
+            medidor.process(y)
             blocks += 1
             # Recorte: muestras que superan ±1.0 (posible recorte del driver
             # cuando no hay limitador/techo). Barato y fuera del audio crítico.
@@ -399,6 +425,14 @@ def child_main(
                 telemetry[4] = enhancer.level_peak_l
                 telemetry[5] = enhancer.level_peak_r
                 telemetry[6] = enhancer.level_gr
+                if len(telemetry) >= 10:
+                    # Medir la sonoridad de la SALIDA con los valores ya
+                    # cacheados (el recálculo del integrado está caché por
+                    # bloque, no se hace 46 veces por segundo).
+                    medidas = medidor.snapshot()
+                    telemetry[7] = _finito(medidas["momentary_lufs"])
+                    telemetry[8] = _finito(medidas["short_term_lufs"])
+                    telemetry[9] = _finito(medidas["integrated_lufs"])
         if child_stats is not None:
             with child_stats.get_lock():
                 child_stats[0] = raw_empty

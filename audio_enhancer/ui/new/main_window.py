@@ -539,6 +539,21 @@ class NewMainWindow(QMainWindow):
         self.native_capture = bool(on)
         self._save_config()
 
+    @staticmethod
+    def _fmt_lufs(valor: float | None) -> str:
+        """Formatea una medida de sonoridad para el informe de diagnóstico.
+
+        El medidor usa -inf (o -1000 en la telemetría) cuando no hay ventana
+        completa o la señal es silencio: se muestra '--' en vez de un número
+        que parecería una medida real."""
+        try:
+            numero = float(valor) if valor is not None else -1000.0
+        except (TypeError, ValueError):
+            return "--"
+        if numero != numero or numero <= -100.0:  # NaN o 'sin medida'
+            return "--"
+        return "%.1f" % numero
+
     def _export_diagnostics(self) -> None:
         """Escribe un informe (versión, SO, config, dispositivos, métricas y
         cola del log) para soporte. No toca audio."""
@@ -575,6 +590,15 @@ class NewMainWindow(QMainWindow):
             # "se oye con retardo" o "da tirones" no se puede diagnosticar.
             lines.append("latencia=" + LatencyBreakdown.format(self.engine.latency_breakdown()))
             lines.append("dsp=" + format_stats(self.engine.timing_snapshot()))
+            sonoridad = self.engine.loudness_snapshot()
+            lines.append(
+                "sonoridad M=%s S=%s I=%s LUFS"
+                % (
+                    self._fmt_lufs(sonoridad.get("momentary_lufs")),
+                    self._fmt_lufs(sonoridad.get("short_term_lufs")),
+                    self._fmt_lufs(sonoridad.get("integrated_lufs")),
+                )
+            )
         lines += ["", "== Log (cola) =="]
         try:
             with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
@@ -1224,6 +1248,11 @@ class NewMainWindow(QMainWindow):
                     self.engine.latency_breakdown().get("total_ms", 0.0),
                     self.engine.timing_snapshot().get("p99_ms", 0.0),
                 )
+                # Sonoridad de la salida (BS.1770): solo si hay medida real
+                # (-1000 = silencio o ventana aún incompleta).
+                lufs = float(self.engine.loudness_snapshot().get("momentary_lufs", -1000.0))
+                if -100.0 < lufs < 10.0:
+                    text += " | %.1f LUFS" % lufs
             else:
                 text = ""
             self._status_bar.set_metrics(text)

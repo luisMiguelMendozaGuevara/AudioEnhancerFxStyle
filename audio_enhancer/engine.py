@@ -22,6 +22,7 @@ import numpy as np
 from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, SAMPLE_RATE, STARTUP_MUTE_S
 from .diagnostics import RollingStats
 from .diagnostics import latency_breakdown as _latency_breakdown
+from .loudness import LoudnessMeter
 from .rt_priority import mmcss_pro_audio
 
 logger = logging.getLogger("audio_enhancer.engine")
@@ -167,9 +168,14 @@ class AudioEngine:
         # pueda enseñar el coste REAL del DSP sin medir nada en el padre.
         self._child_timing: Any = None
         self._child_dsp_ms: dict[str, float] = {}
+        # Sonoridad de la salida (BS.1770 / EBU R 128), publicada por el hijo.
+        self._child_loudness: dict[str, float] = {}
         # Misma estadística, local, para el camino SIN proceso hijo (tests y
         # AUDIO_ENHANCER_NO_DSP_PROCESS).
         self._local_dsp_ms = RollingStats(window=256)
+        # Medidor de sonoridad local: solo se usa en el camino sin proceso hijo
+        # (tests y AUDIO_ENHANCER_NO_DSP_PROCESS). En producción mide el hijo.
+        self._local_meter = LoudnessMeter(sample_rate=SAMPLE_RATE, channels=2)
         # Registro MMCSS del hilo que alimenta la salida (se revierte al parar).
         self._pump_mmcss: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
@@ -251,6 +257,26 @@ class AudioEngine:
         snap = self._local_dsp_ms.snapshot()
         return {clave: float(snap.get(clave, 0.0)) for clave in ("p50_ms", "p95_ms", "p99_ms", "max_ms")}
 
+    @property
+    def momentary_lufs(self) -> float:
+        """Sonoridad momentánea (400 ms) que mide el medidor local."""
+        return self._local_meter.momentary_lufs
+
+    @property
+    def short_term_lufs(self) -> float:
+        """Sonoridad de corto plazo (3 s) que mide el medidor local."""
+        return self._local_meter.short_term_lufs
+
+    def loudness_snapshot(self) -> dict[str, float]:
+        """Sonoridad LUFS de la señal procesada (M, S, I y LRA).
+
+        Con proceso hijo devuelve lo publicado por él; sin él, la medición
+        local del hilo de DSP. -1000.0 significa 'sin medida' (silencio o aún
+        sin ventana completa)."""
+        if self._child_loudness:
+            return dict(self._child_loudness)
+        return self._local_meter.snapshot()
+
     def latency_breakdown(self) -> dict[str, float]:
         """Desglose de la latencia del pipeline en ms (diagnóstico de la UI).
 
@@ -283,6 +309,10 @@ class AudioEngine:
         nframes = int(rate * RING_SECONDS)
         self.nframes = nframes
         self.rate = int(rate)
+        # El medidor local sigue la tasa real: los coeficientes del filtro K se
+        # recalculan por fórmula, así que a 44,1 kHz no se mide con los de 48.
+        if int(self._local_meter.sample_rate) != int(rate):
+            self._local_meter = LoudnessMeter(sample_rate=int(rate), channels=2)
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
         # Ring de ENTRADA crudo (captura -> hilo DSP): ~1 s de margen. Absorbe
         # los tirones del callback y los picos del DSP sin descartar audio.
@@ -668,7 +698,9 @@ class AudioEngine:
         # El FFT del espectro y la medición de niveles se hacen en el HIJO (su
         # GIL): si se hacen en el padre compiten con el callback de salida y
         # dañan el audio justo cuando el espectro está visible.
-        self._telemetry = ctx.Array("f", 7)
+        # 10 huecos: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr, lufs_m, lufs_s, lufs_i].
+        # Los tres últimos son sonoridad BS.1770 de la salida (medidor EBU).
+        self._telemetry = ctx.Array("f", 10)
         self._spectrum_buf = ctx.Array("f", 64)
         self._spec_needed = ctx.Value("b", 0)
         # Diagnóstico (Paso 0) del hijo: [raw_empty, blocks, backlog_sum,
@@ -854,6 +886,16 @@ class AudioEngine:
             e.level_peak_l = t[4]
             e.level_peak_r = t[5]
             e.level_gr = t[6]
+            # Sonoridad de la salida (huecos 7..9), si el hijo los publica. Se
+            # leen DENTRO del lock: un Array('f') compartido no garantiza
+            # lectura atómica de un float fuera de él.
+            con_sonoridad = len(t) >= 10
+            if con_sonoridad:
+                self._child_loudness = {
+                    "momentary_lufs": float(t[7]),
+                    "short_term_lufs": float(t[8]),
+                    "integrated_lufs": float(t[9]),
+                }
         # Tiempos de proceso del hijo (4 doubles): copia barata, sin numpy.
         ct = self._child_timing
         if ct is not None:
@@ -863,6 +905,14 @@ class AudioEngine:
                     "p95_ms": float(ct[1]),
                     "p99_ms": float(ct[2]),
                     "max_ms": float(ct[3]),
+                }
+        # Sonoridad de la salida (huecos 7..9), si el hijo los publica.
+        if len(t) >= 10:
+            with contextlib.suppress(Exception):
+                self._child_loudness = {
+                    "momentary_lufs": float(t[7]),
+                    "short_term_lufs": float(t[8]),
+                    "integrated_lufs": float(t[9]),
                 }
 
     def has_dsp_process(self) -> bool:
@@ -935,6 +985,8 @@ class AudioEngine:
                 y = self.enhancer.process(block)
                 # Coste real por bloque (percentiles en timing_snapshot()).
                 self._local_dsp_ms.add(time.perf_counter() - t0)
+                # Sonoridad de la salida, igual que en el proceso hijo.
+                self._local_meter.process(y)
                 self._put(y)
             except Exception:
                 logger.exception("Error en el hilo de DSP")

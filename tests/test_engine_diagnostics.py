@@ -11,6 +11,7 @@ aquí solo se prueba que el cableado devuelve lo que dice devolver.
 """
 
 import contextlib
+import math
 import queue
 import threading
 from types import SimpleNamespace
@@ -211,3 +212,94 @@ def test_child_main_publica_percentiles_del_dsp():
     p50, p95, p99, pico = child_timing.values
     assert p50 > 0.0, "el hijo no publicó tiempos (child_timing sin escribir)"
     assert p50 <= p95 <= p99 <= pico
+
+
+# ---------- sonoridad (BS.1770) publicada por el hijo ----------
+
+
+def _seno_estereo(segundos: float, dbfs: float, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Seno 1 kHz en fase con pico a ``dbfs`` (definición de EBU Tech 3341)."""
+    amplitud = 10.0 ** (dbfs / 20.0)
+    n = int(round(segundos * sample_rate))
+    t = np.arange(n) / float(sample_rate)
+    x = (amplitud * np.sin(2.0 * np.pi * 1000.0 * t)).astype(np.float32)
+    return np.stack([x, x], axis=1)
+
+
+def test_child_main_publica_la_sonoridad_de_la_salida():
+    """El hijo mide LUFS de la salida y los publica en los huecos 7..9.
+
+    Se le da 12 s de un seno de 1 kHz a -23 dBFS por canal: segun EBU Tech 3341
+    (caso 1) la sonoridad momentanea y la integrada deben valer -23.0 +-0.1.
+    La cadena del hijo esta en su configuracion por defecto (sin EQ ni efectos),
+    asi que la senal llega intacta al medidor.
+    """
+    from audio_enhancer.dsp import _scipy_ndimage, _scipy_signal
+
+    _scipy_signal()
+    _scipy_ndimage()
+    raw_q = queue.Queue()
+    out_q = queue.Queue()
+    params_q = queue.Queue()
+    stop = threading.Event()
+    telemetria = _FakeSharedArray([0.0] * 10)
+    audio = _seno_estereo(12.0, -23.0)
+    bloques = [audio[i : i + CHUNK] for i in range(0, len(audio), CHUNK)]
+    for bloque in bloques:
+        raw_q.put(bloque.tobytes())
+
+    hilo = threading.Thread(
+        target=dsp_process_mod.child_main,
+        args=(raw_q, out_q, params_q, stop, None, telemetria, None, None, None, None),
+        daemon=True,
+    )
+    hilo.start()
+    for _ in bloques:
+        assert out_q.get(timeout=20) is not None
+    stop.set()
+    hilo.join(timeout=5)
+
+    momentanea, corto_plazo, integrada = (telemetria.values[7], telemetria.values[8], telemetria.values[9])
+    assert momentanea == pytest.approx(-23.0, abs=0.5), f"M={momentanea:.2f} LUFS"
+    assert corto_plazo == pytest.approx(-23.0, abs=0.5), f"S={corto_plazo:.2f} LUFS"
+    assert integrada == pytest.approx(-23.0, abs=0.5), f"I={integrada:.2f} LUFS"
+
+
+def test_engine_expone_la_sonoridad_del_hijo(engine):
+    """_sync_telemetry copia los huecos 7..9 y loudness_snapshot() los publica."""
+    engine._telemetry = _FakeSharedArray([0.0] * 7 + [-23.0, -24.5, -22.0])
+    engine._sync_telemetry()
+
+    snap = engine.loudness_snapshot()
+
+    assert snap["momentary_lufs"] == pytest.approx(-23.0)
+    assert snap["short_term_lufs"] == pytest.approx(-24.5)
+    assert snap["integrated_lufs"] == pytest.approx(-22.0)
+
+
+def test_engine_sin_telemetria_de_sonoridad_no_falla(engine):
+    """Con la malla de 7 huecos (modo antiguo/tests) no hay medida y no lanza."""
+    engine._telemetry = _FakeSharedArray([0.0] * 7)
+    engine._sync_telemetry()
+
+    assert engine.loudness_snapshot() == {
+        "momentary_lufs": -math.inf,
+        "short_term_lufs": -math.inf,
+        "integrated_lufs": -math.inf,
+        "lra_lu": 0.0,
+    }
+
+
+def test_el_medidor_local_mide_la_salida_del_hilo_de_dsp(engine):
+    """Sin proceso hijo, el medidor local del motor sigue midiendo (fallback)."""
+    from audio_enhancer.engine import AudioEngine  # noqa: F401 - claridad del origen
+
+    engine.configure_ring(SAMPLE_RATE)
+    audio = _seno_estereo(6.0, -23.0)
+    for i in range(0, len(audio), CHUNK):
+        engine._local_meter.process(engine.enhancer.process(audio[i : i + CHUNK]))
+
+    snap = engine.loudness_snapshot()
+
+    assert snap["momentary_lufs"] == pytest.approx(-23.0, abs=0.3)
+    assert snap["integrated_lufs"] == pytest.approx(-23.0, abs=0.3)
