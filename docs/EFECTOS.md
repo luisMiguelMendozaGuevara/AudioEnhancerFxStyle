@@ -58,11 +58,18 @@ apagadas se saltan sin coste:
 - **Recomendación**: 3-6 si escuchas a volumen bajo; 0 si ya escuchas fuerte.
 
 ### Exciter de graves (Bass) — 0-10
-- **Qué hace**: filtra lo que hay por debajo de 100 Hz y genera su
-  **2º armónico**: el oído lo interpreta como grave real.
-- **Cómo suena**: "punch" de graves en altavoces pequeños, sin retumbar.
+- **Qué hace**: filtra la banda de graves (hasta 120 Hz) y genera su **2º y 3er
+  armónico** (medido: el 2º a -15 dB y el 3º a -23 dB respecto a la
+  fundamental): el oído los interpreta como grave real.
+- **Por qué dos armónicos**: el 2º de una fundamental de 40 Hz cae en 80 Hz,
+  donde un altavoz pequeño (corte real 150-250 Hz) no reproduce nada. El 3º cae
+  en 120 Hz y sí se oye. Antes solo había 2º, así que el efecto era inaudible
+  justo en los equipos donde se supone que ayuda.
+- **Cómo suena**: "punch" de graves en altavoces pequeños, sin retumbar, y sin
+  el "una octava más arriba" que provocaba el 2º armónico solo.
 - **Ojo**: es distinto del "Refuerzo de graves" (shelf) — aquel sube el
-  volumen de esa banda; este **crea contenido nuevo**.
+  volumen de esa banda (la fundamental no se toca: ±1 dB medido); este **crea
+  contenido nuevo**.
 - **Recomendación**: 2-4 en altavoces pequeños; 0-2 con subwoofer.
 
 ### Nivelación (Leveling) — 0-10

@@ -207,8 +207,24 @@ ENV_RELEASE_S = 0.35
 CLARITY_HP_HZ = 3000.0
 CLARITY_LP_HZ = 16000.0
 CLARITY_MIX = 0.5
-BASS_EXCITER_LP_HZ = 100.0
-BASS_EXCITER_MIX = 0.6
+# Bass exciter: banda de entrada y mezcla de armónicos. La banda llega a 120 Hz
+# (antes 100) para cubrir los graves típicos de la música, y se generan 2º Y 3º
+# armónico (ver _bass_exciter): el 2º solo cae a 80 Hz con una fundamental de
+# 40 Hz, donde un altavoz pequeño no reproduce nada; el 3º (120 Hz) sí se oye.
+BASS_EXCITER_LP_HZ = 120.0
+BASS_EXCITER_MIX_H2 = 0.45
+BASS_EXCITER_MIX_H3 = 0.35
+# El 3er armónico se genera con un cúbico NORMALIZADO (x^3 / media(x^2)): para un
+# seno eso deja el 3er armónico a -12 dB del fundamental, mientras que x*|x| lo
+# dejaba a -37 dB (medido, es decir: inaudible). El paso-alto quita la
+# fundamental que el cúbico también contiene, para no realzar el grave (eso ya lo
+# hace el EQ). La escala 0.5 deja el 3F a ~-24 dB: se oye sin tapar al 2º.
+BASS_EXCITER_HP3_HZ = 120.0
+BASS_EXCITER_H3_SCALE = 0.5
+# Ganancia de compensación del ADAA: la antiderivada promedia dos muestras, así
+# que el armónico sale ~6 dB más bajo (medido: 0.516). Se compensa para que el
+# efecto conserve la fuerza que tenía y lo único que cambie sea el aliasing.
+ADAA_GAIN = 2.0
 EXCITER_Q = 0.707
 # Ambience: reflexiones tempranas (retardo en ms, ganancia) por canal; los
 # retardos son primos y distintos por canal (decorrelación L/R).
@@ -1418,23 +1434,78 @@ class Enhancer:
         self._exc_zi[slot] = np.asarray(zf, dtype=np.float64)
         return out
 
-    def _harmonic_2nd(self, band: np.ndarray, slot: str, hz: float = 20.0) -> np.ndarray:
+    def _harmonic_2nd(self, band: np.ndarray, slot: str, hz: float = 20.0, adaa: bool = False) -> np.ndarray:
         """Genera el 2º armónico de ``band`` SIN continua.
 
         Rectificar (``|band|``) produce un 2º armónico fuerte, pero también una
         componente continua (2·a/π); se elimina con un paso-alto de 1 polo
         (~20 Hz) con estado por ``slot``. Un simple ``band·|band|`` NO serviría:
-        es impar y genera 1º/3º, no 2º."""
-        rect = np.abs(band)
+        es impar y genera 1º/3º, no 2º.
+
+        ``adaa=True`` aplica **anti-aliasing por antiderivada** (ADAA de 1er
+        orden): en vez de evaluar |x| muestra a muestra, usa la antiderivada
+        F(x) = x·|x|/2 y la diferencia dividida por el paso de la señal. Los
+        armónicos pares que quedarían POR ENCIMA de Nyquist ya no se pliegan de
+        vuelta al espectro audible. Es O(1) por muestra (sin sobremuestreo) y el
+        estado es una muestra por canal."""
+        x = np.asarray(band, dtype=np.float64)
+        monofonico = x.ndim == 1
+        if monofonico:
+            x = x[:, None]
+        if adaa:
+            ch = x.shape[1]
+            estado = self._exc_zi.get(slot + "_adaa")
+            if not isinstance(estado, tuple) or np.shape(estado[0])[0] != ch:
+                estado = (np.zeros(ch, dtype=np.float64), np.zeros(ch, dtype=np.float64))
+            x_prev, f_prev = estado
+            # F(x) = 0.5 * x * |x| es la antiderivada de |x|.
+            f = 0.5 * x * np.abs(x)
+            x_ant = np.empty_like(x)
+            f_ant = np.empty_like(x)
+            x_ant[0] = x_prev
+            f_ant[0] = f_prev
+            if x.shape[0] > 1:
+                x_ant[1:] = x[:-1]
+                f_ant[1:] = f[:-1]
+            dx = x - x_ant
+            df = f - f_ant
+            pequeno = np.abs(dx) <= 1e-9
+            seguro = np.where(pequeno, 1.0, dx)
+            rect = np.where(pequeno, np.abs(0.5 * (x + x_ant)), df / seguro) * ADAA_GAIN
+            self._exc_zi[slot + "_adaa"] = (x[-1].copy(), f[-1].copy())
+        else:
+            rect = np.abs(x)
         R = math.exp(-2.0 * math.pi * hz / max(int(self.sample_rate), 1))
-        ch = rect.shape[1] if rect.ndim > 1 else 1
+        ch = rect.shape[1]
         state = self._exc_zi.get(slot)
         if not isinstance(state, tuple):
-            z = np.zeros(ch, dtype=np.float64) if rect.ndim > 1 else 0.0
+            z = np.zeros(ch, dtype=np.float64)
             state = (z, z)
         out, y_last, x_last = _onepole_hp(rect, R, state[0], state[1])
         self._exc_zi[slot] = (y_last, x_last)
-        return out
+        return out[:, 0] if monofonico else out
+
+    def _harmonic_3rd(self, band: np.ndarray, slot: str, hz: float = BASS_EXCITER_HP3_HZ) -> np.ndarray:
+        """Genera el 3er armónico de ``band`` (impar, sin la fundamental).
+
+        Generador CÚBICO normalizado por la potencia de la banda
+        (``x³ / media(x²)``): así el nivel del armónico no depende de cuánto
+        suba o baje el material. Para un seno de amplitud A, ``x³/A²`` produce un
+        3er armónico a -12 dB de la fundamental; ``x·|x|`` lo dejaba a -37 dB
+        (medido), es decir inaudible. El cúbico también contiene la fundamental,
+        así que se quita con un paso-alto por encima de la banda de entrada: en
+        graves eso deja pasar el 3F (120 Hz para una fundamental de 40 Hz), que
+        es la zona donde un altavoz pequeño SÍ reproduce. Ese es el hueco que
+        dejaba el 2º armónico solo (80 Hz)."""
+        x = np.asarray(band, dtype=np.float64)
+        monofonico = x.ndim == 1
+        if monofonico:
+            x = x[:, None]
+        potencia = float(np.mean(x * x)) + 1e-12
+        cubico = (x * x * x) / potencia * BASS_EXCITER_H3_SCALE
+        filtrado = self._apply_biquad(cubico, slot, self._highpass(hz, self.sample_rate))
+        out = np.asarray(filtrado, dtype=np.float64)
+        return out[:, 0] if monofonico else out
 
     def _clarity(self, y: np.ndarray, block_sec: float) -> np.ndarray:
         """Exciter de presencia (Fidelity/Clarity): 2º armónico de 3 kHz+.
@@ -1447,10 +1518,16 @@ class Enhancer:
             if self._exc_zi:
                 self._exc_zi.pop("cl_hp", None)
                 self._exc_zi.pop("cl_h2", None)
+                self._exc_zi.pop("cl_h2_adaa", None)
                 self._exc_zi.pop("cl_lp", None)
             return y
         hp = self._apply_biquad(y, "cl_hp", self._highpass(CLARITY_HP_HZ, self.sample_rate))
-        h = self._harmonic_2nd(hp, "cl_h2")
+        # ADAA en la no linealidad: sin esto, los armónicos pares por encima de
+        # Nyquist (para la banda de 3 kHz+: 4º=12 kHz, 6º=18 kHz, 8º=24 kHz...) se
+        # pliegan de vuelta al espectro audible como tonos que no existen en la
+        # señal original. El paso-bajo de después NO los quitaba: el aliasing ya
+        # había ocurrido al rectificar.
+        h = self._harmonic_2nd(hp, "cl_h2", adaa=True)
         # Paso-bajo anti-aliasing (~16 kHz, biquad 2º orden): atenúa armónicos
         # pares altos (4º, 6º...) cercanos a Nyquist sin tocar el 2º armónico útil.
         lp_hz = min(CLARITY_LP_HZ, 0.42 * max(int(self.sample_rate), 1))
@@ -1459,21 +1536,30 @@ class Enhancer:
         return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
 
     def _bass_exciter(self, y: np.ndarray, block_sec: float) -> np.ndarray:
-        """Exciter de graves (Bass): 2º armónico de <100 Hz.
+        """Exciter de graves (Bass): 2º Y 3er armónico de la banda de graves.
 
-        Filtra la banda de graves y añade su 2º armónico (rectificado, sin
-        continua): más 'punch' en altavoces pequeños (el oído interpreta el
-        armónico como grave real). 0-10."""
+        Por qué dos armónicos: el 2º de una fundamental de 40 Hz cae en 80 Hz,
+        donde un altavoz pequeño (corte real 150-250 Hz) no reproduce nada; el 3º
+        cae en 120 Hz y sí se oye. Antes solo había 2º, así que el efecto era
+        inaudible justo en los equipos donde se supone que ayuda, y en
+        auriculares podía confundirse con un error de octava (fundamental una
+        octava arriba). Generar también el 3º reparte la energía en la serie
+        armónica y suena a "más grave", no a "una octava más".
+
+        La banda de entrada llega a 120 Hz y el 3er armónico se filtra por encima
+        de esa banda para no realzar el grave (eso ya lo hace el EQ). 0-10."""
         amount = self._smooth_effect("bass", float(self.effects.get("bass", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
             if self._exc_zi:
-                self._exc_zi.pop("bx_lp", None)
-                self._exc_zi.pop("bx_h2", None)
+                for clave in ("bx_lp", "bx_h2", "bx_h3"):
+                    self._exc_zi.pop(clave, None)
             return y
         lp = self._apply_biquad(y, "bx_lp", self._lowpass(BASS_EXCITER_LP_HZ, self.sample_rate))
-        h = self._harmonic_2nd(lp, "bx_h2")
-        g = (amount / EFFECT_MAX) * BASS_EXCITER_MIX
-        return (y + (g * h).astype(np.float32)).astype(np.float32, copy=False)
+        h2 = self._harmonic_2nd(lp, "bx_h2")
+        h3 = self._harmonic_3rd(lp, "bx_h3")
+        escala = amount / EFFECT_MAX
+        anadido = escala * (BASS_EXCITER_MIX_H2 * h2 + BASS_EXCITER_MIX_H3 * h3)
+        return (y + anadido.astype(np.float32)).astype(np.float32, copy=False)
 
     # ---------- capa enhancer: Ambience y Surround (Fase 3) ----------
 
