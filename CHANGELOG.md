@@ -4,7 +4,7 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
-## [1.7.0] — en desarrollo (rama `feat/v1.7-diagnostics`)
+## [1.7.0] — 2026-10-26
 
 Instrumentación y medición normativa, más un cambio de fondo en la nivelación
 (ahora por sonoridad medida, no por RMS). El resto de la cadena DSP no se toca:
