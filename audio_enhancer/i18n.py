@@ -292,7 +292,7 @@ EXPLAIN = {
     "y 'cerca' sin subir el volumen. Un exceso puede reducir la dinámica "
     "percibida; empieza por 3-5 y sube poco a poco.",
     "leveling": "Nivelación de volumen: iguala el volumen ENTRE pistas con un "
-    "AGC muy lento (objetivo ~-18 dBFS, corrección ±9 dB). Una canción bajita "
+    "AGC muy lento (objetivo ~-18 LUFS, corrección ±9 dB). Una canción bajita "
     "sube y una muy fuerte baja un poco: dejas de tocar el volumen entre "
     "canciones. En música clásica puede aplanar los contrastes.",
     "fidelity": "Claridad (Fidelity): exciter de presencia. Filtra 3 kHz+ y "
@@ -356,7 +356,7 @@ EXPLAIN_EN = {
     "passages (up to +12 dB) without touching peaks, so everything sounds "
     "fuller and 'closer' without raising the volume. Start at 3-5.",
     "leveling": "Volume leveling: evens out loudness BETWEEN tracks with a very "
-    "slow AGC (target ~-18 dBFS, ±9 dB correction). Quiet songs come up, very "
+    "slow AGC (target ~-18 LUFS, ±9 dB correction). Quiet songs come up, very "
     "loud ones come down a bit, so you stop touching the volume between songs.",
     "fidelity": "Clarity (Fidelity): presence exciter. Filters 3 kHz+ and "
     "generates its 2nd harmonic to restore detail lost to streaming (voices, "

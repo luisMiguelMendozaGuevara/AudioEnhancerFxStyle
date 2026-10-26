@@ -6,8 +6,10 @@ y versionado [SemVer](https://semver.org/lang/es/).
 
 ## [1.7.0] — en desarrollo (rama `feat/v1.7-diagnostics`)
 
-Instrumentación y medición normativa. **No cambia el sonido** (el DSP no se
-toca): añade lo necesario para poder afirmar y comprobar lo que la app hace.
+Instrumentación y medición normativa, más un cambio de fondo en la nivelación
+(ahora por sonoridad medida, no por RMS). El resto de la cadena DSP no se toca:
+la mayoría de los cambios añaden lo necesario para poder afirmar y comprobar lo
+que la app hace.
 
 ### Cambiado — Leveling por sonoridad (LUFS), no por RMS
 - El AGC de nivelación mide ahora con el **filtro K de ITU-R BS.1770** y apunta

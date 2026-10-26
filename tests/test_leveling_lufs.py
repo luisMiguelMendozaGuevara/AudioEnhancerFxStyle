@@ -200,7 +200,9 @@ def test_el_agc_es_estable_y_no_bombea():
         salida = e.process(audio[i : i + CHUNK])
         niveles.append(20.0 * math.log10(max(_rms(salida), 1e-9)))
 
-    asentado = niveles[20:]  # primeros ~0,4 s: rampa de activación
+    # Cebado (LEVELING_PRIME_S = 1 s) + suavizado (LEVELING_SLEW_S = 0,5 s):
+    # se descartan los primeros 2 s para medir el régimen, no la entrada.
+    asentado = niveles[100:]
     saltos = [abs(b - a) for a, b in zip(asentado, asentado[1:], strict=False)]
 
     assert max(saltos) < 1.0, f"salto de {max(saltos):.2f} dB entre bloques (bombeo)"
@@ -220,19 +222,225 @@ def test_el_agc_convive_con_la_cadena_completa_sin_nan():
     assert float(np.abs(salida).max()) <= 1.0
 
 
-def test_el_estado_del_filtro_k_persiste_entre_bloques():
-    """Sin estado persistente aparecería un transitorio en cada frontera.
+def test_no_hay_clic_en_las_fronteras_de_bloque():
+    """Sin estado persistente del filtro K habría un salto en cada frontera.
 
-    Se compara procesar 4096 en un bloque contra 4x1024: si el filtro K se
-    reiniciara por bloque, la diferencia sería audible (no ~1e-6).
+    Nota de diseño: la comparación "4096 en un bloque vs 4x1024" ya no aplica —
+    el AGC suaviza su corrección POR BLOQUE (es lo correcto para un AGC lento),
+    así que la granularidad cambia el resultado por diseño. La propiedad que sí
+    debe cumplirse es que la señal no tenga discontinuidades en las fronteras:
+    un filtro que se reiniciara por bloque dejaría un escalón audible.
     """
-    audio = _seno(2.0, 0.1)
+    e = _enhancer_con_nivelacion(10.0)
+    audio = _seno(4.0, 0.1, freq=1000.0)
+    salida = _procesar(e, audio).reshape(-1)
 
-    entero = _enhancer_con_nivelacion(10.0).process(audio.copy())
+    saltos = np.abs(np.diff(salida.astype(np.float64)))
+    # Pendiente natural del tono: 0.1 * 2*pi*1000/48000 = 0.0131 por muestra.
+    pendiente = 0.1 * 2.0 * math.pi * 1000.0 / FS
+    assert float(saltos.max()) < 1.5 * pendiente, (
+        f"salto de {saltos.max():.4f} entre muestras (clic); la pendiente del tono es {pendiente:.4f}"
+    )
 
-    por_bloques = _enhancer_con_nivelacion(10.0)
-    trozos = [por_bloques.process(t) for t in np.array_split(audio.copy(), 4)]
-    partes = np.concatenate(trozos, axis=0)
+    # Y las fronteras de bloque no son peores que el interior.
+    fronteras = [i * CHUNK - 1 for i in range(1, len(audio) // CHUNK)]
+    en_frontera = float(saltos[[f for f in fronteras if f < len(saltos)]].max())
+    assert en_frontera <= float(np.percentile(saltos, 99.9)), "hay un escalón en las fronteras de bloque"
 
-    escala = max(float(np.abs(entero).max()), 1e-6)
-    assert float(np.abs(partes - entero).max()) / escala < 1e-5
+
+# ---------------------------------------------------------------------------
+# 5. Contrato numérico (mutation thinking: 13 de 17 mutaciones sobrevivían)
+# ---------------------------------------------------------------------------
+
+
+def test_el_objetivo_es_menos_18_lufs_y_no_otro():
+    """El objetivo se fija con un LITERAL, no leyendo la propia constante.
+
+    Con la constante en la mano, cambiar LEVELING_TARGET_LUFS a -23 pasaba el
+    test de convergencia (comparaba contra sí mismo).
+    """
+    audio = _seno(20.0, 10.0 ** (-26.0 / 20.0))
+    salida = _lufs(_procesar(_enhancer_con_nivelacion(10.0), audio))
+
+    assert salida == pytest.approx(-18.0, abs=1.0), f"salida {salida:.2f} LUFS (objetivo documentado -18)"
+
+
+def test_el_tope_de_correccion_es_9_db_literal():
+    """Material muy bajo pide +22 dB: el AGC no puede pasar de 9 dB (literal)."""
+    audio = _seno(20.0, 0.01)  # -40 LUFS
+    salida = _procesar(_enhancer_con_nivelacion(10.0), audio)
+    ganancia_db = 20.0 * math.log10(max(_rms(salida) / _rms(audio), 1e-9))
+
+    assert 8.2 <= ganancia_db <= 9.5, f"tope aplicado {ganancia_db:.2f} dB (documentado 9)"
+
+
+def test_la_envolvente_es_lenta_de_verdad():
+    """Tras una caída brusca de nivel, la envolvente tarda en bajar.
+
+    Se mide el método directamente (la cadena tiene además un suavizado de
+    bloque que enmascararía un ataque rápido): con una envolvente rápida
+    (0.005 s / 0.35 s) el valor caería decenas de dB en 100 ms; con la lenta
+    (0.5 s / 3 s) apenas se mueve.
+    """
+    e = _enhancer_con_nivelacion(10.0)
+    fuerte = _seno(2.0, 10.0 ** (-12.0 / 20.0))
+    debil = _seno(2.0, 10.0 ** (-30.0 / 20.0))
+
+    # Asentar la envolvente con el material fuerte.
+    for i in range(0, len(fuerte), CHUNK):
+        e._loudness_env_db(fuerte[i : i + CHUNK])
+    antes = float(np.median(e._loudness_env_db(fuerte[:CHUNK])))
+
+    # 100 ms de material 18 dB más bajo: la envolvente no debe seguirlo.
+    caida = 0.0
+    for i in range(0, 5 * CHUNK, CHUNK):
+        bloque = e._loudness_env_db(debil[i : i + CHUNK])
+        caida = antes - float(np.median(bloque))
+
+    assert caida < 3.0, f"la envolvente cayó {caida:.1f} dB en 100 ms (demasiado rápida para un AGC)"
+
+
+def test_el_control_0_a_10_escala_la_correccion():
+    """leveling=5 aplica aproximadamente la mitad de corrección que 10."""
+    audio = _seno(20.0, 10.0 ** (-28.0 / 20.0))
+
+    def ganancia(amount: float) -> float:
+        salida = _procesar(_enhancer_con_nivelacion(amount), audio)
+        return 20.0 * math.log10(max(_rms(salida) / _rms(audio), 1e-9))
+
+    plena = ganancia(10.0)
+    media = ganancia(5.0)
+
+    assert media == pytest.approx(plena / 2.0, abs=0.8), f"5 -> {media:.2f} dB, 10 -> {plena:.2f} dB"
+
+
+def test_con_el_compresor_activo_tambien_converge():
+    """El AGC va DESPUÉS del compresor (si fuera antes, el compresor se comería el boost)."""
+    e = _enhancer_con_nivelacion(10.0)
+    e.compressor = True
+    e.comp_threshold = 0.1  # muy bajo a propósito: comprime de verdad
+    e.comp_ratio = 4.0
+    audio = _seno(20.0, 10.0 ** (-26.0 / 20.0))
+
+    salida = _lufs(_procesar(e, audio))
+
+    assert salida == pytest.approx(-18.0, abs=2.0), f"salida {salida:.1f} LUFS con compresor"
+
+
+def test_con_el_eq_activo_mide_la_senal_procesada_no_la_entrada():
+    """Sube +6 dB una banda: el AGC debe compensarlo (mide después del EQ).
+
+    Si midiera la entrada, la salida quedaría ~6 dB por encima del objetivo.
+    """
+    e = _enhancer_con_nivelacion(10.0)
+    ganancias = [0.0] * len(e.eq_bands)
+    indice = min(range(len(e.eq_bands)), key=lambda i: abs(e.eq_bands[i] - 1000.0))
+    ganancias[indice] = 6.0
+    e.eq_gains = ganancias
+    audio = _seno(20.0, 10.0 ** (-26.0 / 20.0))
+
+    salida = _lufs(_procesar(e, audio))
+
+    assert salida == pytest.approx(-18.0, abs=1.5), f"salida {salida:.1f} LUFS con EQ +6 dB"
+
+
+def test_el_silencio_hace_decaer_la_correccion_en_vez_de_congelarla():
+    """En una pausa la corrección cae hacia la unidad (no se queda en +9 dB).
+
+    Se probó primero a congelarla ("hold") y medido era peor: tras 6 s de pausa
+    seguía en +9 dB y lo aplicaba al material que volviera. Con decaimiento y
+    puerta rápida, el AGC vuelve a medir cuando hay audio.
+    """
+    e = _enhancer_con_nivelacion(10.0)
+    callado = _seno(4.0, 10.0 ** (-30.0 / 20.0))
+    for i in range(0, len(callado), CHUNK):
+        e.process(callado[i : i + CHUNK])
+    correccion_con_audio = e._lv_corr_db
+    assert correccion_con_audio > 7.0  # material muy bajo: pide el tope
+
+    silencio = np.zeros((CHUNK, 2), dtype=np.float32)
+    for _ in range(100):  # ~2 s de pausa
+        e.process(silencio)
+
+    assert abs(e._lv_corr_db) < 1.0, (
+        f"la correccion no decayo en la pausa: {correccion_con_audio:.2f} -> {e._lv_corr_db:.2f} dB"
+    )
+
+
+def test_el_material_fuerte_que_vuelve_tras_una_pausa_no_recibe_boost():
+    """El defecto clásico de un AGC sin puerta rápida: +9 dB a la primera nota."""
+    e = _enhancer_con_nivelacion(10.0)
+    callado = _seno(4.0, 10.0 ** (-30.0 / 20.0))
+    for i in range(0, len(callado), CHUNK):
+        e.process(callado[i : i + CHUNK])
+    assert e._lv_corr_db > 7.0  # está aplicando el tope
+
+    silencio = np.zeros((CHUNK, 2), dtype=np.float32)
+    for _ in range(100):  # ~2 s de pausa
+        e.process(silencio)
+
+    fuerte = _seno(4.0, 10.0 ** (-12.0 / 20.0))
+    primer_bloque = e.process(fuerte[:CHUNK])
+    ganancia_db = 20.0 * math.log10(max(_rms(primer_bloque) / _rms(fuerte[:CHUNK]), 1e-9))
+
+    assert abs(ganancia_db) < 1.0, f"la primera nota tras la pausa recibio {ganancia_db:+.2f} dB"
+
+
+def test_la_puerta_rapida_detecta_la_pausa_antes_que_la_envolvente():
+    """La puerta usa un detector de 50 ms: cruza -70 LUFS mucho antes que la del AGC."""
+    e = _enhancer_con_nivelacion(10.0)
+    callado = _seno(2.0, 10.0 ** (-30.0 / 20.0))
+    e.process(callado[:CHUNK])
+    puerta_con_audio = e._lv_gate_db
+
+    silencio = np.zeros((CHUNK, 2), dtype=np.float32)
+    for _ in range(35):  # ~750 ms: detector de 25 ms + hold de 150 ms
+        e.process(silencio)
+
+    assert puerta_con_audio > -70.0
+    assert e._lv_gate_db < -70.0, f"la puerta sigue abierta tras 750 ms de silencio ({e._lv_gate_db:.1f} LUFS)"
+
+
+def test_un_hueco_corto_entre_notas_no_reinicia_el_agc():
+    """Un silencio de 100 ms (staccato) NO debe tomarse por una pausa.
+
+    Sin el hold de la puerta, cada hueco entre notas haría caer la corrección y
+    volver a cebar: el AGC bombearía con material articulado.
+    """
+    e = _enhancer_con_nivelacion(10.0)
+    callado = _seno(3.0, 10.0 ** (-30.0 / 20.0))
+    for i in range(0, len(callado), CHUNK):
+        e.process(callado[i : i + CHUNK])
+    antes = e._lv_corr_db
+
+    silencio = np.zeros((CHUNK, 2), dtype=np.float32)
+    for _ in range(5):  # ~106 ms
+        e.process(silencio)
+
+    assert abs(e._lv_corr_db - antes) < 3.0, (
+        f"un hueco de 100 ms movio la correccion {antes:.2f} -> {e._lv_corr_db:.2f} dB"
+    )
+
+
+def test_apagar_y_reactivar_no_produce_una_rafaga():
+    """Al reactivar, el cebado impide que el primer bloque pegue +9 dB."""
+    e = _enhancer_con_nivelacion(10.0)
+    fuerte = _seno(3.0, 10.0 ** (-30.0 / 20.0))
+    for i in range(0, len(fuerte), CHUNK):
+        e.process(fuerte[i : i + CHUNK])
+
+    # Apagar: el control se suaviza (tau ~30 ms), así que se dejan pasar varios
+    # bloques hasta que el efecto quede realmente en 0 y limpie su estado.
+    e.leveling = 0.0
+    for _ in range(30):  # la rampa de apagado tarda ~14 bloques en llegar a 0
+        e.process(fuerte[:CHUNK])
+    assert not any(clave.startswith(("lvl_", "lvk")) for clave in e._env_zi)
+    assert not any(clave.startswith("lvk") for clave in e._exc_zi)
+
+    # Reactivar con material fuerte: el primer bloque no puede amplificar.
+    e.leveling = 10.0
+    entrada = fuerte[:CHUNK]
+    salida = e.process(entrada)
+    ganancia_db = 20.0 * math.log10(max(_rms(salida) / _rms(entrada), 1e-9))
+
+    assert abs(ganancia_db) < 1.0, f"ráfaga al reactivar: {ganancia_db:+.2f} dB en el primer bloque"

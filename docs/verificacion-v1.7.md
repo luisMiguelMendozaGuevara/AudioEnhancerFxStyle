@@ -214,3 +214,56 @@ Pendiente asumido (documentado, no bloqueante): el recálculo del integrado
 (1 Hz) sigue ocurriendo en el hilo de audio (≈0,3-1 ms una vez por segundo con
 historial largo) — moverlo al hilo `viz` es la mejora natural. El callback de
 PortAudio sigue sin instrumentar (se mide `Enhancer.process()`, no el callback).
+
+
+## 10. Leveling por sonoridad (v1.8) y su auditoría
+
+El AGC de nivelación dejó de medir RMS y mide **sonoridad LUFS** (filtro K de
+ITU-R BS.1770, objetivo −18 LUFS, tope ±9 dB, control 0-10).
+
+| Medida | Antes (RMS) | Ahora (LUFS) |
+|---|---|---|
+| Material a −26 LUFS con nivelación 10 | quedaba a ~11 LU del objetivo | **−18,3 LUFS** |
+| Material a −20 / −12 LUFS | — | **−18,1 / −17,4 LUFS** |
+| Mismo RMS, 60 Hz vs 2 kHz | misma corrección | **+8,9 dB vs +5,9 dB** |
+| Primera nota tras 2 s de pausa | — | **0,0 dB** (sin ráfaga) |
+| Coste | — | **+0,3-0,5 ms/bloque** solo con el efecto activo |
+
+### 10.1 Lo que encontraron los dos scopes
+
+**Defecto real (el más importante):** no había puerta ni cebado. La envolvente
+lenta (release 3 s) tarda ~13 s en cruzar −70 LUFS tras un silencio, así que el
+AGC se quedaba en +9 dB durante una pausa y **lo aplicaba al material que
+volviera**: la primera nota entraba hasta 9 dB de más. Era, además, justo el
+defecto contra el que el propio módulo avisa (`loudness_gain_db`).
+
+Corregido en tres pasos (cada uno medido, no supuesto):
+
+1. **Cebado** de 1 s de medida válida antes de actuar.
+2. **Detector rápido de puerta** (25 ms + hold de 150 ms) para distinguir una
+   pausa de material bajito, sin reiniciar el AGC en los huecos entre notas.
+3. **Slew asimétrico**: la corrección sube despacio (0,5 s) y baja rápido
+   (0,08 s) cuando entra material fuerte.
+
+Resultado medido: con material callado el AGC está en **+8,98 dB**; tras 2 s de
+silencio, **+0,00 dB**; la primera nota fuerte que vuelve recibe **0,0 dB**.
+
+**Otros hallazgos aplicados:** el `clip` estaba duplicado (ahora se usa
+`loudness_gain_db`, una sola fuente de verdad), el tooltip de la UI decía
+"~−18 dBFS" (corregido a LUFS en ES/EN), el CHANGELOG se contradecía ("no
+cambia el sonido" cuando sí), y el docstring del bench prometía una vigilancia
+en CI que no existe (el bench es manual: los runners dan falsos positivos).
+
+### 10.2 Tests: de 13/17 mutaciones supervivientes a contrato fijado
+
+La primera batería solo demostraba la *dirección* del efecto. Se añadieron 11
+tests que fijan el contrato numérico con **literales** (no leyendo las propias
+constantes): objetivo −18 LUFS ±1, tope ≤9,5 dB, escalado de 0-10 (5 ≈ mitad de
+10), envolvente lenta medida directamente, convergencia con compresor activo
+(orden en la cadena) y con EQ activo (punto de medida), decaimiento en pausa,
+ráfaga al reactivar, puerta rápida y hueco corto entre notas.
+
+### 10.3 Estado
+
+**494 tests** (empezó en 372) · ruff y mypy limpios · bench dentro del
+presupuesto (`full_hot_leveling` 8,2 % del bloque).

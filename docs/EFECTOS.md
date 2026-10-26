@@ -75,6 +75,12 @@ apagadas se saltan sin coste:
   brillante sube de más; con LUFS la corrección sigue a lo que se oye. Medido en
   esta versión: a igual RMS, un tono de 60 Hz mide -29,6 LUFS y uno de 2 kHz
   -23,6 LUFS, así que el AGC sube el grave ~3 dB más.
+- **Protecciones**: en silencio y pausas (por debajo de -70 LUFS, con un
+  detector rápido de 50 ms) el AGC no pide corrección y la aplicada **decae**
+  hacia la unidad: al volver el audio se vuelve a medir. El efecto se activa
+  con ~1 s de cebado, la corrección sube despacio (0,5 s) y baja rápido
+  (0,08 s) si entra material fuerte. Resultado: no hay saltos de nivel en la
+  primera nota, ni al volver de una pausa, ni al encender el control.
 - **Cómo suena**: iguala el volumen ENTRE pistas — una canción bajita sube y
   una muy fuerte baja un poco; dejas de tocar el volumen entre canciones.
   En música clásica puede aplanar los contrastes.

@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from .constants import SAMPLE_RATE
-from .loudness import LOUDNESS_OFFSET_DB
+from .loudness import GATE_ABSOLUTE_LUFS, LOUDNESS_OFFSET_DB, k_weighting_sos, loudness_gain_db
 
 logger = logging.getLogger("audio_enhancer.dsp")
 
@@ -177,6 +177,23 @@ LEVELING_TARGET_LUFS = -18.0
 LEVELING_MAX_DB = 9.0
 LEVELING_ATTACK_S = 0.5
 LEVELING_RELEASE_S = 3.0
+# Cebado: durante el primer segundo de medida VÁLIDA no se actúa. Sin esto, al
+# encender el control (o al volver el audio tras una pausa) la envolvente parte
+# de cero y el AGC pediría el máximo (+9 dB) durante un instante: un salto de
+# nivel audible en la primera nota.
+LEVELING_PRIME_S = 1.0
+# Suavizado de la corrección entre bloques (segundos): lento al SUBIR (un AGC no
+# debe hinchar de golpe) y rápido al BAJAR (seguridad: si entra material fuerte,
+# la ganancia sobrante desaparece en ~80 ms en vez de quedarse medio segundo
+# empujando el limitador).
+LEVELING_SLEW_S = 0.5
+LEVELING_SLEW_DOWN_S = 0.08
+# Detector RÁPIDO solo para la puerta (segundos): la envolvente del AGC (3 s de
+# release) tarda ~13 s en cruzar -70 LUFS tras un silencio, así que por sí sola
+# no distingue una pausa de material bajito. El retardo (hold) evita que un
+# silencio corto ENTRE notas se tome por una pausa y reinicie el AGC.
+LEVELING_GATE_S = 0.025
+LEVELING_GATE_HOLD_S = 0.15
 # Alias histórico (v1.6 usaba un objetivo en dBFS RMS): se mantiene por
 # compatibilidad de imports, pero el AGC ya no mide RMS.
 LEVELING_TARGET_DB = LEVELING_TARGET_LUFS
@@ -458,6 +475,11 @@ class Enhancer:
         # la tasa, así que se recalcula cuando cambia.
         self._lv_sos: Any = None
         self._lv_rate: int = 0
+        # Estado del AGC por sonoridad (corrección aplicada, cebado y puerta).
+        self._lv_corr_db: float = 0.0
+        self._lv_valid_s: float = 0.0
+        self._lv_gate_db: float = -120.0
+        self._lv_gate_below_s: float = 0.0
         # Ambience (Fase 3): historial para las reflexiones tempranas.
         self._amb_hist: np.ndarray | None = None
         # Surround (Fase 3): factor del guard de correlación (suavizado).
@@ -548,6 +570,12 @@ class Enhancer:
         # Caché del filtro K (BS.1770) del Leveling: depende de la tasa.
         self._lv_sos = None
         self._lv_rate = 0
+        # Estado del AGC por sonoridad: corrección aplicada (dB), segundos de
+        # medida válida acumulados (cebado) y nivel del detector rápido (puerta).
+        self._lv_corr_db = 0.0
+        self._lv_valid_s = 0.0
+        self._lv_gate_db = -120.0
+        self._lv_gate_below_s = 0.0
         self._amb_hist = None
         self._sr_boost = 0.0
         self.spectrum = None
@@ -1288,8 +1316,6 @@ class Enhancer:
         fs = int(self.sample_rate) or 48000
         sos = self._lv_sos
         if sos is None or self._lv_rate != fs:
-            from .loudness import k_weighting_sos
-
             sos = k_weighting_sos(fs)
             self._lv_sos = sos
             self._lv_rate = fs
@@ -1303,6 +1329,11 @@ class Enhancer:
         pole_rel = math.exp(-1.0 / (fs * LEVELING_RELEASE_S))
         rapido, self._env_zi["lvl_att"] = _onepole_lp(potencia, pole_att, self._env_zi.get("lvl_att", 0.0))
         lento, self._env_zi["lvl_rel"] = _onepole_lp(potencia, pole_rel, self._env_zi.get("lvl_rel", 0.0))
+        # Detector rápido SOLO para la puerta: distingue "pausa" de "material
+        # bajito" en ~100 ms (la envolvente lenta tarda segundos).
+        pole_puerta = math.exp(-1.0 / (fs * LEVELING_GATE_S))
+        puerta, self._env_zi["lvl_gate"] = _onepole_lp(potencia, pole_puerta, self._env_zi.get("lvl_gate", 0.0))
+        self._lv_gate_db = LOUDNESS_OFFSET_DB + 10.0 * math.log10(max(float(np.median(puerta)), 1e-12))
         envolvente = np.maximum(rapido, lento)
         return LOUDNESS_OFFSET_DB + 10.0 * np.log10(np.maximum(envolvente, 1e-12))
 
@@ -1315,21 +1346,64 @@ class Enhancer:
         de BS.1770, así que el AGC sube lo que el oído percibe bajo, no lo que
         más energía tiene.
 
+        Salvaguardas (todas necesarias para que no se oiga):
+        - **Gate + decaimiento**: por debajo de -70 LUFS (silencio, pausas, colas
+          de fade) NO se pide corrección y la aplicada decae hacia la unidad. Un
+          AGC que reaccionara a un -inf subiría al máximo en cada pausa; uno que
+          congelara la corrección la aplicaría de golpe al volver el audio.
+        - **Cebado**: durante el primer segundo de medida válida no actúa, para
+          que el arranque de la envolvente no pida +9 dB.
+        - **Suavizado entre bloques** (0.5 s): la corrección se desliza, nunca
+          salta. La ganancia es un escalar por bloque (un AGC es lento por
+          definición; modularla muestra a muestra la convertiría en compresor).
+
         Corrección acotada a ±``LEVELING_MAX_DB`` y escalada por ``amount`` 0-10
         (0 = apagado). Va ANTES del volumen del usuario: normaliza el material,
         no su ajuste manual."""
         amount = self._smooth_effect("leveling", float(self.leveling), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
-            for clave in ("lvl_att", "lvl_rel", "lvk1", "lvk2"):
+            for clave in ("lvl_att", "lvl_rel", "lvl_gate", "lvk1", "lvk2"):
                 self._env_zi.pop(clave, None)
                 self._exc_zi.pop(clave, None)
+            self._lv_corr_db = 0.0
+            self._lv_valid_s = 0.0
+            self._lv_gate_db = -120.0
+            self._lv_gate_below_s = 0.0
             return y
         lufs = self._loudness_env_db(y)
-        corr_db = np.clip(LEVELING_TARGET_LUFS - lufs, -LEVELING_MAX_DB, LEVELING_MAX_DB) * (amount / EFFECT_MAX)
-        if float(np.abs(corr_db).max()) <= 1e-3:
+        # Mediana del bloque: robusta frente a un pico aislado dentro de él.
+        medido = float(np.median(lufs)) if lufs.size else -math.inf
+        escalado = amount / EFFECT_MAX
+        # La puerta usa el detector RÁPIDO: sin él, tras un silencio la
+        # envolvente lenta sigue por encima de -70 durante ~13 s y el AGC
+        # aplicaría el máximo al material que vuelve.
+        puerta_abierta = math.isfinite(self._lv_gate_db) and self._lv_gate_db > GATE_ABSOLUTE_LUFS
+        # Hold de la puerta: solo se declara pausa si el detector rápido lleva
+        # LEVELING_GATE_HOLD_S por debajo del umbral (un hueco corto entre notas
+        # no debe reiniciar el AGC).
+        self._lv_gate_below_s = 0.0 if puerta_abierta else self._lv_gate_below_s + block_sec
+        pausa = self._lv_gate_below_s >= LEVELING_GATE_HOLD_S
+        if math.isfinite(medido) and medido > GATE_ABSOLUTE_LUFS and not pausa:
+            self._lv_valid_s += block_sec
+            objetivo = loudness_gain_db(medido, LEVELING_TARGET_LUFS, LEVELING_MAX_DB) * escalado
+            # Cebado: aún sin medición asentada, no se actúa.
+            destino = objetivo if self._lv_valid_s >= LEVELING_PRIME_S else 0.0
+        else:
+            # Silencio o pausa: la corrección DECAE hacia la unidad (no se
+            # congela). Congelarla parecía más seguro, pero medido era peor: tras
+            # 6 s de pausa seguía en +9 dB y lo aplicaba al material que volviera
+            # (si volvía fuerte, 9 dB de más durante medio segundo). Al decaer, el
+            # AGC vuelve a medir y, con el cebado, se re-engancha sin salto.
+            self._lv_valid_s = 0.0
+            destino = 0.0
+        # Suavizado exponencial ASIMÉTRICO: bajar rápido (seguridad), subir lento.
+        tau = LEVELING_SLEW_S if destino > self._lv_corr_db else LEVELING_SLEW_DOWN_S
+        alfa = 1.0 - math.exp(-block_sec / tau)
+        self._lv_corr_db += (destino - self._lv_corr_db) * alfa
+        if abs(self._lv_corr_db) <= 1e-3:
             return y
-        gain = (10.0 ** (corr_db / 20.0)).astype(np.float32)
-        return (y * gain[:, None]).astype(np.float32, copy=False)
+        gain = np.float32(10.0 ** (self._lv_corr_db / 20.0))
+        return (y * gain).astype(np.float32, copy=False)
 
     # ---------- capa enhancer: exciters Clarity y Bass (Fase 2) ----------
 

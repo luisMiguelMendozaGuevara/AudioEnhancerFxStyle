@@ -148,7 +148,8 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
             lambda _i: hot,
         ),
         # Leveling por sonoridad (BS.1770): añade el filtro K (2 biquads) y las
-        # envolventes lentas. Es el escenario que vigila ese coste en el tiempo.
+        # envolventes lentas. Comparación manual con --baseline (el CI no corre
+        # este script: los runners son más lentos y daría falsos positivos).
         "full_hot_leveling": (
             _make_enhancer(volume=1.4, leveling=10.0),
             lambda _i: hot,
