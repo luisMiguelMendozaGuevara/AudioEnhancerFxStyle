@@ -18,6 +18,7 @@ Escenarios:
     full_hot    cadena completa con señal sobre umbrales (compresión y
                 limitación activas, peor caso de CPU)
     full_hot_leveling  igual que full_hot con el AGC por LUFS activo (filtro K)
+    full_enhancer      exciters a tope (Clarity con ADAA + Bass con 2F/3F)
     full_hot_sin_limiter  igual pero con el limitador APAGADO y señal que
                 cruza el techo de seguridad en todos los bloques
     spectrum    compute_spectrum() por tick (hilo de UI, no callback)
@@ -154,6 +155,15 @@ def run_benchmarks(n_blocks: int = MEASURE_BLOCKS) -> dict:
             _make_enhancer(volume=1.4, leveling=10.0),
             lambda _i: hot,
         ),
+        # Exciters a tope (Clarity con ADAA + Bass con 2F/3F): es su camino de
+        # coste, que antes no medía ningún escenario (los efectos iban a 0).
+        "full_enhancer": (
+            _make_enhancer(
+                volume=1.0,
+                effects={"fidelity": 10.0, "bass": 10.0, "ambience": 0.0, "surround": 0.0, "dynamic_boost": 0.0},
+            ),
+            lambda _i: moderate,
+        ),
         # Peor caso del techo de seguridad: limitador musical APAGADO con
         # señal que cruza el techo en todos los bloques (el look-ahead entra
         # como techo 0.99; mismo coste que el limitador true-peak activo).
@@ -201,7 +211,16 @@ def _print_table(results: dict) -> None:
     print(header)
     print("-" * len(header))
     budget_us = meta["block_ms"] * 1000.0
-    for name in ("bypass", "eq_only", "full", "full_hot", "full_hot_leveling", "full_hot_sin_limiter", "spectrum"):
+    for name in (
+        "bypass",
+        "eq_only",
+        "full",
+        "full_hot",
+        "full_hot_leveling",
+        "full_enhancer",
+        "full_hot_sin_limiter",
+        "spectrum",
+    ):
         entry = results.get(name)
         if not entry:
             continue

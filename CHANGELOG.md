@@ -13,16 +13,23 @@ que la app hace.
 
 ### Cambiado — exciters: 3er armónico en graves y anti-aliasing en Clarity
 - **Bass exciter**: ahora genera **2º y 3er armónico** de la banda de graves
-  (hasta 120 Hz) en vez de solo el 2º. Medido: 2F a -15 dB y 3F a -23 dB
-  respecto a la fundamental, que se mantiene intacta (±1 dB) y sin añadir
-  continua. Motivo: el 2º armónico de una fundamental de 40 Hz cae en 80 Hz,
+  (hasta 120 Hz) en vez de solo el 2º. Medido: 2F a -15 dB y 3F a -23/-27 dB
+  según la fundamental, que se mantiene intacta (±0,4 dB) y sin añadir continua.
+  El nivel del 3F es independiente del nivel de entrada (se normaliza por la
+  potencia suavizada de la banda: ±0,2 dB de rizo entre bloques) y el paso-alto
+  de 4º orden deja la fuga de fundamental a -27 dB (con 2º orden era -14,8 y
+  competía con el propio 3F). Motivo: el 2º armónico de una fundamental de 40 Hz cae en 80 Hz,
   donde un altavoz pequeño no reproduce nada; el 3º cae en 120 Hz y sí.
 - **Clarity**: la rectificación que genera el 2º armónico usa **ADAA**
   (anti-aliasing por antiderivada). Sin él, un tono de 11 kHz producía un alias
   en 4 kHz a -13,8 dB del armónico útil; ahora queda a -31,6 dB (mejora de
-  17,8 dB) y el armónico conserva su nivel (compensación de ganancia).
+  17,8 dB). La compensación de ganancia del ADAA (x1,15) está calibrada en la
+  **banda útil** (6-16 kHz, atenuación real 0,2-1,3 dB): calibrarla en 22 kHz
+  (donde el ADAA atenúa 5,75 dB) dejaba el efecto +6 dB más caliente justo donde
+  se oye.
 - Coste medido de ambos exciters activos: +0,66 ms por bloque (3,1 % del
-  presupuesto de 21,3 ms).
+  presupuesto de 21,3 ms). El bench tiene ahora un escenario `full_enhancer`
+  (antes los efectos iban a 0 y no se medían).
 
 ### Cambiado — Leveling por sonoridad (LUFS), no por RMS
 - El AGC de nivelación mide ahora con el **filtro K de ITU-R BS.1770** y apunta

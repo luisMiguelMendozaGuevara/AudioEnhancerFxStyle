@@ -299,10 +299,12 @@ EXPLAIN = {
     "genera su 2º armónico para recuperar el detalle que el streaming se comió "
     "(voces, platos, 'aire') sin subir esa banda de volumen. Sube poco a poco: "
     "un exceso produce sibilancias.",
-    "bass_exciter": "Exciter de graves: filtra <100 Hz y genera su 2º armónico "
-    "(el oído lo interpreta como grave real). Da 'punch' en altavoces pequeños "
-    "sin retumbar. El 'Refuerzo de graves' de arriba es otra cosa: aquel sube "
-    "el volumen de la banda; este crea contenido nuevo.",
+    "bass_exciter": "Exciter de graves: filtra la banda hasta 120 Hz y genera sus "
+    "armónicos 2º y 3º (el oído los interpreta como grave real). El 3º es lo que "
+    "lo hace audible en altavoces pequeños: el 2º de una fundamental de 40 Hz cae "
+    "en 80 Hz, donde un altavoz pequeño no reproduce nada. El 'Refuerzo de graves' "
+    "de arriba es otra cosa: aquel sube el volumen de la banda; este crea "
+    "contenido nuevo.",
     "ambience": "Ambiente (sala): añade reflexiones tempranas muy cortas "
     "(11-41 ms) decorreladas entre canales, como una sala pequeña. Con "
     "auriculares la música deja de sentirse 'pegada al centro'. Un exceso "
@@ -361,8 +363,10 @@ EXPLAIN_EN = {
     "fidelity": "Clarity (Fidelity): presence exciter. Filters 3 kHz+ and "
     "generates its 2nd harmonic to restore detail lost to streaming (voices, "
     "cymbals, 'air') without raising that band's volume. Raise it slowly.",
-    "bass_exciter": "Bass exciter: filters <100 Hz and generates its 2nd "
-    "harmonic (the ear reads it as real bass). Adds punch on small speakers "
+    "bass_exciter": "Bass exciter: filters up to 120 Hz and generates its 2nd AND "
+    "3rd harmonics (the ear reads them as real bass). The 3rd is what makes it "
+    "audible on small speakers: the 2nd of a 40 Hz fundamental lands at 80 Hz, "
+    "where a small speaker reproduces nothing. Adds punch on small speakers "
     "without boom. The 'Bass boost' shelf above is different: it raises the "
     "band's volume; this creates new content.",
     "ambience": "Ambience (room): adds very short early reflections (11-41 ms) "

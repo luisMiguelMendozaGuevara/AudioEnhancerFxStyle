@@ -221,10 +221,13 @@ BASS_EXCITER_MIX_H3 = 0.35
 # hace el EQ). La escala 0.5 deja el 3F a ~-24 dB: se oye sin tapar al 2º.
 BASS_EXCITER_HP3_HZ = 120.0
 BASS_EXCITER_H3_SCALE = 0.5
-# Ganancia de compensación del ADAA: la antiderivada promedia dos muestras, así
-# que el armónico sale ~6 dB más bajo (medido: 0.516). Se compensa para que el
-# efecto conserve la fuerza que tenía y lo único que cambie sea el aliasing.
-ADAA_GAIN = 2.0
+# Ganancia de compensación de la atenuación que introduce el ADAA (promedia dos
+# muestras). Medido por frecuencia del ARMÓNICO: 3 kHz 0.981, 5 kHz 0.972,
+# 6 kHz 0.924, 8 kHz 0.866, 11 kHz 0.872 y 22 kHz 0.516. La banda útil de Clarity
+# es 6-16 kHz, así que se compensa ~1.2 dB (1.15); calibrar en el peor punto
+# (22 kHz, 0.516 -> x2) dejaba el efecto hasta +6 dB más caliente justo donde se
+# oye, que es el error que se corrigió aquí.
+ADAA_GAIN = 1.15
 EXCITER_Q = 0.707
 # Ambience: reflexiones tempranas (retardo en ms, ganancia) por canal; los
 # retardos son primos y distintos por canal (decorrelación L/R).
@@ -1471,7 +1474,8 @@ class Enhancer:
             df = f - f_ant
             pequeno = np.abs(dx) <= 1e-9
             seguro = np.where(pequeno, 1.0, dx)
-            rect = np.where(pequeno, np.abs(0.5 * (x + x_ant)), df / seguro) * ADAA_GAIN
+            # La ganancia se aplica SOLO al cociente: el fallback ya vale |x̄|.
+            rect = np.where(pequeno, np.abs(0.5 * (x + x_ant)), ADAA_GAIN * df / seguro)
             self._exc_zi[slot + "_adaa"] = (x[-1].copy(), f[-1].copy())
         else:
             rect = np.abs(x)
@@ -1501,9 +1505,24 @@ class Enhancer:
         monofonico = x.ndim == 1
         if monofonico:
             x = x[:, None]
-        potencia = float(np.mean(x * x)) + 1e-12
-        cubico = (x * x * x) / potencia * BASS_EXCITER_H3_SCALE
+        # Potencia POR CANAL y suavizada (~150 ms). Con la media del bloque:
+        # (a) un bloque medio lleno de señal daba +6 dB de 3F de golpe -> modulación
+        # audible a la tasa de bloque (47 Hz) con material articulado;
+        # (b) un seno de 40 Hz (0,85 ciclos por bloque) rizaba ±1,3 dB;
+        # (c) un bajo paneado a un solo canal recibía +6 dB respecto al centrado.
+        potencia_inst = np.mean(x * x, axis=0)
+        previa = self._exc_zi.get(slot + "_pow")
+        if not isinstance(previa, np.ndarray) or previa.shape != potencia_inst.shape:
+            potencia = potencia_inst
+        else:
+            potencia = 0.85 * previa + 0.15 * potencia_inst
+        self._exc_zi[slot + "_pow"] = potencia
+        cubico = (x * x * x) / (potencia + 1e-12) * BASS_EXCITER_H3_SCALE
+        # Paso-alto de 4º orden (dos biquads en cascada): con uno solo, la
+        # fundamental de 60 Hz fugaba a -14,8 dB y quedaba a 2 dB del propio 3F.
+        # Con dos, la fuga baja a ~-30 dB y el 3F domina con claridad.
         filtrado = self._apply_biquad(cubico, slot, self._highpass(hz, self.sample_rate))
+        filtrado = self._apply_biquad(filtrado, slot + "b", self._highpass(hz, self.sample_rate))
         out = np.asarray(filtrado, dtype=np.float64)
         return out[:, 0] if monofonico else out
 
@@ -1551,7 +1570,7 @@ class Enhancer:
         amount = self._smooth_effect("bass", float(self.effects.get("bass", 0.0)), block_sec)
         if amount <= 0.0 or y.shape[0] == 0:
             if self._exc_zi:
-                for clave in ("bx_lp", "bx_h2", "bx_h3"):
+                for clave in ("bx_lp", "bx_h2", "bx_h3", "bx_h3b", "bx_h3_pow"):
                     self._exc_zi.pop(clave, None)
             return y
         lp = self._apply_biquad(y, "bx_lp", self._lowpass(BASS_EXCITER_LP_HZ, self.sample_rate))

@@ -15,7 +15,7 @@ apagadas se saltan sin coste:
 4. **Exciters**: Claridad (3 kHz+) y Exciter de graves (<100 Hz).
 5. **Refuerzo dinámico** (compresor ascendente).
 6. **Compresor** (RMS clásico, opcional).
-7. **Nivelación** (AGC lento).
+7. **Nivelación** (AGC por sonoridad, LUFS).
 8. **Ambiente** y **Surround** (espacio y anchura).
 9. **Volumen** del usuario.
 10. **Balance** y **Master** (posición y nivel final).
@@ -59,7 +59,7 @@ apagadas se saltan sin coste:
 
 ### Exciter de graves (Bass) — 0-10
 - **Qué hace**: filtra la banda de graves (hasta 120 Hz) y genera su **2º y 3er
-  armónico** (medido: el 2º a -15 dB y el 3º a -23 dB respecto a la
+  armónico** (medido: el 2º a -15 dB y el 3º a -23/-27 dB según la
   fundamental): el oído los interpreta como grave real.
 - **Por qué dos armónicos**: el 2º de una fundamental de 40 Hz cae en 80 Hz,
   donde un altavoz pequeño (corte real 150-250 Hz) no reproduce nada. El 3º cae

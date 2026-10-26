@@ -161,16 +161,21 @@ def test_adaa_reduce_el_aliasing_de_la_rectificacion():
 
 
 def test_el_adaa_no_debilita_el_armonico_util():
-    """La compensación de ganancia mantiene el 2º armónico al mismo nivel."""
-    x = _stereo(0.25, 11000.0)
+    """La compensación mantiene el 2º armónico en la BANDA ÚTIL (6-16 kHz).
+
+    Antes se medía en 22 kHz, que es el peor punto del ADAA (0.516): calibrar
+    ahí dejaba el efecto hasta +6 dB más caliente en la banda que se oye. Medido
+    ahora en 6 kHz: +0,5 dB; en 8 kHz: 0,0 dB.
+    """
+    x = _stereo(0.25, 3000.0)
     e = Enhancer()
     e.sample_rate = FS
 
     h_con = e._harmonic_2nd(x, "a", adaa=True)
     h_sin = e._harmonic_2nd(x, "b", adaa=False)
 
-    diferencia_db = _db_rel(_energia(h_con, 22000.0), _energia(h_sin, 22000.0))
-    assert abs(diferencia_db) < 2.0, f"el armónico cambió {diferencia_db:+.1f} dB con ADAA"
+    diferencia_db = _db_rel(_energia(h_con, 6000.0), _energia(h_sin, 6000.0))
+    assert abs(diferencia_db) < 1.5, f"el armónico cambió {diferencia_db:+.1f} dB con ADAA"
 
 
 def test_el_alias_de_la_cadena_de_clarity_queda_muy_bajo():
@@ -222,3 +227,140 @@ def test_exciters_robustos_con_material_extremo(clave):
 
     assert np.isfinite(y).all()
     assert float(np.abs(y).max()) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# 4. Invariantes que la primera batería no fijaba (auditoría + mutaciones)
+# ---------------------------------------------------------------------------
+
+
+def test_el_tercer_armonico_no_depende_del_nivel():
+    """La relación 3F/fundamental es la MISMA a cualquier nivel de entrada.
+
+    Es la propiedad que justifica normalizar por POTENCIA: sin ella, un máster a
+    -6 dBFS recibiría 12 dB menos de 3F relativo que uno a -18 dBFS. Medido con
+    esta implementación: -27,2 / -27,2 / -27,3 dB para amplitud 0,1 / 0,3 / 0,6.
+    """
+    relaciones = []
+    for amplitud in (0.1, 0.3, 0.6):
+        x = _stereo(amplitud, 40.0)
+        y = _procesar_asentado(_enhancer(bass=10.0), x)
+        relaciones.append(_db_rel(_energia(y, 120.0), _energia(y, 40.0)))
+
+    dispersion = max(relaciones) - min(relaciones)
+    assert dispersion < 1.0, f"el 3F depende del nivel: {[round(r, 1) for r in relaciones]} dB"
+    assert -32.0 <= relaciones[1] <= -18.0, f"3F a {relaciones[1]:.1f} dB (esperado ~-27)"
+
+
+def test_el_nivel_del_tercer_armonico_es_estable_entre_bloques():
+    """La potencia de normalización se suaviza: sin eso rizaba 1,3 dB por bloque.
+
+    Medido: rango de la potencia suavizada 0,19 dB frente a 1,30 dB con la media
+    del bloque (un seno de 40 Hz da 0,85 ciclos por bloque).
+    """
+    e = _enhancer(bass=10.0)
+    x = _stereo(0.3, 40.0, segundos=1.5)
+    potencias = []
+    for i in range(0, len(x) - 1024, 1024):
+        e._harmonic_3rd(x[i : i + 1024], "t")
+        potencias.append(float(np.mean(e._exc_zi["t_pow"])))
+
+    estables = np.asarray(potencias[10:], dtype=np.float64)
+    rango_db = 10.0 * np.log10(estables.max() / estables.min())
+
+    assert rango_db < 0.5, f"la potencia de normalización riza {rango_db:.2f} dB entre bloques"
+
+
+def test_el_paso_alto_del_tercer_armonico_quita_la_fundamental():
+    """El cúbico también contiene la fundamental: el paso-alto la elimina.
+
+    Sin ese filtro, el exciter de graves sería además un refuerzo de graves
+    (solapado con el shelf), que es justo lo que el texto de la app promete que
+    NO hace.
+    """
+    e = Enhancer()
+    e.sample_rate = FS
+    x = _stereo(0.3, 60.0)
+
+    solo_tercero = e._harmonic_3rd(x, "h3")
+
+    # Con paso-alto de 4º orden a 120 Hz (dos biquads) la fuga de la fundamental
+    # de 60 Hz queda a -27,1 dB (con uno solo era -14,8, a 2 dB del propio 3F).
+    # La propiedad que importa: el 3F domina claramente sobre esa fuga.
+    residuo = _db_rel(_energia(solo_tercero, 60.0), _energia(x, 60.0))
+    tercero = _db_rel(_energia(solo_tercero, 180.0), _energia(x, 60.0))
+    assert residuo < -20.0, f"fuga de fundamental {residuo:.1f} dB"
+    assert tercero > residuo + 8.0, f"el 3F ({tercero:.1f}) no domina sobre la fuga ({residuo:.1f})"
+
+
+def test_el_adaa_conserva_la_fase_del_armonico():
+    """El armónico con ADAA debe estar EN FASE con el de la rectificación normal.
+
+    Los tests de magnitud no ven un signo invertido; con fase invertida el camino
+    ADAA y su rama de respaldo trabajarían en oposición (artefacto en cada cruce
+    por cero).
+    """
+    e = Enhancer()
+    e.sample_rate = FS
+    x = _stereo(0.25, 3000.0)
+
+    con = np.asarray(e._harmonic_2nd(x, "a", adaa=True), dtype=np.float64).reshape(-1)
+    sin = np.asarray(e._harmonic_2nd(x, "b", adaa=False), dtype=np.float64).reshape(-1)
+    # Correlación normalizada en la zona estable (fuera del transitorio inicial).
+    a, b = con[2048:], sin[2048:]
+    correlacion = float(np.dot(a, b) / max(np.linalg.norm(a) * np.linalg.norm(b), 1e-30))
+
+    assert correlacion > 0.9, f"correlación {correlacion:.2f}: el ADAA cambia la fase"
+
+
+def test_el_adaa_funciona_tambien_con_senal_bajita():
+    """A -40 dBFS (nivel real de platos y 'aire') el ADAA debe seguir actuando.
+
+    Con un umbral absoluto demasiado alto (1e-3) y esta señal (diferencias de
+    ~1e-5 entre muestras) el ADAA quedaría desactivado justo donde importa.
+    """
+    x = _stereo(0.01, 11000.0)  # -40 dBFS
+
+    def alias_relativo(adaa: bool) -> float:
+        e = Enhancer()
+        e.sample_rate = FS
+        h = e._harmonic_2nd(x, "t", adaa=adaa)
+        return _db_rel(_energia(h, 4000.0), _energia(h, 22000.0))
+
+    assert alias_relativo(True) < alias_relativo(False) - 5.0
+
+
+@pytest.mark.parametrize("clave", ["fidelity", "bass"])
+def test_apagar_un_exciter_limpia_todo_su_estado(clave):
+    """No debe quedar ni un slot del efecto: una muestra obsoleta da un clic."""
+    e = _enhancer(**{clave: 10.0})
+    x = _stereo(0.3, 3000.0 if clave == "fidelity" else 60.0)
+
+    _procesar_asentado(e, x)
+    prefijos = ("cl_",) if clave == "fidelity" else ("bx_",)
+    assert any(clave_slot.startswith(prefijos) for clave_slot in e._exc_zi), "no se creó estado"
+
+    # Apagar y dejar pasar la rampa de suavizado (tau ~30 ms) hasta el corte real.
+    e.effects = {**e.effects, clave: 0.0}
+    for _ in range(30):
+        e.process(x[:1024])
+
+    restantes = [slot for slot in e._exc_zi if slot.startswith(prefijos)]
+    assert restantes == [], f"quedó estado del exciter apagado: {restantes}"
+
+
+def test_el_paso_bajo_de_clarity_atenua_los_armonicos_altos():
+    """El LP de ~16 kHz tiene que atenuar de verdad el 4º armónico (22 kHz).
+
+    El test preexistente comparaba h2 contra h4 con el LP ya aplicado, así que
+    pasaría aunque se eliminara el filtro: aquí se mide antes y después.
+    """
+    e = Enhancer()
+    e.sample_rate = FS
+    x = _stereo(0.25, 5500.0)
+    hp = e._apply_biquad(x, "hp", e._highpass(3000.0, FS))
+    sin_lp = e._harmonic_2nd(hp, "h2")
+    con_lp = e._apply_biquad(sin_lp, "lp", e._lowpass(16000.0, FS))
+
+    atenuacion = _db_rel(_energia(con_lp, 22000.0), _energia(sin_lp, 22000.0))
+    assert atenuacion < -10.0, f"el LP solo atenúa {atenuacion:.1f} dB el 4º armónico"
