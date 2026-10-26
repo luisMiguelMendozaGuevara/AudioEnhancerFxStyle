@@ -21,6 +21,7 @@ import audio_enhancer.config_manager as cfg_manager_mod  # noqa: E402
 import audio_enhancer.single_instance as single_instance_mod  # noqa: E402
 import audio_enhancer.ui.new.main_window as mw  # noqa: E402
 from audio_enhancer.constants import SAMPLE_RATE  # noqa: E402
+from audio_enhancer.ui.new.theme.colors import Theme  # noqa: E402
 
 
 class _FakeSharedArray:
@@ -261,3 +262,85 @@ def test_los_valores_en_aviso_se_marcan(window):
     assert panel._en_aviso("huecos", 3.0) is True
     assert panel._en_aviso("dsp_p99", 12.0) is True  # más de la mitad del bloque
     assert panel._en_aviso("lufs", -99.0) is False  # no todo avisa
+
+
+def test_inicio_nace_con_el_estado_real_del_motor(window):
+    """Una página creada con el motor en marcha NO puede decir 'Detenido'.
+
+    El setter de AudioState solo emite cuando el valor cambia, así que la página
+    reconstruida (cambio de tema o de idioma) no recibe ninguna señal: tiene que
+    leer el estado al construirse.
+    """
+    window.state.processing = True  # sin emitir hacia esta página nueva
+    from audio_enhancer.ui.new.pages.home import HomePage
+
+    pagina = HomePage(window.state, window._t)
+
+    assert pagina._status_text.text() == "ACTIVO"
+    assert pagina._start_button.text() == "Detener audio"
+
+
+def test_cambiar_tema_con_audio_activo_mantiene_activo_en_inicio(window):
+    """El bug reportado: al cambiar el tema, Inicio volvía a 'Detenido'."""
+    window._on_audio_started("CABLE Input", "Altavoces", 48000)
+    window._on_output_ready(81.3)
+    assert window._pages["home"]._status_text.text() == "ACTIVO"
+
+    window._on_theme_changed(1 if Theme.mode == "dark" else 0)
+
+    home = window._pages["home"]
+    assert home._status_text.text() == "ACTIVO", "el audio sigue activo tras el rebuild"
+    assert home._start_button.text() == "Detener audio"
+    assert window._status_bar._status_label.text() == "Activo"
+    # La página Audio también conserva su estado (antes quedaba en '--').
+    assert window._pages["audio"]._info_labels["status"].text() == "Processing"
+
+
+def test_el_rebuild_sin_audio_deja_las_paginas_en_inactivo(window):
+    """El arreglo no debe pintar 'ACTIVO' cuando el motor está parado."""
+    window._rebuild_pages()
+
+    assert window._pages["home"]._status_text.text() == "Detenido"
+    assert window._pages["home"]._start_button.text() == "Iniciar audio"
+    assert window._status_bar._status_label.text() == "Inactivo"
+
+
+def test_un_aviso_en_la_barra_caduca_y_vuelve_al_estado(window):
+    """Un aviso ('Dispositivos listos.') no puede quedarse fijo para siempre."""
+    barra = window._status_bar
+    barra.set_processing(True)
+
+    barra.set_status_text("Dispositivos listos.", Theme.SUCCESS)
+    assert barra.estado_visible == "Dispositivos listos."
+    assert barra._timer.isActive(), "el aviso debe tener caducidad"
+
+    barra._volver_al_estado()  # lo que hará el timer a los 6 s
+
+    assert barra.estado_visible == "Activo"
+    assert not barra._timer.isActive()
+
+
+def test_el_estado_cancela_el_aviso_pendiente(window):
+    """Si cambia el estado, manda el estado (no el aviso viejo)."""
+    barra = window._status_bar
+    barra.set_processing(True)
+    barra.set_status_text("Activando salida...", Theme.WARNING)
+
+    barra.set_processing(False)
+
+    assert barra.estado_visible == "Inactivo"
+    assert not barra._timer.isActive()
+    barra._volver_al_estado()  # un timeout tardío no debe resucitar el aviso
+    assert barra.estado_visible == "Inactivo"
+
+
+def test_la_barra_se_traduce_al_estado_en_ingles(window):
+    anterior = window.language
+    try:
+        window._apply_language("en")
+        window._status_bar.set_processing(True)
+        assert window._status_bar.estado_visible == "Active"
+        window._status_bar.set_processing(False)
+        assert window._status_bar.estado_visible == "Inactive"
+    finally:
+        window._apply_language(anterior)

@@ -263,6 +263,7 @@ class NewMainWindow(QMainWindow):
         self._current_page = "home"  # ultima pagina del menu (se persiste en config)
         self._closing = False
         self._active_names = ("", "")
+        self._last_latency = 0.0  # latencia del ultimo arranque (para repintar tras rebuild)
         self._metrics_tick = 0  # refresco de métricas ~1 Hz (timer a 33 ms)
         self._stats_log_tick = 0  # log de diagnóstico ~10 s
         self._last_captured = 0
@@ -743,7 +744,21 @@ class NewMainWindow(QMainWindow):
             home.set_preset(cur_preset)
         self._sync_ui_from_state()
         self._route_guard()
-        home.set_running(self.running)
+        # Las páginas se acaban de crear con sus valores por defecto: si el motor
+        # está en marcha hay que volver a pintarlo o la UI dice "Detenido".
+        # Una sola fuente de verdad: el estado del motor (si el controlador y el
+        # estado discreparan, el texto y el botón de Inicio dirían cosas
+        # distintas).
+        activo = bool(self.running or self.state.processing)
+        home.set_processing_state(activo)
+        self._status_bar.set_processing(activo)
+        if activo:
+            audio_page.set_info(
+                rate=self.enhancer.sample_rate,
+                buffer=1024,
+                latency=self._last_latency,
+                status="Processing",
+            )
         settings = self._pages["settings"]
         settings.set_autostart_checked(_autostart_enabled())
         settings.set_language_text("English" if self.language == "en" else "Espanol")
@@ -1178,6 +1193,7 @@ class NewMainWindow(QMainWindow):
         self._pages["home"].set_start_enabled(True)  # fin del prefill
         # La barra solo dice "Activo": la ruta vive en la página Audio y la
         # notificación de la bandeja (ahí sí hace falta, no hay contexto).
+        self._last_latency = float(latency)
         self._status_bar.set_processing(True)
         self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
         self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)

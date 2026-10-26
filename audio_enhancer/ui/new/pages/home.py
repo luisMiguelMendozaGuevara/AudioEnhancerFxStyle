@@ -64,6 +64,12 @@ class HomePage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
+        # La página nace con el estado REAL del motor. Antes nacía con el texto
+        # fijo "Detenido" y, como el setter de AudioState solo emite cuando el
+        # valor CAMBIA, una página reconstruida (cambio de tema o de idioma con
+        # audio activo) se quedaba diciendo "Detenido" para siempre.
+        self.set_processing_state(self._state.processing)
+
     def _card(self) -> QFrame:
         card = QFrame()
         # objectName "card": el QSS global lo estiliza y sigue el tema activo.
@@ -234,7 +240,13 @@ class HomePage(QWidget):
         style.unpolish(self._start_button)
         style.polish(self._start_button)
 
-    def _on_processing_changed(self, active: bool) -> None:
+    def set_processing_state(self, active: bool) -> None:
+        """Pinta el estado del motor en la tarjeta (punto, texto y botón).
+
+        Es idempotente y no depende de que llegue una señal: sirve tanto para el
+        cambio en vivo como para dejar una página recién creada en el estado
+        correcto.
+        """
         self.set_running(active)
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 5px;")
@@ -250,6 +262,9 @@ class HomePage(QWidget):
                 f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_LG}px; "
                 f"font-weight: {Theme.FONT_WEIGHT_BOLD}; background: transparent;"
             )
+
+    def _on_processing_changed(self, active: bool) -> None:
+        self.set_processing_state(active)
 
     def _on_spectrum_changed(self, data) -> None:
         # Sólo se pinta/actualiza si la página está a la vista (ahorro de GIL:
