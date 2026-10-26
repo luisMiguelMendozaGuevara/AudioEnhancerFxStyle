@@ -404,9 +404,7 @@ def test_un_medidor_roto_no_deja_el_audio_en_silencio(engine, monkeypatch):
 
     monkeypatch.setattr(engine, "_read_raw", falso_read_raw)
     monkeypatch.setattr(engine, "_dsp_running", True, raising=False)
-    monkeypatch.setattr(
-        engine, "_put", lambda data, _orig=engine._put: (_orig(data), parar_si_vacio())[0]
-    )
+    monkeypatch.setattr(engine, "_put", lambda data, _orig=engine._put: (_orig(data), parar_si_vacio())[0])
     monkeypatch.setattr(engine, "_dsp_wakeup", None, raising=False)
 
     engine._dsp_loop_body()

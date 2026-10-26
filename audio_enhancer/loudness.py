@@ -49,6 +49,7 @@ def _scipy_signal() -> Any:
         _SIGNAL = _sig
     return _SIGNAL
 
+
 # Constante de la ecuación 2 de BS.1770: el nivel de referencia se define de
 # forma que un seno de 1 kHz con pico a -23 dBFS en L y R (en fase) mida
 # exactamente -23.0 LUFS (EBU Tech 3341, caso 1).
@@ -284,9 +285,7 @@ class LoudnessMeter:
             datos = datos[:, None]
         if datos.shape[1] != self.channels:
             # Monofónico -> duplicado; más canales -> se recortan a los medidos.
-            datos = (
-                np.repeat(datos, self.channels, axis=1) if datos.shape[1] == 1 else datos[:, : self.channels]
-            )
+            datos = np.repeat(datos, self.channels, axis=1) if datos.shape[1] == 1 else datos[:, : self.channels]
         # Filtro K en una sola llamada C (dos secciones, estado por canal).
         filtrado, self._zi = _scipy_signal().sosfilt(self._sos, datos, axis=0, zi=self._zi)
         cuadrado = filtrado * filtrado

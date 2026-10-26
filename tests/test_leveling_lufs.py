@@ -162,6 +162,7 @@ def test_grave_y_medio_con_el_mismo_rms_reciben_correcciones_distintas():
     atenúa los graves (RLB a 38 Hz), así que un tono de 60 Hz "suena" menos que
     uno de 2 kHz con la misma energía.
     """
+
     def ganancia_aplicada(freq: float) -> float:
         e = _enhancer_con_nivelacion(10.0)
         audio = _seno(15.0, 0.05, freq=freq)

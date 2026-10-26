@@ -821,7 +821,6 @@ class AudioEngine:
             self._dsp_proc.join(timeout=1.0)
         self._dsp_proc = None
 
-
     def _pump(self) -> None:
         """Un solo hilo mueve crudo->hijo y procesado->salida.
 

@@ -63,7 +63,7 @@ def _parent_alive(parent_pid: int) -> bool:
     Si el principal muere a lo bruto (Administrador de tareas o crash nativo),
     este hijo seguiria capturando/procesando en silencio para siempre. Ante
     cualquier duda devuelve True: nunca se mata al hijo por un fallo de la
-    comprobacion."""""
+    comprobacion."""
     if os.name != "nt":
         return True
     try:
