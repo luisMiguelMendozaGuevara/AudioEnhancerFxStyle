@@ -15,6 +15,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -337,6 +339,133 @@ class EQCurveWidget(QWidget):
         self.update()
 
 
+class MetricsPanel(QFrame):
+    """Métricas en vivo del motor, todas en una sola vista.
+
+    Antes vivían en la barra inferior, donde solo cabía una línea de texto y se
+    cortaba con nombres de dispositivo largos. Aquí se muestran como campos
+    independientes, cada uno con su unidad, en dos filas de cuatro:
+
+    - Underruns: veces que la salida se quedó sin datos (cortes).
+    - Huecos: bloques en los que hubo que insertar silencio.
+    - Deriva: frames ajustados por el resampler para compensar los relojes.
+    - Latencia: suma de etapas del pipeline (captura + ring + cola + salida).
+    - Objetivo: consigna de llenado del ring (la preferencia de latencia).
+    - DSP p99: percentil 99 del coste de `process()` por bloque (vs 21,3 ms).
+    - LUFS: sonoridad momentánea de la salida (ITU-R BS.1770).
+    - LRA: rango de sonoridad (lo que varía el nivel dentro del material).
+
+    Es de solo lectura: no toca el DSP, solo pinta números que ya calcula el
+    motor.
+    """
+
+    # (clave interna, etiqueta traducible, formato)
+    _CAMPOS = (
+        ("underruns", "Underruns", "%d"),
+        ("huecos", "Huecos", "%d"),
+        ("deriva", "Deriva", "%d fr"),
+        ("latencia", "Latencia", "%.0f ms"),
+        ("objetivo", "Objetivo", "%.0f ms"),
+        ("dsp_p99", "DSP p99", "%.1f ms"),
+        ("lufs", "LUFS", "%.1f"),
+        ("lra", "LRA", "%.1f LU"),
+    )
+    _VACIO = "--"
+    # Umbral de aviso del coste del DSP: la mitad del bloque de 21,3 ms. A partir
+    # de ahí un pico de CPU empieza a acercarse a los 21,3 ms que dura el bloque.
+    _DSP_P99_AVISO_MS = 10.66
+
+    def __init__(self, t=None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._t = t or (lambda text: text)
+        # objectName "card": el QSS global lo estiliza y sigue el tema activo.
+        self.setObjectName("card")
+        self._valores: dict[str, QLabel] = {}
+        self._build()
+
+    def _build(self) -> None:
+        grid = QGridLayout(self)
+        grid.setContentsMargins(Theme.SPACING_MD, Theme.SPACING_MD, Theme.SPACING_MD, Theme.SPACING_MD)
+        grid.setHorizontalSpacing(Theme.SPACING_LG)
+        grid.setVerticalSpacing(Theme.SPACING_XS)
+        for i, (clave, etiqueta, _formato) in enumerate(self._CAMPOS):
+            fila, columna = divmod(i, 4)
+            titulo = QLabel(self._t(etiqueta))
+            titulo.setStyleSheet(
+                f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
+            )
+            valor = QLabel(self._VACIO)
+            valor.setStyleSheet(
+                f"color: {Theme.TEXT}; font-size: {Theme.FONT_SIZE_LG}px; "
+                f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
+            )
+            grid.addWidget(titulo, fila * 2, columna)
+            grid.addWidget(valor, fila * 2 + 1, columna)
+            self._valores[clave] = valor
+        # Las cuatro columnas se reparten el ancho del panel por igual (antes
+        # quedaban amontonadas a la izquierda y sobraba medio panel vacío).
+        for columna in range(4):
+            grid.setColumnStretch(columna, 1)
+
+    def set_metrics(self, **valores: float | None) -> None:
+        """Actualiza los campos indicados; ``None`` o no finito deja ``--``.
+
+        Acepta solo las claves de ``_CAMPOS`` (las demás se ignoran: así añadir
+        una métrica nueva no rompe llamadores viejos).
+        """
+        for clave, _etiqueta, formato in self._CAMPOS:
+            if clave not in valores:
+                continue
+            numero = valores[clave]
+            etiqueta = self._valores[clave]
+            try:
+                valor = float(numero) if numero is not None else float("nan")
+            except (TypeError, ValueError):
+                valor = float("nan")
+            if not math.isfinite(valor):
+                etiqueta.setText(self._VACIO)
+                continue
+            if clave == "lufs" and not (-100.0 < valor < 10.0):
+                # -1000 = silencio o ventana incompleta (centinela del motor).
+                etiqueta.setText(self._VACIO)
+                continue
+            etiqueta.setText(formato % valor)
+            etiqueta.setStyleSheet(self._estilo(self._en_aviso(clave, valor)))
+
+    @classmethod
+    def _en_aviso(cls, clave: str, valor: float) -> bool:
+        """True si el valor indica un problema (cortes o DSP cerca del límite).
+
+        Un contador de cortes a 0 es lo normal; en cuanto sube hay algo que
+        mirar. Y un p99 por encima de la mitad del bloque avisa de que el DSP se
+        está quedando sin margen (los cortes vendrían después).
+        """
+        if clave in ("underruns", "huecos"):
+            return valor > 0
+        if clave == "dsp_p99":
+            return valor > cls._DSP_P99_AVISO_MS
+        return False
+
+    @staticmethod
+    def _estilo(aviso: bool) -> str:
+        color = Theme.WARNING if aviso else Theme.TEXT
+        return (
+            f"color: {color}; font-size: {Theme.FONT_SIZE_LG}px; "
+            f"font-weight: {Theme.FONT_WEIGHT_SEMIBOLD}; background: transparent;"
+        )
+
+    def clear(self) -> None:
+        """Vuelve a ``--`` (motor parado)."""
+        for etiqueta in self._valores.values():
+            etiqueta.setText(self._VACIO)
+            etiqueta.setStyleSheet(self._estilo(False))
+
+    def text_of(self, clave: str) -> str:
+        """Texto visible de un campo (para tests y para el informe)."""
+        etiqueta = self._valores.get(clave)
+        return etiqueta.text() if etiqueta is not None else ""
+
+
 class EqualizerPage(QWidget):
     """Página de ecualizador con curva interactiva y bandas configurables."""
 
@@ -389,6 +518,11 @@ class EqualizerPage(QWidget):
         self._eq_curve.freq_changed.connect(self._on_freq_changed)
         layout.addWidget(self._eq_curve, 1)
 
+        # Métricas del motor: viven aquí (antes en la barra inferior, donde solo
+        # cabía una línea y se cortaba con rutas de dispositivo largas).
+        self._metrics = MetricsPanel(self._t)
+        layout.addWidget(self._metrics)
+
         btn_row = QHBoxLayout()
         self._reset_btn = QPushButton(self._t("Restablecer todo"))
         # Anchura MÍNIMA, no fija: "Restablecer todo" no cabe en 100 px y el
@@ -429,3 +563,15 @@ class EqualizerPage(QWidget):
             self._bands_combo.blockSignals(True)
             self._bands_combo.setCurrentIndex(idx)
             self._bands_combo.blockSignals(False)
+
+    def set_metrics(self, **valores: float | None) -> None:
+        """Publica las métricas en vivo del motor (ver ``MetricsPanel``)."""
+        self._metrics.set_metrics(**valores)
+
+    def clear_metrics(self) -> None:
+        """Motor parado: todos los campos a ``--``."""
+        self._metrics.clear()
+
+    def metric_text(self, clave: str) -> str:
+        """Texto de un campo de métricas (para tests)."""
+        return self._metrics.text_of(clave)

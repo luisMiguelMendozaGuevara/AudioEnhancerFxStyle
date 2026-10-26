@@ -78,8 +78,8 @@ def test_fmt_lufs_formatea_y_oculta_las_medidas_invalidas():
     assert fmt("no es un numero") == "--"
 
 
-def test_la_barra_muestra_latencia_y_lufs(window):
-    """El texto de métricas incluye latencia total y sonoridad cuando hay medida."""
+def test_el_panel_del_ecualizador_muestra_las_metricas(window):
+    """Las métricas del motor se ven en la página Ecualizador (no en la barra)."""
     engine = window.engine
     engine.configure_ring(SAMPLE_RATE)
     engine.write_pos, engine.read_pos = 2880, 0
@@ -91,13 +91,66 @@ def test_la_barra_muestra_latencia_y_lufs(window):
     try:
         for _ in range(31):  # el tick de métricas corre 1 de cada 30 refrescos
             window._refresh_visuals()
-        texto = window._status_bar._metrics_label.text()
+        eq = window._pages["equalizer"]
+        claves = ("underruns", "huecos", "latencia", "dsp_p99", "lufs", "lra")
+        valores = {clave: eq.metric_text(clave) for clave in claves}
     finally:
         window.controller.running = False
 
-    assert "lat total" in texto
-    assert "dsp p99" in texto
-    assert "-16.4 LUFS" in texto
+    assert valores["underruns"] == "0"
+    assert valores["huecos"] == "0"
+    assert valores["latencia"].endswith(" ms") and valores["latencia"] != "--"
+    assert valores["dsp_p99"] == "2.9 ms"
+    assert valores["lufs"] == "-16.4"
+    assert valores["lra"] == "5.0 LU"
+
+
+def test_la_barra_inferior_ya_no_lleva_metricas(window):
+    """La barra de estado queda con estado, ruta y sample rate (sin métricas)."""
+    barra = window._status_bar
+
+    assert not hasattr(barra, "_metrics_label")
+    assert not hasattr(barra, "_latency_label")
+    assert not hasattr(barra, "set_metrics")
+    assert not hasattr(barra, "set_latency")
+
+
+def test_el_panel_vuelve_a_guiones_cuando_se_para(window):
+    """Sin audio no hay cifras: el panel no debe mostrar valores viejos."""
+    engine = window.engine
+    engine._child_timing = _FakeSharedArray([1.2, 2.1, 2.9, 7.5])
+    engine._telemetry = _FakeSharedArray([0.0] * 7 + [-16.4, -15.9, -18.2, 5.0])
+    engine._sync_telemetry()
+    window.controller.running = True
+    for _ in range(31):
+        window._refresh_visuals()
+    assert window._pages["equalizer"].metric_text("lufs") == "-16.4"
+
+    window.controller.running = False
+    for _ in range(31):
+        window._refresh_visuals()
+
+    assert window._pages["equalizer"].metric_text("lufs") == "--"
+    assert window._pages["equalizer"].metric_text("latencia") == "--"
+
+
+def test_el_panel_tolera_valores_absurdos(window):
+    """NaN, None y el centinela de silencio se muestran como '--', no como texto."""
+    panel = window._pages["equalizer"]._metrics
+
+    panel.set_metrics(lufs=float("nan"), latencia=None, dsp_p99=float("inf"), lra=-1000.0)
+    assert panel.text_of("lufs") == "--"
+    assert panel.text_of("latencia") == "--"
+    assert panel.text_of("dsp_p99") == "--"
+
+    # El centinela de "sin medida" del motor (-1000 LUFS) también es '--'.
+    panel.set_metrics(lufs=-1000.0)
+    assert panel.text_of("lufs") == "--"
+
+    # Y una medida real se formatea con un decimal.
+    panel.set_metrics(lufs=-17.25, lra=6.5)
+    assert panel.text_of("lufs") == "-17.2"
+    assert panel.text_of("lra") == "6.5 LU"
 
 
 def test_el_informe_de_diagnostico_incluye_latencia_dsp_y_sonoridad(window, tmp_path, monkeypatch):
@@ -156,3 +209,17 @@ def test_los_parametros_de_sonoridad_son_finitos_o_centinela(window):
 
     assert set(snap) == {"momentary_lufs", "short_term_lufs", "integrated_lufs", "lra_lu"}
     assert all(not math.isnan(v) for v in snap.values())
+
+
+def test_los_valores_en_aviso_se_marcan(window):
+    """Cortes > 0 y un p99 cerca del bloque se pintan en color de aviso."""
+    panel = window._pages["equalizer"]._metrics
+
+    panel.set_metrics(underruns=0, huecos=0, dsp_p99=2.9)
+    assert panel._en_aviso("underruns", 0.0) is False
+    assert panel._en_aviso("dsp_p99", 2.9) is False
+
+    assert panel._en_aviso("underruns", 1.0) is True
+    assert panel._en_aviso("huecos", 3.0) is True
+    assert panel._en_aviso("dsp_p99", 12.0) is True  # más de la mitad del bloque
+    assert panel._en_aviso("lufs", -99.0) is False  # no todo avisa

@@ -1,6 +1,9 @@
 """Barra de estado persistente en la parte inferior.
 
-Muestra: estado de procesamiento, ruta de audio, sample rate, latencia.
+Muestra: estado de procesamiento, ruta de audio y sample rate. Las métricas del
+motor (underruns, huecos, deriva, latencia, DSP, LUFS) se movieron a la página
+Ecualizador, donde se ven todas juntas y no las corta una ruta de dispositivo
+larga.
 """
 
 from __future__ import annotations
@@ -58,27 +61,6 @@ class AppStatusBar(QWidget):
         )
         layout.addWidget(self._sr_label)
 
-        self._sep2 = QLabel("|")
-        self._sep2.setStyleSheet(f"color: {Theme.BORDER}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;")
-        layout.addWidget(self._sep2)
-
-        self._latency_label = QLabel("")
-        self._latency_label.setStyleSheet(
-            f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
-        )
-        layout.addWidget(self._latency_label)
-
-        self._sep3 = QLabel("|")
-        self._sep3.setStyleSheet(f"color: {Theme.BORDER}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;")
-        layout.addWidget(self._sep3)
-
-        # Métricas en vivo del motor (underruns / huecos / ajustes de deriva).
-        self._metrics_label = QLabel("")
-        self._metrics_label.setStyleSheet(
-            f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
-        )
-        layout.addWidget(self._metrics_label)
-
     def set_processing(self, active: bool) -> None:
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 4px;")
@@ -98,15 +80,6 @@ class AppStatusBar(QWidget):
             self._sr_label.setText(f"{rate // 1000} kHz")
         else:
             self._sr_label.setText(f"{rate} Hz")
-
-    def set_latency(self, ms: float) -> None:
-        self._latency_label.setText(f"{ms:.0f} ms")
-
-    def set_metrics(self, text: str) -> None:
-        """Métricas en vivo del motor: vacío oculta el separador."""
-        self._sep3.setVisible(bool(text))
-        self._metrics_label.setText(text)
-        self._metrics_label.setVisible(bool(text))
 
     def set_status_text(self, text: str, color: str = "") -> None:
         self._last_status = (text, color)

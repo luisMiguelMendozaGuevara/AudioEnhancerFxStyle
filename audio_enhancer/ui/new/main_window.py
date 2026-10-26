@@ -685,7 +685,6 @@ class NewMainWindow(QMainWindow):
         self._save_config()
         if self.running:
             latency = self.controller.set_latency(ms)
-            self._status_bar.set_latency(latency)
             self._pages["audio"].set_info(
                 rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing"
             )
@@ -1176,7 +1175,6 @@ class NewMainWindow(QMainWindow):
     def _on_output_ready(self, latency: float) -> None:
         """Salida abierta tras el prefill: punto de operación estable."""
         self._pages["home"].set_start_enabled(True)  # fin del prefill
-        self._status_bar.set_latency(latency)
         self._status_bar.set_status_text(self._t("Activo (ring buffer): %s -> %s") % self._active_names, OK)
         self._pages["audio"].set_info(rate=self.enhancer.sample_rate, buffer=1024, latency=latency, status="Processing")
         self._notify_tray(self._t("Activo (ring buffer): %s -> %s") % self._active_names)
@@ -1254,28 +1252,33 @@ class NewMainWindow(QMainWindow):
         self._metrics_tick = (self._metrics_tick + 1) % 30
         if self._metrics_tick == 0:
             # Aunque el motor devuelva algo inesperado, este slot de QTimer no
-            # puede lanzar: la barra se congelaría (o se caería el bucle de
-            # eventos) por un problema de instrumentación, no de audio.
+            # puede lanzar: la página se quedaría sin métricas (o se caería el
+            # bucle de eventos) por un problema de instrumentación, no de audio.
             try:
                 if self.running:
                     s = self.engine.stats_snapshot()
-                    text = "unders %d | huecos %d | deriva %d fr | lat total %.0f ms | dsp p99 %.1f ms" % (
-                        s["output_underruns"],
-                        s["gap_blocks"],
-                        s["drift_adjust_frames"],
-                        self.engine.latency_breakdown().get("total_ms", 0.0),
-                        self.engine.timing_snapshot().get("p99_ms", 0.0),
+                    latencia = self.engine.latency_breakdown()
+                    dsp = self.engine.timing_snapshot()
+                    sonoridad = self.engine.loudness_snapshot()
+                    tasa = max(int(self.engine.rate or 48000), 1)
+                    self._pages["equalizer"].set_metrics(
+                        underruns=s["output_underruns"],
+                        huecos=s["gap_blocks"],
+                        deriva=s["drift_adjust_frames"],
+                        latencia=latencia.get("total_ms", 0.0),
+                        # Consigna de llenado del ring: la preferencia de latencia
+                        # que el usuario eligió, en ms (no la capacidad del ring).
+                        objetivo=self.engine.drift_target_effective * 1000.0 / tasa,
+                        dsp_p99=dsp.get("p99_ms", 0.0),
+                        # -1000 = sin medida (silencio o ventana incompleta): el
+                        # panel lo muestra como "--".
+                        lufs=sonoridad.get("momentary_lufs", -1000.0),
+                        lra=sonoridad.get("lra_lu", 0.0),
                     )
-                    # Sonoridad de la salida (BS.1770): solo si hay medida real
-                    # (-1000 = silencio o ventana aún incompleta).
-                    lufs = float(self.engine.loudness_snapshot().get("momentary_lufs", -1000.0))
-                    if -100.0 < lufs < 10.0:
-                        text += " | %.1f LUFS" % lufs
                 else:
-                    text = ""
-                self._status_bar.set_metrics(text)
+                    self._pages["equalizer"].clear_metrics()
             except Exception:
-                logger.exception("No se pudieron actualizar las métricas de la barra")
+                logger.exception("No se pudieron actualizar las métricas del motor")
         # Diagnóstico de cortes: cada ~10 s (300 ticks de 33 ms) se registra el
         # avance de la captura y los contadores. Si `capturados` no avanza, el
         # loopback (p. ej. el cable virtual) dejó de entregar audio; si suben
