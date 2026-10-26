@@ -267,3 +267,43 @@ ráfaga al reactivar, puerta rápida y hueco corto entre notas.
 
 **494 tests** (empezó en 372) · ruff y mypy limpios · bench dentro del
 presupuesto (`full_hot_leveling` 8,2 % del bloque).
+
+
+## 11. Exciters (v1.8): 3er armónico en graves y anti-aliasing ADAA
+
+### 11.1 Qué cambió y por qué
+
+| Cambio | Motivo | Medido |
+|---|---|---|
+| Bass exciter genera **2º y 3º** armónico (banda hasta 120 Hz) | El 2º de una fundamental de 40 Hz cae en **80 Hz**, donde un altavoz pequeño no reproduce nada: el efecto era inaudible justo donde ayuda | 2F **−14,7 dB**, 3F **−22 a −27 dB** según la fundamental; fundamental intacta (±0,4 dB) |
+| 3er armónico con **cúbico normalizado** `x³/mean(x²)` | `x·\|x\|` dejaba el 3F a −37 dB (inaudible) | 3F pasa de −37 a −23/−27 dB |
+| **Potencia suavizada y por canal** para normalizar | Con la media del bloque: +6 dB de 3F en bloques medio llenos (modulación a 47 Hz), ±1,3 dB de rizo con un seno, +6 dB con bajo paneado | rizo entre bloques **0,19 dB** (antes 1,30) |
+| Paso-alto del 3F a **4º orden** | Con 2º orden la fuga de fundamental de 60 Hz era −14,8 dB, a 2 dB del propio 3F | fuga **−27,1 dB** (dominancia 13,5 dB) |
+| Clarity con **ADAA** en la no linealidad | El 4º armónico de un tono de 11 kHz se plegaba a 4 kHz; el paso-bajo posterior no lo quitaba (el aliasing ya había ocurrido) | alias/2F de **−13,8 a −31,6 dB** (17,8 dB mejor) |
+
+### 11.2 Dos defectos de calibración que encontraron los scopes
+
+1. **`ADAA_GAIN = 2.0` estaba calibrado en el peor punto.** El factor 0,516 se midió
+   a 22 kHz, donde el ADAA atenúa casi al máximo. Medida la atenuación real por
+   frecuencia del armónico (3 kHz 0,981 · 6 kHz 0,924 · 8 kHz 0,866 · 11 kHz
+   0,872 · **22 kHz 0,516**), compensar ×2 dejaba Clarity **hasta +6 dB más
+   caliente justo en la banda que se oye**. Recalibrado a **1,15** (+1,2 dB): el
+   nivel cuadra dentro de ±1 dB en 6-16 kHz (+0,53 dB a 6 kHz).
+2. **Normalización del cúbico por bloque** (ver tabla): corregida con potencia
+   por canal y suavizada a ~150 ms.
+
+### 11.3 Tests añadidos tras la auditoría (8)
+
+Invariancia de nivel del 3F (amplitud 0,1/0,3/0,6 → dispersión < 1 dB),
+estabilidad de la potencia entre bloques, HP3 como propiedad medida (fuga y
+dominancia), **fase** del ADAA por correlación (los tests de magnitud no ven un
+signo invertido), ADAA a −40 dBFS (nivel real de platos), limpieza completa de
+estado al apagar cada exciter, y atenuación real del LP de Clarity (el test
+preexistente era casi tautológico: 2 dB de margen).
+
+### 11.4 Estado
+
+**517 tests** (empezó en 372) · ruff y mypy limpios · bench con escenario nuevo
+`full_enhancer` (antes los efectos iban a 0 y los exciters no se medían):
+**10,2 % del bloque**. Coste de los dos exciters activos: **+0,9 ms/bloque**
+(~4 % del presupuesto) en la máquina de desarrollo.
