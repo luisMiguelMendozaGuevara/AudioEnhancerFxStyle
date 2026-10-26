@@ -27,6 +27,8 @@ from typing import Any
 import numpy as np
 
 from .constants import CHUNK
+from .diagnostics import RollingStats
+from .rt_priority import mmcss_pro_audio
 
 logger = logging.getLogger("audio_enhancer.dsp_process")
 
@@ -289,6 +291,7 @@ def child_main(
     spectrum_buf=None,
     spec_needed=None,
     child_stats=None,
+    child_timing=None,
 ) -> None:
     """Bucle del proceso hijo: crudo -> DSP -> procesado.
 
@@ -301,6 +304,7 @@ def child_main(
     - ``spectrum_buf``: 64 barras de espectro (dB), escritas por el hilo visual.
     - ``spec_needed``: bandera (padre -> hijo) de si la UI mira el espectro.
     - ``child_stats``: [raw_empty, blocks, backlog_sum, clipped] (diagnóstico).
+    - ``child_timing``: [p50, p95, p99, max] ms de ``process()`` por bloque.
     """
     from .dsp import Enhancer
 
@@ -330,6 +334,18 @@ def child_main(
     clipped = 0
     proc_errors = 0
     last_proc_error_log = 0.0
+    # Estadística del coste por bloque: se publica cada PUBLISH_EVERY bloques
+    # (un snapshot ordena la ventana; publicarlo en cada bloque sería gastar el
+    # presupuesto de 21 ms en medir en vez de procesar).
+    timing = RollingStats(window=256)
+    publish_every = 8
+    # MMCSS "Pro Audio": registra ESTE hilo en el planificador multimedia de
+    # Windows (prioridades 23-26). PortAudio hace lo mismo con sus callbacks,
+    # pero el hilo que procesa el DSP no lo hacía: bajo carga perdía CPU frente
+    # a tareas de fondo, el ring de salida se vaciaba y se oían huecos. No-op
+    # fuera de Windows o si avrt.dll no está disponible (nunca lanza).
+    mmcss = mmcss_pro_audio("Pro Audio")
+    mmcss.__enter__()
     # Vigilancia del padre: si muere a lo bruto, este proceso (que ya no puede
     # alimentar audio util) termina solo en vez de quedar huerfano.
     parent_pid = os.getppid()
@@ -356,7 +372,9 @@ def child_main(
             with contextlib.suppress(Exception):
                 backlog_sum += raw_q.qsize()
             data = np.frombuffer(item, dtype=np.float32).reshape(-1, 2)
+            t0 = time.perf_counter()
             y = enhancer.process(data)
+            timing.add(time.perf_counter() - t0)
             blocks += 1
             # Recorte: muestras que superan ±1.0 (posible recorte del driver
             # cuando no hay limitador/techo). Barato y fuera del audio crítico.
@@ -387,10 +405,18 @@ def child_main(
                 child_stats[1] = blocks
                 child_stats[2] = backlog_sum
                 child_stats[3] = clipped
+        if child_timing is not None and blocks % publish_every == 0:
+            snap = timing.snapshot()
+            with contextlib.suppress(Exception), child_timing.get_lock():
+                child_timing[0] = snap["p50_ms"]
+                child_timing[1] = snap["p95_ms"]
+                child_timing[2] = snap["p99_ms"]
+                child_timing[3] = snap["max_ms"]
         if gr_value is not None:
             with gr_value.get_lock():
                 gr_value.value = float(enhancer.level_gr)
         out_q.put(np.asarray(y, dtype=np.float32).tobytes())
+    mmcss.__exit__(None, None, None)
     if child_stats is not None:
         with contextlib.suppress(Exception), child_stats.get_lock():
             child_stats[0] = raw_empty

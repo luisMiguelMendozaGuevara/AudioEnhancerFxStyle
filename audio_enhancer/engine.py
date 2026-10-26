@@ -19,7 +19,10 @@ from typing import Any
 
 import numpy as np
 
-from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, STARTUP_MUTE_S
+from .constants import CHUNK, DRIFT_TARGET_MS, RING_SECONDS, SAMPLE_RATE, STARTUP_MUTE_S
+from .diagnostics import RollingStats
+from .diagnostics import latency_breakdown as _latency_breakdown
+from .rt_priority import mmcss_pro_audio
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -159,6 +162,16 @@ class AudioEngine:
         # Diagnóstico (Paso 0): contadores del hijo [raw_empty, blocks,
         # backlog_sum, clipped] publicados por memoria compartida.
         self._child_stats: Any = None
+        # Tiempos de proceso por bloque del hijo: [p50, p95, p99, max] en ms.
+        # Los publica el bucle del hijo (dsp_process.child_main) para que la UI
+        # pueda enseñar el coste REAL del DSP sin medir nada en el padre.
+        self._child_timing: Any = None
+        self._child_dsp_ms: dict[str, float] = {}
+        # Misma estadística, local, para el camino SIN proceso hijo (tests y
+        # AUDIO_ENHANCER_NO_DSP_PROCESS).
+        self._local_dsp_ms = RollingStats(window=256)
+        # Registro MMCSS del hilo que alimenta la salida (se revierte al parar).
+        self._pump_mmcss: Any = None
         # Fin del silencio de arranque (monotonic). Mientras now < esto, la
         # salida emite silencio y el ring se recorta a la consigna para no
         # descartar audio a golpes mientras el dispositivo físico alcanza su
@@ -225,6 +238,39 @@ class AudioEngine:
                 snap["child_backlog"] = int(cs[2])
                 snap["child_clipped"] = int(cs[3])
         return snap
+
+    def timing_snapshot(self) -> dict[str, float]:
+        """Percentiles del tiempo de proceso por bloque, en MILISEGUNDOS.
+
+        Con proceso hijo devuelve lo que publica el hijo (p50/p95/p99/max) y
+        sin él la estadística local del hilo de DSP. Sin datos, todo 0.0.
+        Comparar p99 con la duración del bloque (21,3 ms con CHUNK=1024) es la
+        señal de alerta: acercarse a ese valor son cortes por CPU."""
+        if self._child_dsp_ms:
+            return dict(self._child_dsp_ms)
+        snap = self._local_dsp_ms.snapshot()
+        return {clave: float(snap.get(clave, 0.0)) for clave in ("p50_ms", "p95_ms", "p99_ms", "max_ms")}
+
+    def latency_breakdown(self) -> dict[str, float]:
+        """Desglose de la latencia del pipeline en ms (diagnóstico de la UI).
+
+        Etapas: bloque de captura + colchón del ring (la consigna real, no la
+        capacidad) + backlog de la cola del hijo + bloque de salida. El total
+        es lo que el usuario percibe como retardo entre la imagen y el sonido."""
+        with self.lock:
+            fill = max(0, self.write_pos - self.read_pos)
+            rate = self.rate or SAMPLE_RATE
+        blocks = 0
+        backlog_sum = 0
+        cs = self._child_stats
+        if cs is not None:
+            with contextlib.suppress(Exception), cs.get_lock():
+                blocks = int(cs[1])
+                backlog_sum = int(cs[2])
+        # Media de bloques en cola desde el arranque: el backlog instantáneo
+        # (qsize) obliga a tocar la cola compartida desde el hilo de UI.
+        backlog_blocks = (backlog_sum / blocks) if blocks > 0 else 0.0
+        return _latency_breakdown(rate, CHUNK, fill, backlog_blocks)
 
     def configure_ring(self, rate: int, drift_target_ms: float | None = None) -> None:
         """Configura el ring para la tasa dada (tamaño, fundidos, deriva).
@@ -628,6 +674,8 @@ class AudioEngine:
         # Diagnóstico (Paso 0) del hijo: [raw_empty, blocks, backlog_sum,
         # clipped_samples]. "d" (double) para acumular sin desbordar.
         self._child_stats = ctx.Array("d", 4)
+        # Tiempos de proceso del hijo: [p50, p95, p99, max] en ms.
+        self._child_timing = ctx.Array("d", 4)
         self._params_q.put(snapshot_params(self.enhancer))
         self._dsp_proc = ctx.Process(
             target=child_main,
@@ -641,6 +689,7 @@ class AudioEngine:
                 self._spectrum_buf,
                 self._spec_needed,
                 self._child_stats,
+                self._child_timing,
             ),
             name="dsp-proc",
             daemon=True,
@@ -725,6 +774,12 @@ class AudioEngine:
         en operación normal: solo el desborde del ring crudo (~1 s de margen,
         ``raw_ring_drops``) puede descartar audio."""
         self._set_thread_priority()
+        # MMCSS "Audio": el hilo que alimenta la salida se registra en el
+        # planificador multimedia, así el repintado de la Qt no lo desplaza
+        # (sin registro, el ring se vacía y el callback inserta silencio).
+        # No-op fuera de Windows o si avrt.dll no está disponible.
+        self._pump_mmcss = mmcss_pro_audio("Audio")
+        self._pump_mmcss.__enter__()
         pending = None  # bloque ya leído que no pudo entregarse (cola llena)
         while self._dsp_running:
             raw_q = self._raw_q
@@ -771,6 +826,7 @@ class AudioEngine:
                 self._pump_wait(0.002)  # hijo atrasado: reintentar sin quemar CPU
             elif block is None and not got:
                 self._pump_wait(0.005)  # despierta al llegar crudo o salida
+        self._pump_mmcss.__exit__(None, None, None)
 
     def _pump_wait(self, timeout: float) -> None:
         """Espera de la bomba por EVENTO (crudo nuevo o salida del hijo) con
@@ -798,6 +854,16 @@ class AudioEngine:
             e.level_peak_l = t[4]
             e.level_peak_r = t[5]
             e.level_gr = t[6]
+        # Tiempos de proceso del hijo (4 doubles): copia barata, sin numpy.
+        ct = self._child_timing
+        if ct is not None:
+            with contextlib.suppress(Exception), ct.get_lock():
+                self._child_dsp_ms = {
+                    "p50_ms": float(ct[0]),
+                    "p95_ms": float(ct[1]),
+                    "p99_ms": float(ct[2]),
+                    "max_ms": float(ct[3]),
+                }
 
     def has_dsp_process(self) -> bool:
         """True si el DSP corre en un proceso hijo (el padre no hace FFT)."""
@@ -848,6 +914,10 @@ class AudioEngine:
     def _dsp_loop(self) -> None:
         """Hilo dedicado: lee crudo, procesa y alimenta el ring de salida."""
         logger.info("Hilo de DSP iniciado")
+        # Mismo registro MMCSS que el hijo: este camino (sin proceso aparte) es
+        # el que usan los tests y el modo AUDIO_ENHANCER_NO_DSP_PROCESS.
+        mmcss = mmcss_pro_audio("Pro Audio")
+        mmcss.__enter__()
         while self._dsp_running:
             block = self._read_raw()
             if block is None:
@@ -861,10 +931,14 @@ class AudioEngine:
                     self._dsp_wakeup.wait(0.005)  # tope: red de seguridad
                     continue
             try:
+                t0 = time.perf_counter()
                 y = self.enhancer.process(block)
+                # Coste real por bloque (percentiles en timing_snapshot()).
+                self._local_dsp_ms.add(time.perf_counter() - t0)
                 self._put(y)
             except Exception:
                 logger.exception("Error en el hilo de DSP")
+        mmcss.__exit__(None, None, None)
         logger.info("Hilo de DSP detenido")
 
     def _out_callback(self, in_data, frame_count, time_info, status):

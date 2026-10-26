@@ -49,6 +49,7 @@ from ...constants import (
     resource_path,
 )
 from ...device_utils import is_bluetooth_name, pick_capture_source, pick_default_output
+from ...diagnostics import LatencyBreakdown, format_stats
 from ...dsp import EQ_BANDS, Enhancer, EnhancerParams
 from ...engine import _pa
 from ...i18n import PRESETS, detect_system_language, explain, translate
@@ -570,6 +571,10 @@ class NewMainWindow(QMainWindow):
         lines += ["", "== Motor ==", f"running={self.running}"]
         if self.running:
             lines.append("stats=" + str(self.engine.stats_snapshot()))
+            # Desglose de latencia y coste del DSP: sin esto, un reporte de
+            # "se oye con retardo" o "da tirones" no se puede diagnosticar.
+            lines.append("latencia=" + LatencyBreakdown.format(self.engine.latency_breakdown()))
+            lines.append("dsp=" + format_stats(self.engine.timing_snapshot()))
         lines += ["", "== Log (cola) =="]
         try:
             with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
@@ -1212,10 +1217,12 @@ class NewMainWindow(QMainWindow):
         if self._metrics_tick == 0:
             if self.running:
                 s = self.engine.stats_snapshot()
-                text = "unders %d | huecos %d | deriva %d fr" % (
+                text = "unders %d | huecos %d | deriva %d fr | lat %.0f ms | dsp p99 %.1f ms" % (
                     s["output_underruns"],
                     s["gap_blocks"],
                     s["drift_adjust_frames"],
+                    self.engine.latency_breakdown().get("total_ms", 0.0),
+                    self.engine.timing_snapshot().get("p99_ms", 0.0),
                 )
             else:
                 text = ""
