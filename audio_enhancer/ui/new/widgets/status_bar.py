@@ -1,12 +1,12 @@
 """Barra de estado persistente en la parte inferior.
 
-Muestra solo lo que no cambia cada segundo: estado de procesamiento y ruta de
-audio. Las métricas del motor (underruns, huecos, deriva, latencia, DSP, LUFS,
-frecuencia de muestreo) se movieron a la página Ecualizador, donde se ven todas
-juntas y no las corta una ruta de dispositivo larga.
+Muestra solo el estado (Activo / Inactivo) con su punto de color. Las métricas
+del motor (underruns, huecos, deriva, latencia, DSP, LUFS, frecuencia) viven en
+la página Ecualizador y la ruta de audio en la página Audio: aquí solo cabía una
+línea y cualquier nombre de dispositivo la cortaba.
 
-La ruta NO se repite en el texto de estado: antes decía "Activo (ring buffer):
-entrada -> salida" a la izquierda y la misma ruta otra vez a la derecha.
+El texto del label sigue sirviendo para avisos puntuales ("No se pudo iniciar:
+..."), que si no desaparecerían sin dejar rastro visible.
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from ..theme.colors import Theme
 
 
 class AppStatusBar(QWidget):
-    """Barra de estado inferior persistente (estado + ruta)."""
+    """Barra de estado inferior persistente (solo el estado)."""
 
     def __init__(self, t=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._t = t or (lambda text: text)
-        self._last_status: tuple[str, str] = ("Detenido", "")
+        self._last_status: tuple[str, str] = ("Inactivo", "")
         self.setFixedHeight(Theme.STATUS_BAR_HEIGHT)
         self._build()
 
@@ -40,34 +40,21 @@ class AppStatusBar(QWidget):
         self._status_dot.setStyleSheet(f"background: {Theme.TEXT_DIM}; border-radius: 4px;")
         layout.addWidget(self._status_dot)
 
-        self._status_label = QLabel(self._t("Detenido"))
+        self._status_label = QLabel(self._t("Inactivo"))
         self._status_label.setStyleSheet(
             f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
         )
         layout.addWidget(self._status_label)
 
-        # La ruta va a la derecha; el hueco del medio absorbe el espacio libre.
         layout.addStretch()
-
-        self._route_label = QLabel("")
-        self._route_label.setStyleSheet(
-            f"color: {Theme.TEXT_DIM}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
-        )
-        layout.addWidget(self._route_label)
 
     def set_processing(self, active: bool) -> None:
         if active:
             self._status_dot.setStyleSheet(f"background: {Theme.SUCCESS}; border-radius: 4px;")
-            self.set_status_text(self._t("Procesando"), Theme.SUCCESS)
+            self.set_status_text(self._t("Activo"), Theme.SUCCESS)
         else:
             self._status_dot.setStyleSheet(f"background: {Theme.TEXT_DIM}; border-radius: 4px;")
-            self.set_status_text(self._t("Detenido"), Theme.TEXT_MUTED)
-
-    def set_route(self, input_name: str, output_name: str) -> None:
-        if input_name and output_name:
-            self._route_label.setText(f"{input_name}  ->  {output_name}")
-        else:
-            self._route_label.setText("")
+            self.set_status_text(self._t("Inactivo"), Theme.TEXT_MUTED)
 
     def set_status_text(self, text: str, color: str = "") -> None:
         self._last_status = (text, color)

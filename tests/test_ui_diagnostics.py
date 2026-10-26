@@ -109,9 +109,9 @@ def test_la_barra_inferior_ya_no_lleva_metricas(window):
     """La barra de estado queda con estado y ruta (sin métricas ni frecuencia)."""
     barra = window._status_bar
 
-    for atributo in ("_metrics_label", "_latency_label", "_sr_label", "_sep1"):
+    for atributo in ("_metrics_label", "_latency_label", "_sr_label", "_sep1", "_route_label"):
         assert not hasattr(barra, atributo)
-    for metodo in ("set_metrics", "set_latency", "set_sample_rate"):
+    for metodo in ("set_metrics", "set_latency", "set_sample_rate", "set_route"):
         assert not hasattr(barra, metodo)
 
 
@@ -120,10 +120,25 @@ def test_la_frecuencia_de_muestreo_esta_en_el_panel(window):
     window._on_audio_started("CABLE Input", "Altavoces", 48000)
 
     assert window._pages["equalizer"].metric_text("frecuencia") == "48 kHz"
-    assert window._status_bar._route_label.text() == "CABLE Input  ->  Altavoces"
-    # La ruta NO se repite en el texto de estado de la izquierda.
-    assert "CABLE Input" not in window._status_bar._status_label.text()
-    assert "->" not in window._status_bar._status_label.text()
+
+
+def test_la_barra_debajo_solo_dice_si_esta_activo(window):
+    """Abajo no aparece ninguna ruta: solo el estado (Activo / Inactivo)."""
+    barra = window._status_bar
+
+    window._on_audio_started("CABLE Input (VB-Audio Virtual Cable)", "Altavoces (Synaptics)", 48000)
+    window._on_output_ready(81.3)
+    activo = barra._status_label.text()
+    assert activo == "Activo"
+
+    window._status_bar.set_processing(False)
+    inactivo = barra._status_label.text()
+    assert inactivo == "Inactivo"
+
+    # Ni nombres de dispositivo ni flechas: la ruta vive en la página Audio.
+    for texto in (activo, inactivo):
+        assert "CABLE" not in texto
+        assert "->" not in texto
 
 
 @pytest.mark.parametrize(

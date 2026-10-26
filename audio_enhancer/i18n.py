@@ -148,6 +148,8 @@ TRANSLATIONS = {
     "Detener audio": "Stop audio",
     "Preset": "Preset",
     "Detenido": "Stopped",
+    "Inactivo": "Inactive",
+    "Activo": "Active",
     "ACTIVO": "ACTIVE",
     "ESPECTRO": "SPECTRUM",
     "ENTRADA": "INPUT",
