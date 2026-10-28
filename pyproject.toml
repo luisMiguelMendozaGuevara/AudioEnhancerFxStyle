@@ -43,6 +43,9 @@ ignore = ["UP031"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# "slow" marca lo que abre dispositivos de audio reales (PoC de captura por
+# proceso): se puede excluir con -m "not slow" en máquinas sin sonido.
+markers = ["slow: usa hardware de audio real (se salta si no hay dispositivo)"]
 
 # Layout plano: sin esto, setuptools ve dos paquetes de nivel superior
 # (assets/ y audio_enhancer/) y aborta con "Multiple top-level packages".

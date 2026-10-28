@@ -17,11 +17,10 @@ Cómo funciona la API (documentación de Microsoft, no de este módulo):
    ``AUDCLNT_STREAMFLAGS_LOOPBACK`` y el formato que impone el motor, y de él se
    pide ``IAudioCaptureClient``, que entrega los frames del proceso.
 
-Esta primera parte cubre lo verificable sin reproducir audio: las estructuras
-(tamaño y desplazamiento comprobados contra la cabecera de Windows), la
-conversión de GUIDs, el sondeo de disponibilidad y la resolución de PID. La
-captura en sí llega después, porque su verificación depende de un proceso que
-esté sonando de verdad.
+Cubre desde el sondeo de disponibilidad hasta la captura real: activación
+asíncrona con el ``IActivateAudioInterfaceCompletionHandler`` implementado en
+ctypes (vtable a mano, sin ``comtypes``), inicialización en modo compartido con
+loopback y lectura de paquetes desde ``IAudioCaptureClient``.
 
 Nota de diseño: todo es ``ctypes`` y sin dependencias nuevas. ``comtypes`` no
 está en el entorno y añadirlo por una PoC no se justifica; las vtable de COM se
@@ -34,14 +33,14 @@ Uso:
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.wintypes as wt
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:  # pragma: no cover - solo para tipado
-    pass
+from typing import Any
 
 # --------------------------------------------------------------------------- #
 # Constantes (audioclientactivationparams.h, audioclient.h, mmdeviceapi.h)
@@ -284,6 +283,12 @@ IID_IActivateAudioInterfaceCompletionHandler = guid_de_texto("{41D949AB-9862-444
 IID_IUnknown = guid_de_texto("{00000000-0000-0000-C000-000000000046}")
 #: ``IActivateAudioInterfaceAsyncOperation``: resultado de la activación.
 IID_IActivateAudioInterfaceAsyncOperation = guid_de_texto("{72A22D78-CDE4-431D-B8CC-843A71199B6D}")
+#: ``IAgileObject``: marca de objeto *free-threaded*. Windows pregunta por ella
+#: al handler de finalización; si no se implementa, intenta marshalling entre
+#: apartamentos y la activación termina en ``E_ILLEGAL_METHOD_CALL``
+#: (0x8000000E). Medido: con el handler "no ágil" la activación nunca llega a
+#: ``ActivateCompleted``.
+IID_IAgileObject = guid_de_texto("{94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90}")
 
 
 # --------------------------------------------------------------------------- #
@@ -384,19 +389,501 @@ def sondeo() -> Disponibilidad:
     )
 
 
-def _probe_argv(argv: list[str]) -> int:
-    """CLI de la PoC: ``--probe`` informa; ``--pid`` aún no captura."""
+# --------------------------------------------------------------------------- #
+# Activación asíncrona y captura
+# --------------------------------------------------------------------------- #
+#: ``HRESULT`` es un ``long`` de 32 bits con signo; ``REFERENCE_TIME`` un
+#: ``long long`` en unidades de 100 ns.
+HRESULT = ctypes.c_long
+REFERENCE_TIME = ctypes.c_longlong
+
+
+def _vtbl(ptr: int | None, indice: int, restype, argtypes, *args):  # noqa: ANN001, ANN401
+    """Llama al método ``indice`` de la vtable COM de ``ptr``.
+
+    Las interfaces de COM son un puntero a un array de punteros a función: el
+    primer hueco es ``QueryInterface``, el segundo ``AddRef`` y el tercero
+    ``Release``. Se llama por índice porque declarar las 15 entradas de
+    ``IAudioClient`` en ctypes no aporta nada aquí.
+    """
+    if not ptr:
+        raise ProcessLoopbackError("puntero COM nulo")
+    vtable = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+    if not vtable:
+        raise ProcessLoopbackError("vtable COM nula")
+    funcion = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtable[indice])
+    return funcion(ptr, *args)
+
+
+def _release(ptr: int | None) -> None:
+    """Suelta una referencia COM (nunca lanza: es limpieza)."""
+    if not ptr:
+        return
+    with contextlib.suppress(Exception):  # limpieza best-effort
+        _vtbl(ptr, 2, ctypes.c_ulong, [])
+
+
+#: Índices de vtable (IUnknown ocupa 0-2).
+_IAUDIOCLIENT_INITIALIZE = 3
+_IAUDIOCLIENT_GET_BUFFER_SIZE = 4
+_IAUDIOCLIENT_GET_MIX_FORMAT = 8
+_IAUDIOCLIENT_START = 10
+_IAUDIOCLIENT_STOP = 11
+_IAUDIOCLIENT_GET_SERVICE = 14
+_IAUDIOCAPTURECLIENT_GET_BUFFER = 3
+_IAUDIOCAPTURECLIENT_RELEASE_BUFFER = 4
+_IAUDIOCAPTURECLIENT_NEXT_PACKET = 5
+_IACTIVATEOPERATION_GET_RESULT = 3
+
+#: Banderas de ``IAudioCaptureClient::GetBuffer``.
+AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY = 0x1  # se perdió audio antes del paquete
+AUDCLNT_BUFFERFLAGS_SILENT = 0x2  # el paquete es silencio (no se lee memoria)
+
+
+class _ComObjeto(ctypes.Structure):
+    """Objeto COM mínimo: solo el puntero a la vtable."""
+
+    _fields_ = (("lpVtbl", ctypes.POINTER(ctypes.c_void_p)),)
+
+
+#: Handlers vivos por dirección del objeto COM. Los callbacks son funciones C
+#: sin contexto, así que el ``this`` es lo único que permiten identificar quién
+#: es quién.
+_HANDLERS: dict[int, _CompletionHandler] = {}
+
+_QUERYINTERFACE_FN = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))
+_REFCOUNT_FN = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+_ACTIVATE_COMPLETED_FN = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, ctypes.c_void_p)
+
+
+def _cb_query_interface(this, iid, salida) -> int:  # noqa: ANN001
+    """``IUnknown::QueryInterface`` del handler de finalización."""
+    handler = _HANDLERS.get(int(this) if this else 0)
+    if handler is None:
+        return _E_NOINTERFACE
+    if not iid:
+        return _E_INVALIDARG
+    pedido = str(iid.contents)
+    # IAgileObject se acepta aunque no haya nada que implementar: es una marca
+    # que le dice a COM que el objeto se puede usar desde cualquier apartamento.
+    if pedido not in (
+        str(IID_IUnknown),
+        str(IID_IActivateAudioInterfaceCompletionHandler),
+        str(IID_IAgileObject),
+    ):
+        salida[0] = None
+        return _E_NOINTERFACE
+    handler.refs += 1
+    salida[0] = ctypes.c_void_p(this)
+    return 0
+
+
+def _cb_add_ref(this) -> int:  # noqa: ANN001
+    handler = _HANDLERS.get(int(this) if this else 0)
+    if handler is None:
+        return 0
+    handler.refs += 1
+    return handler.refs
+
+
+def _cb_release(this) -> int:  # noqa: ANN001
+    handler = _HANDLERS.get(int(this) if this else 0)
+    if handler is None:
+        return 0
+    handler.refs -= 1
+    if handler.refs <= 0:
+        _HANDLERS.pop(int(this), None)
+        handler.evento.set()  # nadie nos va a llamar ya: no dejar colgado
+    return max(handler.refs, 0)
+
+
+def _cb_activate_completed(this, operacion) -> int:  # noqa: ANN001
+    """``IActivateAudioInterfaceCompletionHandler::ActivateCompleted``.
+
+    Windows llama aquí desde un hilo del pool de COM. Solo se guarda la
+    operación y se avisa al hilo que espera: el ``GetActivateResult`` se hace
+    fuera, que es donde se puede informar del error con su ``HRESULT``.
+    """
+    handler = _HANDLERS.get(int(this) if this else 0)
+    if handler is None:
+        return _E_INVALIDARG
+    handler.operacion = int(operacion) if operacion else 0
+    handler.evento.set()
+    return 0
+
+
+# Las referencias a los callbacks tienen que vivir todo el proceso: si se
+# recolectan, Windows salta a memoria liberada.
+_CALLBACKS = (
+    _QUERYINTERFACE_FN(_cb_query_interface),
+    _REFCOUNT_FN(_cb_add_ref),
+    _REFCOUNT_FN(_cb_release),
+    _ACTIVATE_COMPLETED_FN(_cb_activate_completed),
+)
+
+
+class _CompletionHandler:
+    """Implementación en ctypes de ``IActivateAudioInterfaceCompletionHandler``."""
+
+    def __init__(self) -> None:
+        self.refs = 1
+        self.evento = threading.Event()
+        self.operacion = 0
+        vtable = (ctypes.c_void_p * len(_CALLBACKS))(*[ctypes.cast(cb, ctypes.c_void_p) for cb in _CALLBACKS])
+        self._vtable = vtable  # hay que mantenerla viva
+        self.objeto = _ComObjeto(lpVtbl=ctypes.cast(vtable, ctypes.POINTER(ctypes.c_void_p)))
+        self.ptr = ctypes.cast(ctypes.byref(self.objeto), ctypes.c_void_p)
+        _HANDLERS[int(self.ptr.value or 0)] = self
+
+    def liberar(self) -> None:
+        """Suelta la referencia inicial y limpia el registro."""
+        _HANDLERS.pop(int(self.ptr.value or 0), None)
+
+
+def _asegurar_com_mta() -> None:
+    """``CoInitializeEx`` en modo multihilo, tolerando que ya estuviera.
+
+    ``ActivateAudioInterfaceAsync`` exige que el hilo llamador esté en un
+    apartamento multihilo; repetir la llamada devuelve ``S_FALSE`` (1) o
+    ``RPC_E_CHANGED_MODE``, ninguno de los cuales es un error aquí.
+    """
+    try:
+        ole32 = ctypes.WinDLL("ole32")
+    except OSError as exc:  # pragma: no cover - Windows sin ole32
+        raise ProcessLoopbackError(f"no se pudo cargar ole32: {exc}") from exc
+    ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
+
+
+def _funcion_activacion():
+    """Devuelve ``ActivateAudioInterfaceAsync`` tipada de ``mmdevapi.dll``."""
+    try:
+        mmdevapi = ctypes.WinDLL("mmdevapi")
+    except OSError as exc:
+        raise ProcessLoopbackError(f"no se pudo cargar mmdevapi.dll: {exc}") from exc
+    try:
+        prototipo = ctypes.WINFUNCTYPE(
+            HRESULT,
+            wt.LPCWSTR,
+            ctypes.POINTER(GUID),
+            ctypes.POINTER(PROPVARIANT),
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        return prototipo(("ActivateAudioInterfaceAsync", mmdevapi))
+    except AttributeError as exc:
+        raise ProcessLoopbackError("mmdevapi.dll no exporta ActivateAudioInterfaceAsync") from exc
+
+
+@dataclass
+class Resultado:
+    """Lo capturado de un proceso: muestras, formato y contadores."""
+
+    datos: Any  # numpy.ndarray (frames, canales)
+    formato: WAVEFORMATEX
+    paquetes: int = 0
+    frames_silenciosos: int = 0
+    frames_descartados: int = 0
+
+    def resumen(self) -> str:
+        """Línea de diagnóstico con lo que de verdad importa."""
+        canales = self.datos.shape[1] if getattr(self.datos, "ndim", 0) == 2 else 1
+        frames = self.datos.shape[0] if getattr(self.datos, "ndim", 0) else 0
+        return (
+            f"{frames} frames / {canales} canales @ {self.formato.nSamplesPerSec} Hz; "
+            f"paquetes={self.paquetes} silencio={self.frames_silenciosos} "
+            f"descartados={self.frames_descartados}"
+        )
+
+
+def activar(pid: int, timeout: float = 5.0) -> int:
+    """Obtiene el ``IAudioClient`` del proceso ``pid`` (activación asíncrona).
+
+    Devuelve el puntero a la interfaz; el llamador es responsable de soltarlo
+    con ``_release``. Un ``timeout`` evita quedarse colgado si Windows nunca
+    llama a ``ActivateCompleted`` (por ejemplo con un proceso protegido).
+    """
+    _asegurar_com_mta()
+    params = parametros_activacion(pid)
+    variante, buffer = propvariant_blob(params)  # noqa: F841 - el blob debe vivir
+    handler = _CompletionHandler()
+    operacion = ctypes.c_void_p()
+    funcion = _funcion_activacion()
+    hr = funcion(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        ctypes.byref(IID_IAudioClient),
+        ctypes.byref(variante),
+        handler.ptr,
+        ctypes.byref(operacion),
+    )
+    if hr < 0:
+        handler.liberar()
+        raise ProcessLoopbackError("ActivateAudioInterfaceAsync fallo", hr)
+    try:
+        if not handler.evento.wait(timeout):
+            raise ProcessLoopbackError(
+                f"la activacion del PID {pid} no respondio en {timeout:.0f} s (proceso protegido o sin audio?)"
+            )
+        resultado = HRESULT(0)
+        cliente = ctypes.c_void_p()
+        hr = _vtbl(
+            operacion.value,
+            _IACTIVATEOPERATION_GET_RESULT,
+            HRESULT,
+            [ctypes.POINTER(HRESULT), ctypes.POINTER(ctypes.c_void_p)],
+            ctypes.byref(resultado),
+            ctypes.byref(cliente),
+        )
+        if hr < 0:
+            raise ProcessLoopbackError("no se pudo leer el resultado de la activacion", hr)
+        if resultado.value < 0:
+            raise ProcessLoopbackError(f"la activacion del PID {pid} fue rechazada", resultado.value)
+        if not cliente.value:
+            raise ProcessLoopbackError("la activacion no devolvio IAudioClient")
+        return cliente.value
+    finally:
+        _release(operacion.value)
+        handler.liberar()
+
+
+def preparar_cliente(cliente: int, tasa: int = 48000, canales: int = 2) -> tuple[int, WAVEFORMATEX]:
+    """Inicializa ``IAudioClient`` en compartido con loopback y pide la captura.
+
+    Se pide float32 estéreo a la tasa indicada; si el motor no lo acepta se
+    reintenta con su formato de mezcla (``GetMixFormat``), porque en loopback el
+    formato lo impone el endpoint y no hay negociación posible.
+    """
+    formato = formato_float32(tasa, canales)
+    hr = _inicializar(cliente, formato)
+    if hr < 0:
+        mezcla = _mix_format(cliente)
+        if mezcla is None:
+            raise ProcessLoopbackError("Initialize del cliente de proceso fallo", hr)
+        formato = mezcla
+        hr = _inicializar(cliente, formato)
+        if hr < 0:
+            raise ProcessLoopbackError("Initialize con el formato de mezcla tambien fallo", hr)
+    captura = ctypes.c_void_p()
+    hr = _vtbl(
+        cliente,
+        _IAUDIOCLIENT_GET_SERVICE,
+        HRESULT,
+        [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+        ctypes.byref(IID_IAudioCaptureClient),
+        ctypes.byref(captura),
+    )
+    if hr < 0 or not captura.value:
+        raise ProcessLoopbackError("no se pudo obtener IAudioCaptureClient", hr)
+    return captura.value, formato
+
+
+def _inicializar(cliente: int, formato: WAVEFORMATEX) -> int:
+    """Llamada a ``IAudioClient::Initialize`` para loopback (200 ms de buffer)."""
+    return int(
+        _vtbl(
+            cliente,
+            _IAUDIOCLIENT_INITIALIZE,
+            HRESULT,
+            [
+                ctypes.c_int,  # AUDCLNT_SHAREMODE ShareMode
+                wt.DWORD,  # DWORD StreamFlags
+                REFERENCE_TIME,  # hnsBufferDuration
+                REFERENCE_TIME,  # hnsPeriodicity
+                ctypes.POINTER(WAVEFORMATEX),
+                ctypes.c_void_p,  # LPCGUID AudioSessionGuid
+            ],
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            REFERENCE_TIME(2 * HNS_PER_SECOND // 10),  # 200 ms
+            REFERENCE_TIME(0),
+            ctypes.byref(formato),
+            None,
+        )
+    )
+
+
+def _mix_format(cliente: int) -> WAVEFORMATEX | None:
+    """``GetMixFormat``: el formato que el motor sí acepta. ``None`` si falla."""
+    puntero = ctypes.POINTER(WAVEFORMATEX)()
+    hr = _vtbl(
+        cliente,
+        _IAUDIOCLIENT_GET_MIX_FORMAT,
+        HRESULT,
+        [ctypes.POINTER(ctypes.POINTER(WAVEFORMATEX))],
+        ctypes.byref(puntero),
+    )
+    if hr < 0 or not puntero:
+        return None
+    return puntero.contents
+
+
+def _tamano_buffer(cliente: int) -> int:
+    """``GetBufferSize``: frames que caben en el buffer compartido."""
+    tamano = ctypes.c_uint32(0)
+    _vtbl(
+        cliente,
+        _IAUDIOCLIENT_GET_BUFFER_SIZE,
+        HRESULT,
+        [ctypes.POINTER(ctypes.c_uint32)],
+        ctypes.byref(tamano),
+    )
+    return int(tamano.value)
+
+
+def capturar(
+    pid: int,
+    segundos: float = 3.0,
+    tasa: int = 48000,
+    canales: int = 2,
+    timeout_activacion: float = 5.0,
+) -> Resultado:
+    """Captura ``segundos`` de audio del proceso ``pid``.
+
+    Es una PoC: sondea ``GetNextPacketSize`` en vez de usar ``SetEventHandle``
+    (un evento por paquete obligaría a un bucle con ``WaitForSingleObject`` y no
+    cambia lo que se quiere comprobar aquí). Si el proceso deja de sonar, la
+    captura devuelve menos frames de los pedidos; no es un error.
+    """
+    import numpy as np  # local: el módulo también se usa sin audio
+
+    if segundos <= 0:
+        raise ValueError("segundos debe ser > 0")
+    cliente = activar(pid, timeout_activacion)
+    captura = 0
+    try:
+        captura, formato = preparar_cliente(cliente, tasa, canales)
+        canales = int(formato.nChannels)
+        objetivo = int(segundos * formato.nSamplesPerSec)
+        trozos: list[np.ndarray] = []
+        paquetes = silenciosos = descartados = 0
+        obtenidos = 0
+        hr = _vtbl(cliente, _IAUDIOCLIENT_START, HRESULT, [])
+        if hr < 0:
+            raise ProcessLoopbackError("Start del cliente de proceso fallo", hr)
+        try:
+            while obtenidos < objetivo:
+                siguiente = ctypes.c_uint32(0)
+                _vtbl(
+                    captura,
+                    _IAUDIOCAPTURECLIENT_NEXT_PACKET,
+                    HRESULT,
+                    [ctypes.POINTER(ctypes.c_uint32)],
+                    ctypes.byref(siguiente),
+                )
+                if not siguiente.value:
+                    time.sleep(0.005)
+                    continue
+                puntero_datos = ctypes.POINTER(ctypes.c_byte)()
+                frames = ctypes.c_uint32(0)
+                banderas = wt.DWORD(0)
+                hr = _vtbl(
+                    captura,
+                    _IAUDIOCAPTURECLIENT_GET_BUFFER,
+                    HRESULT,
+                    [
+                        ctypes.POINTER(ctypes.POINTER(ctypes.c_byte)),
+                        ctypes.POINTER(ctypes.c_uint32),
+                        ctypes.POINTER(wt.DWORD),
+                        ctypes.POINTER(ctypes.c_ulonglong),
+                        ctypes.POINTER(ctypes.c_ulonglong),
+                    ],
+                    ctypes.byref(puntero_datos),
+                    ctypes.byref(frames),
+                    ctypes.byref(banderas),
+                    None,
+                    None,
+                )
+                if hr < 0:
+                    raise ProcessLoopbackError("GetBuffer fallo", hr)
+                paquetes += 1
+                cuantos = int(frames.value)
+                if banderas.value & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY:
+                    # Salto en el flujo (el proceso dejó de sonar o llegó tarde):
+                    # se cuenta y se descarta en vez de pegarlo al audio bueno.
+                    descartados += cuantos
+                    _vtbl(
+                        captura,
+                        _IAUDIOCAPTURECLIENT_RELEASE_BUFFER,
+                        HRESULT,
+                        [ctypes.c_uint32],
+                        ctypes.c_uint32(cuantos),
+                    )
+                    continue
+                if banderas.value & AUDCLNT_BUFFERFLAGS_SILENT:
+                    bloque = np.zeros((cuantos, canales), dtype=np.float32)
+                    silenciosos += cuantos
+                else:
+                    crudo = np.ctypeslib.as_array(
+                        ctypes.cast(puntero_datos, ctypes.POINTER(ctypes.c_float)), shape=(cuantos * canales,)
+                    )
+                    bloque = crudo.reshape(cuantos, canales).copy()
+                _vtbl(
+                    captura, _IAUDIOCAPTURECLIENT_RELEASE_BUFFER, HRESULT, [ctypes.c_uint32], ctypes.c_uint32(cuantos)
+                )
+                trozos.append(bloque)
+                obtenidos += cuantos
+        finally:
+            _vtbl(cliente, _IAUDIOCLIENT_STOP, HRESULT, [])
+    finally:
+        _release(captura)
+        _release(cliente)
+    if not trozos:
+        raise ProcessLoopbackError(f"el PID {pid} no entrego audio en {segundos:.1f} s")
+    datos = np.concatenate(trozos)[:objetivo]
+    return Resultado(
+        datos=datos,
+        formato=formato,
+        paquetes=paquetes,
+        frames_silenciosos=silenciosos,
+        frames_descartados=descartados,
+    )
+
+
+def guardar_wav(ruta: str, resultado: Resultado) -> None:
+    """Escribe lo capturado a WAV 16 bits (para escucharlo o analizarlo)."""
+    import wave
+
+    import numpy as np
+
+    datos = np.clip(resultado.datos, -1.0, 1.0)
+    entero = (datos * 32767.0).astype("<i2")
+    with wave.open(ruta, "wb") as salida:
+        salida.setnchannels(int(resultado.formato.nChannels))
+        salida.setsampwidth(2)
+        salida.setframerate(int(resultado.formato.nSamplesPerSec))
+        salida.writeframes(entero.tobytes())
+
+
+def _cli(argv: list[str]) -> int:
+    """CLI de la PoC: sondeo o captura de un PID a consola/WAV."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PoC de captura por aplicacion (Process Loopback)")
+    parser.add_argument("--probe", action="store_true", help="solo comprobar si la API existe")
+    parser.add_argument("--pid", type=int, default=0, help="PID del proceso a capturar")
+    parser.add_argument("--segundos", type=float, default=3.0, help="duracion de la captura")
+    parser.add_argument("--wav", default="", help="ruta donde guardar el WAV")
+    args = parser.parse_args(argv)
+
     disp = sondeo()
     print(disp.resumen())
     for nota in disp.notas:
         print(f"  nota: {nota}")
     if not disp.disponible:
         return 1
-    if "--pid" in argv:
-        print("captura por proceso: pendiente (esta entrega es solo el sondeo)")
+    if args.probe or not args.pid:
         return 0
+    try:
+        resultado = capturar(args.pid, args.segundos)
+    except (ProcessLoopbackError, ValueError) as exc:
+        print(f"error: {exc}")
+        return 2
+    import numpy as np
+
+    pico = float(np.max(np.abs(resultado.datos))) if resultado.datos.size else 0.0
+    rms = float(np.sqrt(np.mean(resultado.datos**2))) if resultado.datos.size else 0.0
+    print(resultado.resumen())
+    print(f"pico={pico:.4f} ({20 * np.log10(max(pico, 1e-9)):+.1f} dBFS) rms={rms:.4f}")
+    if args.wav:
+        guardar_wav(args.wav, resultado)
+        print(f"WAV: {args.wav}")
     return 0
-
-
-if __name__ == "__main__":  # pragma: no cover - entrada manual
-    raise SystemExit(_probe_argv(sys.argv[1:]))

@@ -7,6 +7,7 @@ falla, el que está mal es el módulo, no el test.
 """
 
 import ctypes
+import time
 
 import pytest
 
@@ -165,3 +166,79 @@ class TestSondeo:
             assert any("19041" in nota for nota in disp.notas)
         else:
             assert disp.notas == []
+
+
+# --------------------------------------------------------------------------- #
+# Captura real (necesita un dispositivo de salida; se salta si no hay)
+# --------------------------------------------------------------------------- #
+_JUGADOR = """
+import sys
+import numpy as np
+import pyaudiowpatch as pyaudio
+
+segundos, pico = float(sys.argv[1]), 10 ** (-20 / 20.0)
+tasa = 48000
+pa = pyaudio.PyAudio()
+info = pa.get_default_output_device_info()
+canales = max(1, int(info["maxOutputChannels"]))
+t = np.arange(int(tasa * segundos)) / tasa
+tono = (pico * np.sin(2 * np.pi * 1000.0 * t)).astype(np.float32)
+datos = np.repeat(tono[:, None], canales, axis=1)
+stream = pa.open(
+    format=pyaudio.paFloat32, channels=canales, rate=tasa, output=True,
+    output_device_index=info["index"], frames_per_buffer=1024,
+)
+print("PLAYING", flush=True)
+for i in range(0, len(datos), 1024):
+    stream.write(datos[i : i + 1024].tobytes())
+stream.stop_stream()
+stream.close()
+pa.terminate()
+"""
+
+
+@pytest.mark.slow
+def test_captura_por_proceso_de_un_tono_conocido():
+    """Captura real de otro proceso: un tono de 1 kHz a -20 dBFS de pico.
+
+    Es la prueba de que la API funciona de verdad (activación, inicialización en
+    loopback y lectura de paquetes). Si no hay dispositivo de salida o el
+    intérprete no puede abrirlo, se salta: no es un fallo del módulo.
+    """
+    import subprocess
+    import sys
+
+    import numpy as np
+
+    jugador = subprocess.Popen(  # noqa: S603 - argumentos fijos, sin shell
+        [sys.executable, "-c", _JUGADOR, "6"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        primera = (jugador.stdout.readline() or "").strip()
+        if primera != "PLAYING":
+            pytest.skip(f"no se pudo reproducir el tono de prueba: {primera[:200]}")
+        time.sleep(0.8)  # dar tiempo a que el flujo esté en marcha
+        resultado = pl.capturar(jugador.pid, segundos=2.0)
+    finally:
+        jugador.kill()
+        jugador.wait(timeout=5)
+
+    datos = resultado.datos
+    assert resultado.formato.nChannels >= 1
+    assert datos.shape[0] >= int(0.5 * resultado.formato.nSamplesPerSec), "se capturó muy poco audio"
+    mono = datos.mean(axis=1)
+    pico = float(np.max(np.abs(mono)))
+    rms = float(np.sqrt(np.mean(mono**2)))
+    espectro = np.abs(np.fft.rfft(mono * np.hanning(len(mono))))
+    frecuencias = np.fft.rfftfreq(len(mono), 1.0 / resultado.formato.nSamplesPerSec)
+    dominante = float(frecuencias[int(np.argmax(espectro))])
+
+    # Tono de pico 0.1 -> -20,00 dBFS. Tolerancia por el redondeo del motor.
+    assert abs(pico - 0.1) < 0.01, f"pico {pico:.4f}, esperado 0.1000"
+    # Un seno de pico 0.1 tiene RMS 0.1/raiz(2) -> -23,01 dBFS.
+    assert abs(20 * np.log10(rms) + 23.01) < 0.5, f"RMS {20 * np.log10(rms):.2f} dBFS"
+    assert 995.0 <= dominante <= 1005.0, f"frecuencia dominante {dominante:.1f} Hz"
+    assert resultado.frames_silenciosos < datos.shape[0] // 2, "medio paquete en silencio"
