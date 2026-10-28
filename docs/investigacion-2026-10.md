@@ -228,6 +228,11 @@ muestra**. Antes de plantear numba/Rust: medir con `benchmarks/bench_dsp.py`.
 
 ## 6. Roadmap propuesto
 
+> El detalle de la segunda mitad de la v1.8 (true-peak, de-esser e
+> importación de AutoEQ), con criterios de aceptación medibles, está en
+> `docs/diseno-v1.8.md`.
+
+
 **v1.7 — "medir y no romper"** (riesgo bajo, todo verificable)
 1. Desglose de latencia instrumentado (captura / ring / cola del hijo / render) visible en la **barra de estado** y en el informe de diagnóstico exportado.
 2. Contadores de xrun + p99 del **coste de `Enhancer.process()` por bloque** (el callback de PortAudio sigue sin instrumentar: es backlog).
