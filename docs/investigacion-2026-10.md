@@ -256,17 +256,98 @@ YAMNet ONNX (solo sugerencia, nunca automático), accesibilidad, i18n ampliada.
 
 ---
 
-## 7. Incertidumbres declaradas (no verificado)
+## 7. Incertidumbres: estado a 2026-10-28
 
-- Periodo de motor real concedido por chipset: no hay datos públicos por
-  modelo; hay que medirlo con `GetSharedModeEnginePeriod` en 3–4 máquinas.
-- Soporte de `IAudioClient3` en `soundcard` / `miniaudio` / `RtAudio`: sin auditar.
-- Estado de mantenimiento de `tufup` y `pytest-regressions`: no confirmado.
-- Process Loopback con DRM y con procesos elevados: sin documentar; hay que
-  probarlo con Netflix/Spotify/Steam antes de llamarlo sustituto de VB-CABLE.
-- Licencia exacta de PySide6/Qt for Python (LGPLv3) y suficiencia del modo
-  onedir: requiere leer el `LICENSE` del paquete instalado.
-- Coste real del salto de proceso en µs/bloque: estimación, medir con el bench.
-- Datos de precio de DTS Sound Unbound y Razer THX: no confirmados.
-- Licencia de los datos de AutoEQ antes de empaquetar perfiles: **bloqueador
-  legal del hueco nº2**, verificar por modelo.
+Cada punto de la lista original lleva ahora su veredicto y la evidencia que lo
+sostiene. Lo que sigue sin verificar se dice como tal, sin adornos.
+
+### 7.1 Periodo de motor real concedido por chipset — **medido en 1 máquina**
+
+`benchmarks/probe_wasapi.py` (nuevo, reproducible) mide `GetDevicePeriod` y
+`IAudioClient3::GetSharedModeEnginePeriod` del endpoint por defecto. En la
+máquina de desarrollo (Windows 10 22H2, build 19045, Realtek/Synaptics):
+
+| medida | valor |
+|---|---|
+| `IAudioClient3` disponible | sí |
+| formato de mezcla | float32, 2 canales, 48 kHz |
+| `GetDevicePeriod` | default 10,00 ms · mínimo 2,00 ms |
+| motor (compartido) default | 480 frames = **10,00 ms** |
+| motor fundamental | 1 frame = **0,02 ms** |
+| motor mínimo | 128 frames = **2,67 ms** |
+| motor máximo | 480 frames = **10,00 ms** |
+
+Conclusión: el suelo de latencia en modo compartido con `IAudioClient3` es
+**2,67 ms** en esta máquina, la mitad del periodo actual por defecto (10 ms) y
+muy por debajo del bloque de 21,3 ms que usa la app. **Sigue abierto para otros
+chipsets**: la herramienta ya existe, falta ejecutarla en 2-3 equipos más.
+
+### 7.2 Soporte de `IAudioClient3` en `soundcard`/`miniaudio`/`RtAudio` — **no aplica**
+
+La app no usa ninguna de esas tres librerías: los streams van por PyAudioWPatch
+(PortAudio) y el WASAPI nativo se hace con `ctypes` propio
+(`audio_enhancer/process_loopback.py`). Medido: `IAudioClient3` se activa por
+`QueryInterface` sin problema, así que si se aborda la latencia baja no hace
+falta auditar librerías de terceros: el cliente ya es nuestro.
+
+### 7.3 Mantenimiento de `tufup` y `pytest-regressions` — **verificado (PyPI)**
+
+Ninguno de los dos es dependencia del proyecto; eran candidatos.
+
+| paquete | versión | última publicación | licencia |
+|---|---|---|---|
+| `tufup` | 0.10.0 | 2025-10-04 | MIT |
+| `pytest-regressions` | 2.11.0 | 2026-05-25 | MIT |
+
+Ambos con publicación reciente y licencia permisiva: ninguno está abandonado.
+
+### 7.4 Process Loopback con DRM y con procesos elevados — **verificado a medias**
+
+- **Funciona con aplicaciones normales**: capturado un tono de 1 kHz a −20 dBFS
+  de un proceso aparte, pico 0,1000 (−20,00 dBFS) y 1000,0 Hz, y el motor lo
+  consume (`fill()` > 0). También se enumeran los procesos que suenan
+  (`--listar`): en la máquina de desarrollo apareció la propia app y el navegador
+  del usuario, con la sesión en el proceso principal.
+- **Pendiente DRM**: requiere poner Netflix/Spotify a sonar; si devuelve silencio
+  (pico 0,0000) hay que decirlo en la interfaz, no arreglarlo.
+- **Pendiente procesos elevados**: el shell de desarrollo **no es administrador**,
+  así que no se pudo probar la activación sobre un proceso elevado. El modo de
+  fallo esperado es `acceso denegado`; hay que medirlo ejecutando la app como
+  administrador.
+
+### 7.5 Licencia de PySide6/Qt y suficiencia del onedir — **verificado, con un hueco**
+
+- `PySide6` 6.8.3 se declara `LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only`
+  (classifier LGPLv3). La opción LGPLv3 es la que aplica al distribuir.
+- **El onedir sí es suficiente**: los 13 `Qt6*.dll` viajan como archivos
+  separados en `_internal/PySide6/`, así que el usuario puede reemplazarlos
+  (LGPL §4, requisito de reenlazado). El **onefile no** vale como distribución
+  principal: los extrae a una carpeta temporal y el reemplazo deja de ser
+  práctico.
+- **Hueco real detectado**: el repo es MIT y **no incluye el texto LGPLv3 ni
+  avisos de terceros**, y el instalador no tiene `LicenseFile`. El wheel de
+  PySide6 tampoco trae el texto (no hay `LICENSES/`). Hay que añadir
+  `LICENSES/LGPL-3.0.txt` + avisos de terceros y engancharlos al instalador.
+  La v1.7.0 publicada sale sin ese aviso: corregir en la siguiente.
+
+### 7.6 Coste real del salto de proceso en µs/bloque — **sin medir**
+
+Sigue siendo estimación. El método correcto ya está claro: medir con el bench el
+mismo bloque de DSP (a) en el hilo local y (b) a través de la memoria compartida
+con el proceso hijo, y restar. La telemetría necesaria existe
+(`child_timing`/`timing_snapshot`), falta el escenario en `benchmarks/`.
+
+### 7.7 Precios de DTS Sound Unbound y Razer THX — **no verificable aquí**
+
+La búsqueda web del entorno no tiene credenciales, y el precio cambia con
+ofertas y región. Además ninguna decisión técnica depende de ese dato: era
+contexto de competencia.
+
+### 7.8 Licencia de los datos de AutoEQ — **verificado (MIT), con matiz**
+
+El repositorio `jaakkopasanen/AutoEq` declara **MIT**, lo que permite
+redistribuir código y resultados con atribución. **Matiz importante**: las
+mediciones crudas que AutoEQ procesa vienen de terceros (oratory1990, crinacle,
+Rtings…), y la licencia de cada conjunto de medidas puede no ser MIT. Antes de
+empaquetar perfiles hay que revisar el origen de cada medición incluida, no solo
+la licencia del repositorio.
