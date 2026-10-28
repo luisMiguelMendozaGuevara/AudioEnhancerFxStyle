@@ -110,8 +110,12 @@ que la app hace.
 - `audio_enhancer/process_loopback.py`: captura por aplicación con la **Process
   Loopback API** de Windows, que eliminaría la dependencia de VB-CABLE. Verificado
   capturando un tono de 1 kHz a -20 dBFS de un proceso aparte: pico 0,1000
-  (-20,00 dBFS exactos) y 1000,0 Hz. Todavía no está integrado en el motor ni en
-  la interfaz, así que no cambia nada de lo que el usuario ve.
+  (-20,00 dBFS exactos) y 1000,0 Hz.
+- Integrado en el motor: `AudioEngine.start_capture_process(pid, rate)` alimenta
+  el mismo ring crudo que la captura de PortAudio, y `procesos_con_audio()` lista
+  qué aplicaciones están sonando para el selector. Todavía **no hay selector en
+  la interfaz**, así que la app sigue capturando del cable virtual igual que
+  antes: nada de lo que el usuario ve cambia en esta versión.
 
 ## [1.6.1] — 2026-10-25
 

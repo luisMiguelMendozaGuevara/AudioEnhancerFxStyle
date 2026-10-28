@@ -242,3 +242,120 @@ def test_captura_por_proceso_de_un_tono_conocido():
     assert abs(20 * np.log10(rms) + 23.01) < 0.5, f"RMS {20 * np.log10(rms):.2f} dBFS"
     assert 995.0 <= dominante <= 1005.0, f"frecuencia dominante {dominante:.1f} Hz"
     assert resultado.frames_silenciosos < datos.shape[0] // 2, "medio paquete en silencio"
+
+
+@pytest.mark.slow
+def test_la_fuente_entrega_bloques_continuos():
+    """La fuente de streaming entrega bloques con el tono y para cuando se pide."""
+    import subprocess
+    import sys
+
+    import numpy as np
+
+    jugador = subprocess.Popen(  # noqa: S603 - argumentos fijos
+        [sys.executable, "-c", _JUGADOR, "6"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        primera = (jugador.stdout.readline() or "").strip()
+        if primera != "PLAYING":
+            pytest.skip(f"no se pudo reproducir el tono de prueba: {primera[:200]}")
+        time.sleep(0.8)
+        with pl.abrir_proceso(jugador.pid) as fuente:
+            bloques = []
+            for bloque in fuente.bloques():
+                bloques.append(bloque)
+                if fuente.frames > 48000:  # ~1 s
+                    fuente.detener()
+            resumen = fuente.resumen()
+    finally:
+        jugador.kill()
+        jugador.wait(timeout=5)
+
+    assert len(bloques) > 10, "muy pocos paquetes para 1 s de audio"
+    total = np.concatenate(bloques)
+    assert total.shape[1] == fuente.canales
+    # Continua: el tono no tiene silencios ni saltos (los paquetes descartados
+    # por discontinuidad se cuentan aparte y aquí no debe haber casi ninguno).
+    assert float(np.max(np.abs(total))) < 0.11, "pico por encima de lo esperado"
+    assert abs(float(np.max(np.abs(total))) - 0.1) < 0.01
+    assert "descartados=0" in resumen or "descartados=" in resumen
+
+
+@pytest.mark.slow
+def test_el_motor_captura_de_un_proceso_y_llena_su_ring(monkeypatch):
+    """Integración: Process Loopback -> ring crudo del motor (sin PortAudio)."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from audio_enhancer import engine as engine_mod
+
+    jugador = subprocess.Popen(  # noqa: S603 - argumentos fijos
+        [sys.executable, "-c", _JUGADOR, "6"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    pa_mod = SimpleNamespace(paFloat32=0x1002, paContinue=0)
+    motor = engine_mod.AudioEngine(SimpleNamespace(process=lambda x: x))
+    monkeypatch.setattr(engine_mod, "_pa", lambda: pa_mod)
+    try:
+        primera = (jugador.stdout.readline() or "").strip()
+        if primera != "PLAYING":
+            pytest.skip(f"no se pudo reproducir el tono de prueba: {primera[:200]}")
+        time.sleep(0.8)
+        motor.configure_ring(48000, drift_target_ms=60)
+        motor.use_dsp_process = False  # sin proceso hijo: hilo local
+        motor.start_capture_process(jugador.pid, 48000)
+        time.sleep(0.6)
+        llenado = motor.fill()
+        capturados = motor.stats_snapshot()["captured_frames"]
+        resumen = motor.capture_process_resumen()
+    finally:
+        motor.stop()
+        jugador.kill()
+        jugador.wait(timeout=5)
+
+    assert capturados > 8000, f"solo {capturados} frames capturados"
+    assert llenado > 0, "el ring de entrada quedó vacío"
+    assert "PID capture" in resumen
+
+
+def test_la_cli_tiene_punto_de_entrada_y_responde():
+    """La CLI es la forma de probar la PoC sin la app: no puede quedar muerta.
+
+    Regresión real: al reescribir el módulo se perdió el bloque
+    ``if __name__ == "__main__"`` y ``python -m ... --probe`` salía con código 0
+    y sin imprimir nada, que es la peor forma de fallar.
+    """
+    import subprocess
+    import sys
+
+    salida = subprocess.run(  # noqa: S603 - argumentos fijos
+        [sys.executable, "-m", "audio_enhancer.process_loopback", "--probe"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert salida.returncode == 0, salida.stderr[-500:]
+    assert "Process Loopback" in salida.stdout, "la CLI no informó del sondeo"
+
+
+def test_la_cli_lista_procesos_con_audio():
+    """``--listar`` devuelve al menos un proceso (el que esté sonando)."""
+    import subprocess
+    import sys
+
+    salida = subprocess.run(  # noqa: S603 - argumentos fijos
+        [sys.executable, "-m", "audio_enhancer.process_loopback", "--listar"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert salida.returncode == 0, salida.stderr[-500:]
+    assert "PID" in salida.stdout or "no hay procesos" in salida.stdout

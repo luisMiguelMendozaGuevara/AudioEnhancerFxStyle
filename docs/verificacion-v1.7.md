@@ -383,13 +383,32 @@ Process Loopback.
 | frecuencia dominante | 1000 Hz | **1000,0 Hz** |
 | RMS | -23,01 dBFS (seno de pico 0,1) | **-23,07 dBFS** |
 
-**Lo que falta para que sustituya a VB-CABLE**: integrarlo en el motor como
-fuente de captura alternativa (selector de aplicación en la página Audio),
-capturar el árbol de procesos (navegadores), y probarlo con DRM y procesos
-elevados (Netflix/Spotify/Steam), que la investigación dejó como incógnita.
+**Integración en el motor (hecha)**: `AudioEngine.start_capture_process(pid,
+rate)` llena el mismo ring crudo que el callback de PortAudio (`_put_raw` +
+contadores), así que DSP, deriva y salida no cambian. Se rechaza si el endpoint
+del proceso no está a la tasa del motor (meter 44,1 kHz en un ring que la salida
+lee a 48 kHz desafinaría un 8 %). Verificado con un test que captura el tono del
+proceso y comprueba que `fill()` crece y `captured_frames` avanza.
+
+**Enumeración para el selector (hecha)**: `procesos_con_audio()` lee las
+sesiones del endpoint por defecto (`IAudioSessionManager2` →
+`IAudioSessionControl2::GetProcessId`) y resuelve el nombre con
+`QueryFullProcessImageNameW`. Medido en la máquina de desarrollo:
+`AudioEnhancerFxStyle.exe (PID 2900)` y `zen.exe (PID 15448)`; los procesos del
+mismo PID se colapsan.
+
+**Fallo cazado aquí**: al reescribir el módulo se perdió el bloque
+`if __name__ == "__main__"`, así que `python -m audio_enhancer.process_loopback
+--probe` salía con código 0 **sin imprimir nada**. Ahora hay dos tests que
+ejecutan la CLI de verdad.
+
+**Lo que falta para que sustituya a VB-CABLE**: el selector de aplicación en la
+página Audio (elegir proceso en vez de cable) y capturar el árbol de procesos
+para navegadores; y probarlo con DRM y procesos elevados (Netflix/Spotify/Steam),
+que la investigación dejó como incógnita.
 
 ### 12.4 Estado
 
-**560 tests** · ruff, format y mypy limpios · build 1.7.0 recompilado
+**564 tests** · ruff, format y mypy limpios · build 1.7.0 recompilado
 (onedir 12,7 MB + instalador 61,6 MB) y verificado en arranque real
 (`ring 48000 Hz, latencia 81.3 ms`).

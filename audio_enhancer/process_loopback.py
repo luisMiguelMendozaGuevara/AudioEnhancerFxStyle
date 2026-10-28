@@ -838,6 +838,156 @@ def capturar(
     )
 
 
+@dataclass
+class FuenteProceso:
+    """Cliente de captura por proceso ya abierto (para lectura continua).
+
+    A diferencia de ``capturar``, que devuelve un array cerrado, esto mantiene el
+    cliente vivo para que el motor lo lea bloque a bloque desde su hilo.
+    """
+
+    cliente: int
+    captura: int
+    formato: WAVEFORMATEX
+    tasa: int
+    canales: int
+    paquetes: int = 0
+    frames: int = 0
+    frames_silenciosos: int = 0
+    frames_descartados: int = 0
+    _detenido: threading.Event = field(default_factory=threading.Event)
+    _arrancado: bool = False
+
+    def bloques(self, espera: float = 0.005):
+        """Genera bloques float32 de forma ``(frames, canales)`` hasta parar.
+
+        Sondea ``GetNextPacketSize`` (en vez de ``SetEventHandle``) para no
+        atar la captura a un evento de Windows: el coste es un ``sleep`` corto
+        cuando no hay datos, y el bucle nunca bloquea al hilo llamador.
+        """
+        import numpy as np
+
+        if not self._arrancado:
+            hr = _vtbl(self.cliente, _IAUDIOCLIENT_START, HRESULT, [])
+            if hr < 0:
+                raise ProcessLoopbackError("Start del cliente de proceso fallo", hr)
+            self._arrancado = True
+        while not self._detenido.is_set():
+            siguiente = ctypes.c_uint32(0)
+            hr = _vtbl(
+                self.captura,
+                _IAUDIOCAPTURECLIENT_NEXT_PACKET,
+                HRESULT,
+                [ctypes.POINTER(ctypes.c_uint32)],
+                ctypes.byref(siguiente),
+            )
+            if hr < 0:
+                raise ProcessLoopbackError("GetNextPacketSize fallo", hr)
+            if not siguiente.value:
+                time.sleep(espera)
+                continue
+            puntero = ctypes.POINTER(ctypes.c_byte)()
+            frames = ctypes.c_uint32(0)
+            banderas = wt.DWORD(0)
+            hr = _vtbl(
+                self.captura,
+                _IAUDIOCAPTURECLIENT_GET_BUFFER,
+                HRESULT,
+                [
+                    ctypes.POINTER(ctypes.POINTER(ctypes.c_byte)),
+                    ctypes.POINTER(ctypes.c_uint32),
+                    ctypes.POINTER(wt.DWORD),
+                    ctypes.POINTER(ctypes.c_ulonglong),
+                    ctypes.POINTER(ctypes.c_ulonglong),
+                ],
+                ctypes.byref(puntero),
+                ctypes.byref(frames),
+                ctypes.byref(banderas),
+                None,
+                None,
+            )
+            if hr < 0:
+                raise ProcessLoopbackError("GetBuffer fallo", hr)
+            cuantos = int(frames.value)
+            self.paquetes += 1
+            try:
+                if banderas.value & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY:
+                    self.frames_descartados += cuantos
+                    continue
+                if banderas.value & AUDCLNT_BUFFERFLAGS_SILENT:
+                    self.frames_silenciosos += cuantos
+                    bloque = np.zeros((cuantos, self.canales), dtype=np.float32)
+                else:
+                    crudo = np.ctypeslib.as_array(
+                        ctypes.cast(puntero, ctypes.POINTER(ctypes.c_float)),
+                        shape=(cuantos * self.canales,),
+                    )
+                    bloque = crudo.reshape(cuantos, self.canales).copy()
+            finally:
+                _vtbl(
+                    self.captura,
+                    _IAUDIOCAPTURECLIENT_RELEASE_BUFFER,
+                    HRESULT,
+                    [ctypes.c_uint32],
+                    ctypes.c_uint32(cuantos),
+                )
+            self.frames += cuantos
+            yield bloque
+
+    def detener(self) -> None:
+        """Pide el fin del bucle (idempotente)."""
+        self._detenido.set()
+
+    def cerrar(self) -> None:
+        """Para y libera las interfaces COM. Seguro llamarlo dos veces."""
+        self._detenido.set()
+        if self._arrancado:
+            with contextlib.suppress(Exception):
+                _vtbl(self.cliente, _IAUDIOCLIENT_STOP, HRESULT, [])
+            self._arrancado = False
+        _release(self.captura)
+        self.captura = 0
+        _release(self.cliente)
+        self.cliente = 0
+
+    def __enter__(self) -> FuenteProceso:
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.cerrar()
+
+    def resumen(self) -> str:
+        """Línea de diagnóstico de la fuente."""
+        return (
+            f"PID capture @ {self.formato.nSamplesPerSec} Hz/{self.canales} ch; "
+            f"paquetes={self.paquetes} frames={self.frames} "
+            f"silencio={self.frames_silenciosos} descartados={self.frames_descartados}"
+        )
+
+
+def abrir_proceso(pid: int, tasa: int = 48000, canales: int = 2, timeout: float = 5.0) -> FuenteProceso:
+    """Abre la captura continua de un proceso (cliente + captura inicializados).
+
+    La tasa del formato de mezcla la impone el endpoint del proceso: si no es la
+    pedida, se informa en ``FuenteProceso.tasa`` para que el llamador decida
+    (remuestrear o rechazar). Aquí no se remuestrea nada.
+    """
+    cliente = activar(pid, timeout)
+    captura = 0
+    try:
+        captura, formato = preparar_cliente(cliente, tasa, canales)
+    except Exception:
+        _release(cliente)
+        raise
+    return FuenteProceso(
+        cliente=cliente,
+        captura=captura,
+        formato=formato,
+        tasa=int(formato.nSamplesPerSec),
+        canales=int(formato.nChannels),
+    )
+
+
 def guardar_wav(ruta: str, resultado: Resultado) -> None:
     """Escribe lo capturado a WAV 16 bits (para escucharlo o analizarlo)."""
     import wave
@@ -853,12 +1003,187 @@ def guardar_wav(ruta: str, resultado: Resultado) -> None:
         salida.writeframes(entero.tobytes())
 
 
+# --------------------------------------------------------------------------- #
+# Enumeración: qué procesos están sonando
+# --------------------------------------------------------------------------- #
+#: CLSID del enumerador de dispositivos de audio y los IID que necesita la
+#: enumeración de sesiones (``mmdeviceapi.h`` y ``audiopolicy.h``).
+CLSID_MMDeviceEnumerator = guid_de_texto("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+IID_IMMDeviceEnumerator = guid_de_texto("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+IID_IAudioSessionManager2 = guid_de_texto("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
+IID_IAudioSessionControl2 = guid_de_texto("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
+IID_IAudioSessionEnumerator = guid_de_texto("{E2F5BB11-0570-40CA-ACDD-3AA01277DEE8}")
+
+#: ``EDataFlow`` (0 = render) y ``ERole`` (0 = consola) para el endpoint por
+#: defecto, que es donde están las sesiones que suenan por los altavoces.
+_EDATAFLOW_RENDER = 0
+_EROLE_CONSOLE = 0
+#: ``CLSCTX_ALL``.
+_CLSCTX_ALL = 0x17
+#: ``PROCESS_QUERY_LIMITED_INFORMATION``: el mínimo para leer el nombre de un
+#: proceso cualquiera, incluso uno protegido.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+#: Índices de vtable de las interfaces de sesiones (IUnknown ocupa 0-2).
+_IMMDEVICEENUMERATOR_GET_DEFAULT_ENDPOINT = 4
+_IMMDEVICE_ACTIVATE = 3
+_IAUDIOSESSIONMANAGER2_GET_SESSION_ENUMERATOR = 5
+_IAUDIOSESSIONENUMERATOR_GET_COUNT = 3
+_IAUDIOSESSIONENUMERATOR_GET_SESSION = 4
+_IAUDIOSESSIONCONTROL2_GET_PROCESS_ID = 14
+
+
+@dataclass(frozen=True)
+class ProcesoAudio:
+    """Un proceso que tiene una sesión de audio en el endpoint por defecto."""
+
+    pid: int
+    nombre: str
+
+    def __str__(self) -> str:
+        return f"{self.nombre} (PID {self.pid})"
+
+
+def nombre_de_proceso(pid: int) -> str:
+    """Nombre del ejecutable de un PID (``?`` si no se puede leer).
+
+    Un PID puede pertenecer a un proceso protegido o ya cerrado; en ese caso se
+    devuelve algo visible en vez de lanzar, porque esto alimenta una lista.
+    """
+    if pid <= 0:
+        return "sistema"
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return "?"
+    try:
+        tamano = wt.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(tamano.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(tamano)):
+            return "?"
+        return str(buffer.value).rsplit("\\", 1)[-1]
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def procesos_con_audio(timeout: float = 3.0) -> list[ProcesoAudio]:
+    """Lista los procesos con sesión de audio en la salida por defecto.
+
+    Devuelve una entrada por PID (sin duplicados, ordenada por nombre). Un
+    navegador suele tener varias sesiones con el mismo PID; aquí se colapsan.
+
+    Se usa ``IAudioSessionControl2::GetProcessId`` y no el nombre de la sesión
+    porque el nombre lo pone cada aplicación y no es fiable.
+    """
+    _asegurar_com_mta()
+    ole32 = ctypes.WinDLL("ole32")
+    enumerador = ctypes.c_void_p()
+    hr = ole32.CoCreateInstance(
+        ctypes.byref(CLSID_MMDeviceEnumerator),
+        None,
+        _CLSCTX_ALL,
+        ctypes.byref(IID_IMMDeviceEnumerator),
+        ctypes.byref(enumerador),
+    )
+    if hr < 0 or not enumerador.value:
+        raise ProcessLoopbackError("no se pudo crear el enumerador de audio", int(hr))
+    dispositivo = ctypes.c_void_p()
+    sesiones = ctypes.c_void_p()
+    gestor = ctypes.c_void_p()
+    try:
+        hr = _vtbl(
+            enumerador.value,
+            _IMMDEVICEENUMERATOR_GET_DEFAULT_ENDPOINT,
+            HRESULT,
+            [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+            _EDATAFLOW_RENDER,
+            _EROLE_CONSOLE,
+            ctypes.byref(dispositivo),
+        )
+        if hr < 0 or not dispositivo.value:
+            raise ProcessLoopbackError("no hay dispositivo de salida por defecto", int(hr))
+        hr = _vtbl(
+            dispositivo.value,
+            _IMMDEVICE_ACTIVATE,
+            HRESULT,
+            [ctypes.POINTER(GUID), wt.DWORD, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+            ctypes.byref(IID_IAudioSessionManager2),
+            _CLSCTX_ALL,
+            None,
+            ctypes.byref(gestor),
+        )
+        if hr < 0 or not gestor.value:
+            raise ProcessLoopbackError("no se pudo activar el gestor de sesiones", int(hr))
+        hr = _vtbl(
+            gestor.value,
+            _IAUDIOSESSIONMANAGER2_GET_SESSION_ENUMERATOR,
+            HRESULT,
+            [ctypes.POINTER(ctypes.c_void_p)],
+            ctypes.byref(sesiones),
+        )
+        if hr < 0 or not sesiones.value:
+            raise ProcessLoopbackError("no se pudo enumerar las sesiones", int(hr))
+        cantidad = ctypes.c_int(0)
+        _vtbl(
+            sesiones.value,
+            _IAUDIOSESSIONENUMERATOR_GET_COUNT,
+            HRESULT,
+            [ctypes.POINTER(ctypes.c_int)],
+            ctypes.byref(cantidad),
+        )
+        encontrados: dict[int, ProcesoAudio] = {}
+        for indice in range(int(cantidad.value)):
+            control = ctypes.c_void_p()
+            hr = _vtbl(
+                sesiones.value,
+                _IAUDIOSESSIONENUMERATOR_GET_SESSION,
+                HRESULT,
+                [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                indice,
+                ctypes.byref(control),
+            )
+            if hr < 0 or not control.value:
+                continue
+            control2 = ctypes.c_void_p()
+            try:
+                hr = _vtbl(
+                    control.value,
+                    0,  # QueryInterface
+                    HRESULT,
+                    [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+                    ctypes.byref(IID_IAudioSessionControl2),
+                    ctypes.byref(control2),
+                )
+                if hr < 0 or not control2.value:
+                    continue
+                pid = wt.DWORD(0)
+                _vtbl(
+                    control2.value,
+                    _IAUDIOSESSIONCONTROL2_GET_PROCESS_ID,
+                    HRESULT,
+                    [ctypes.POINTER(wt.DWORD)],
+                    ctypes.byref(pid),
+                )
+                if pid.value and pid.value not in encontrados:
+                    encontrados[pid.value] = ProcesoAudio(pid.value, nombre_de_proceso(pid.value))
+            finally:
+                _release(control2.value)
+                _release(control.value)
+        return sorted(encontrados.values(), key=lambda p: (p.nombre.lower(), p.pid))
+    finally:
+        _release(sesiones.value)
+        _release(gestor.value)
+        _release(dispositivo.value)
+        _release(enumerador.value)
+
+
 def _cli(argv: list[str]) -> int:
     """CLI de la PoC: sondeo o captura de un PID a consola/WAV."""
     import argparse
 
     parser = argparse.ArgumentParser(description="PoC de captura por aplicacion (Process Loopback)")
     parser.add_argument("--probe", action="store_true", help="solo comprobar si la API existe")
+    parser.add_argument("--listar", action="store_true", help="listar procesos que estan sonando")
     parser.add_argument("--pid", type=int, default=0, help="PID del proceso a capturar")
     parser.add_argument("--segundos", type=float, default=3.0, help="duracion de la captura")
     parser.add_argument("--wav", default="", help="ruta donde guardar el WAV")
@@ -870,6 +1195,17 @@ def _cli(argv: list[str]) -> int:
         print(f"  nota: {nota}")
     if not disp.disponible:
         return 1
+    if args.listar:
+        try:
+            procesos = procesos_con_audio()
+        except ProcessLoopbackError as exc:
+            print(f"error: {exc}")
+            return 2
+        if not procesos:
+            print("no hay procesos con sesion de audio en la salida por defecto")
+        for proceso in procesos:
+            print(f"  {proceso}")
+        return 0
     if args.probe or not args.pid:
         return 0
     try:
@@ -887,3 +1223,7 @@ def _cli(argv: list[str]) -> int:
         guardar_wav(args.wav, resultado)
         print(f"WAV: {args.wav}")
     return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - entrada manual
+    raise SystemExit(_cli(sys.argv[1:]))

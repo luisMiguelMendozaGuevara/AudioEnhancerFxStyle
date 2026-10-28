@@ -100,6 +100,11 @@ class AudioEngine:
         self.pa: Any = None
         self._pa_mod: Any = None  # módulo pyaudiowpatch (para paFloat32/paContinue)
         self.stream: Any = None  # captura (input)
+        # Captura por aplicación (Process Loopback): hilo propio cuando se usa
+        # en vez del stream de PortAudio sobre un cable virtual.
+        self._capture_thread: threading.Thread | None = None
+        self._capture_stop: threading.Event | None = None
+        self._capture_source: Any = None
         self.out_stream: Any = None  # salida (output)
         # Estado del ring
         self.ring: np.ndarray | None = None
@@ -434,6 +439,90 @@ class AudioEngine:
             self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
             self._dsp_thread.start()
 
+    def start_capture_process(self, pid: int, rate: int) -> None:
+        """Captura el audio de UN proceso (Process Loopback) en vez de un cable.
+
+        Mismo contrato que ``start_capture``: llena el ring de entrada crudo y
+        arranca el DSP. La diferencia es el origen: un hilo lee de
+        ``IAudioCaptureClient`` y llama a ``_put_raw``, exactamente igual que el
+        callback de PortAudio. Así el resto del pipeline (DSP, deriva, salida) no
+        cambia.
+
+        La tasa del endpoint del proceso la impone Windows: si no coincide con la
+        del motor se rechaza, porque meter 44,1 kHz en un ring que la salida lee
+        a 48 kHz desafinaría un 8 %.
+        """
+        from . import process_loopback as pl
+
+        self._pa_mod = _pa()
+        self._capture_channels = 2
+        fuente = pl.abrir_proceso(pid, tasa=rate, canales=2)
+        if fuente.tasa != rate:
+            fuente.cerrar()
+            raise RuntimeError(
+                f"El proceso entrega {fuente.tasa} Hz y el motor va a {rate} Hz; "
+                "elige la misma frecuencia de muestreo en Ajustes"
+            )
+        self._capture_source = fuente
+        self._capture_stop = threading.Event()
+        self._capture_thread = threading.Thread(target=self._capture_loop_process, name="captura-proceso", daemon=True)
+        self._capture_thread.start()
+        if self.use_dsp_process:
+            self._start_dsp_process()
+        else:
+            self._dsp_running = True
+            self._dsp_wakeup.clear()
+            self._dsp_thread = threading.Thread(target=self._dsp_loop, name="dsp", daemon=True)
+            self._dsp_thread.start()
+        logger.info("Captura por proceso: PID %d a %d Hz", pid, rate)
+
+    def _capture_loop_process(self) -> None:
+        """Hilo de captura por proceso: lee paquetes y los copia CRUDOS al ring."""
+        fuente = self._capture_source
+        parada = self._capture_stop
+        if fuente is None or parada is None:
+            return
+        try:
+            for bloque in fuente.bloques():
+                if parada.is_set():
+                    break
+                if bloque.size == 0:
+                    continue
+                if bloque.shape[1] > 2:
+                    bloque = _downmix_to_stereo(bloque)
+                self._put_raw(bloque)
+                with self.lock:
+                    self._stats["captured_frames"] += len(bloque)
+        except Exception:
+            # Que el proceso deje de sonar o cierre su sesión NO puede tumbar la
+            # app: se deja rastro y el motor lo ve por el ring sin datos.
+            logger.warning("La captura por proceso termino con error", exc_info=True)
+
+    def _stop_capture_process(self) -> None:
+        """Para el hilo de captura por proceso y libera sus interfaces COM."""
+        parada = self._capture_stop
+        if parada is not None:
+            parada.set()
+        hilo = self._capture_thread
+        if hilo is not None:
+            hilo.join(timeout=1.0)
+            if hilo.is_alive():
+                logger.warning("El hilo de captura por proceso no paro en 1 s")
+        self._capture_thread = None
+        self._capture_stop = None
+        fuente = self._capture_source
+        self._capture_source = None
+        if fuente is not None:
+            try:
+                fuente.cerrar()
+            except Exception:
+                logger.debug("Error al cerrar la captura por proceso", exc_info=True)
+
+    def capture_process_resumen(self) -> str:
+        """Resumen de la fuente por proceso (para diagnóstico)."""
+        fuente = self._capture_source
+        return fuente.resumen() if fuente is not None else ""
+
     def fill(self) -> int:
         """Frames disponibles en el ring (para pre-cargar la salida)."""
         with self.lock:
@@ -482,6 +571,7 @@ class AudioEngine:
         self._child_dsp_ms = {}
         self._child_loudness = {}
         self._local_meter.reset()
+        self._stop_capture_process()
         for s in (self.stream, self.out_stream):
             if s is not None:
                 try:
