@@ -223,4 +223,5 @@ Contributions are welcome. When opening an issue, please include:
 - Exact steps to reproduce the issue.
 - Full error messages without personal data.
 
-See `LICENSE` for terms of use.
+See `LICENSE` for terms of use, and `THIRD-PARTY-NOTICES.md` for the
+licenses of bundled third-party components (Qt/PySide6 is LGPLv3).

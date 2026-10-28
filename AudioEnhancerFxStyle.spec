@@ -16,7 +16,12 @@ a = Analysis(
     ['AudioEnhancer_FxStyle.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[
+        ('assets', 'assets'),
+        # Avisos de terceros: obligation de la LGPLv3 de Qt/PySide6.
+        ('THIRD-PARTY-NOTICES.md', '.'),
+        ('LICENSES', 'LICENSES'),
+    ],
     hiddenimports=['pyaudiowpatch', 'audio_enhancer.dsp_process'],
     hookspath=[],
     hooksconfig={},

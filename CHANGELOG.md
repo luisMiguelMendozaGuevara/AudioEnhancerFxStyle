@@ -4,6 +4,28 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.7.1] — 2026-10-28
+
+Cumplimiento de licencias de terceros. No cambia nada del audio ni de la
+interfaz: la app funciona igual que la 1.7.0.
+
+### Añadido — avisos de terceros y texto de la LGPLv3
+- `THIRD-PARTY-NOTICES.md`: Qt/PySide6 6.8.3 (LGPL-3.0-only, con la explicación
+  de cómo se cumple el requisito de reenlazado), PyAudioWPatch/PortAudio (MIT),
+  NumPy y SciPy (BSD-3), CPython (PSF). Se declara que no hay modificaciones de
+  Qt ni de PySide6.
+- `LICENSES/LGPL-3.0.txt`: texto completo de la GNU LGPL v3.0.
+- El instalador muestra los avisos antes de instalar (`LicenseFile`) y deja
+  ambos archivos en la carpeta de la app, para poder leerlos después.
+- El paquete (onedir y onefile) los incluye en su raíz.
+
+### Motivo
+La 1.7.0 se publicó sin el aviso de la LGPLv3 que exige distribuir Qt/PySide6. El
+modo de distribución principal (onedir) sí cumplía el requisito de reenlazado
+—los `Qt6*.dll` viajan como archivos separados y son reemplazables—, pero faltaba
+la parte documental. Detectado al revisar la incertidumbre nº5 de
+`docs/investigacion-2026-10.md`.
+
 ## [1.7.0] — 2026-10-26
 
 Instrumentación y medición normativa, más un cambio de fondo en la nivelación

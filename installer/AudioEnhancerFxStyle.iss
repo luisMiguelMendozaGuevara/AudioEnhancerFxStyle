@@ -10,7 +10,7 @@
 ; La version se toma de audio_enhancer/constants.py (APP_VERSION) por el
 ; workflow (ISCC /DAppVersion=...); este default es solo para builds locales.
 #ifndef AppVersion
-  #define AppVersion "1.7.0"
+  #define AppVersion "1.7.1"
 #endif
 
 #define AppName "Audio Enhancer FxStyle"
@@ -22,6 +22,8 @@
 AppId={{B7E4C2A1-9F3D-4E6B-8A21-5C7D9E0F1A2B}
 AppName={#AppName}
 AppVersion={#AppVersion}
+; Pagina de licencia: avisos de terceros (Qt/PySide6 es LGPLv3).
+LicenseFile=..\THIRD-PARTY-NOTICES.md
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
@@ -46,6 +48,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\AudioEnhancerFxStyle\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Avisos de terceros y texto de la LGPLv3 (Qt/PySide6). Van tambien en la
+; carpeta de la app para que se puedan leer despues de instalar.
+Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSES\LGPL-3.0.txt"; DestDir: "{app}\LICENSES"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
