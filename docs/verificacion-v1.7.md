@@ -307,3 +307,89 @@ preexistente era casi tautológico: 2 dB de margen).
 `full_enhancer` (antes los efectos iban a 0 y los exciters no se medían):
 **10,2 % del bloque**. Coste de los dos exciters activos: **+0,9 ms/bloque**
 (~4 % del presupuesto) en la máquina de desarrollo.
+
+---
+
+## 12. Interfaz de diagnóstico y PoC de captura por aplicación (2026-10-26)
+
+### 12.1 El panel de métricas del Ecualizador
+
+Las métricas del motor vivían en una sola línea de la barra inferior, donde se
+cortaban con cualquier nombre de dispositivo y no cabía la unidad de cada cifra.
+Ahora están en la página **Ecualizador**, en una rejilla 3×3 ordenada por tema:
+
+| columna | campos |
+|---|---|
+| cortes | underruns, huecos, deriva |
+| tiempos | latencia total, consigna del ring, DSP p99 |
+| nivel | LUFS, LRA, frecuencia de muestreo |
+
+Verificado con tests de widget (texto de cada campo, `--` cuando no hay medida o
+el valor es el centinela `-1000` de LUFS, vuelta a `--` al parar el motor) y, para
+el aspecto, con un render de la página a PNG.
+
+La barra inferior se queda solo con el estado. Los avisos son temporales (6 s) y
+después vuelven al estado: verificado con test (aviso → vuelve a "Activo") y con
+el caso contrario (un cambio de estado cancela el aviso pendiente y un timeout
+tardío no lo resucita).
+
+### 12.2 Bug de Inicio reportado por el usuario
+
+**Síntoma**: al cambiar el estado en Inicio aparecía "Detenido" aunque el audio
+estuviera activo.
+
+**Causa medida**: cambiar el tema (o el idioma) reconstruye las páginas; la nueva
+`HomePage` nacía con el literal `"Detenido"` y el setter de `AudioState.processing`
+**solo emite cuando el valor cambia**, así que no llegaba ninguna señal. Quedaba
+el par contradictorio: botón `Detener audio` + texto `Detenido`. Reproducido por
+script antes de tocar código (navegar no lo rompía; cambiar tema sí).
+
+**Arreglo**: `HomePage.set_processing_state(active)` público e idempotente,
+llamado al final del `build()` con el estado real; en `_rebuild_pages` una sola
+fuente de verdad (`running or state.processing`) para Inicio, la barra y la
+página Audio (esta última se quedaba en `--`).
+
+### 12.3 PoC: Process Loopback (captura por aplicación)
+
+Objetivo: dejar de depender de VB-CABLE capturando el audio de un proceso
+concreto. Implementado en `audio_enhancer/process_loopback.py`, con `ctypes`
+puro (sin `comtypes`).
+
+**Estructuras comprobadas contra la cabecera de Windows** (no contra el propio
+código): `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` 8 B (PID 0, modo 4),
+`AUDIOCLIENT_ACTIVATION_PARAMS` 12 B (tipo 0, PID 4, modo 8), `PROPVARIANT` con
+`VT_BLOB` 24 B (unión en 8) y `WAVEFORMATEX` 18 B empaquetado. Dos fallos cazados
+así: `guid_de_texto` interpretaba `Data1` en little-endian (GUID con los bytes
+invertidos) y la unión anidada aceptaba `params.TargetProcessId = 4242` sin
+escribir nada (ctypes permite crear atributos sueltos en silencio).
+
+**Hallazgo que bloqueaba la activación**: `ActivateAudioInterfaceAsync` devolvía
+`E_ILLEGAL_METHOD_CALL` (0x8000000E). No era el apartamento (`CoInitializeEx` MTA
+devolvía `S_OK`): instrumentando los callbacks se vio que Windows preguntaba por
+`IID_IAgileObject` ({94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90}) al handler de
+finalización. Al no implementarlo, COM intentaba marshalling entre apartamentos y
+la activación nunca llegaba a `ActivateCompleted`. Aceptarlo como marca
+free-threaded en `QueryInterface` lo resuelve.
+
+**Verificación real** (test marcado `slow`, se salta si no hay dispositivo): un
+proceso aparte reproduce un tono de 1 kHz a -20 dBFS de pico y se captura con
+Process Loopback.
+
+| magnitud | esperado | medido |
+|---|---|---|
+| frames (2,5 s @ 48 kHz) | 120 000 | 120 000 |
+| paquetes | — | 250 (0 silenciosos, 0 descartados) |
+| pico | 0,1000 (-20,00 dBFS) | **0,1000 (-20,00 dBFS)** |
+| frecuencia dominante | 1000 Hz | **1000,0 Hz** |
+| RMS | -23,01 dBFS (seno de pico 0,1) | **-23,07 dBFS** |
+
+**Lo que falta para que sustituya a VB-CABLE**: integrarlo en el motor como
+fuente de captura alternativa (selector de aplicación en la página Audio),
+capturar el árbol de procesos (navegadores), y probarlo con DRM y procesos
+elevados (Netflix/Spotify/Steam), que la investigación dejó como incógnita.
+
+### 12.4 Estado
+
+**560 tests** · ruff, format y mypy limpios · build 1.7.0 recompilado
+(onedir 12,7 MB + instalador 61,6 MB) y verificado en arranque real
+(`ring 48000 Hz, latencia 81.3 ms`).

@@ -70,6 +70,18 @@ que la app hace.
   ausencia de NaN con parámetros extremos, causalidad/retardo de grupo
   (**0,09 muestras** en neutro) y estabilidad con la cadena completa activa.
 
+### Añadido — interfaz: diagnóstico a la vista y barra honesta
+- La página **Ecualizador** lleva un panel con las métricas del motor en una
+  rejilla 3×3 (columna = cortes / tiempos / nivel): underruns, huecos, deriva,
+  latencia total, consigna del ring, DSP p99, LUFS, LRA y frecuencia de muestreo.
+  Antes iban en una sola línea de la barra inferior, donde se cortaban con rutas
+  de dispositivo largas. Los valores que indican problema (cortes > 0, p99 por
+  encima de la mitad del bloque) se pintan en color de aviso, y lo que no tiene
+  medida se muestra como `--`, nunca una cifra vieja.
+- La **barra inferior** queda solo con el estado (Activo / Inactivo). Los avisos
+  ("Diagnóstico guardado", "No se pudo iniciar…") son temporales: a los 6 s la
+  barra vuelve al estado, para no quedarse congelada con el último mensaje.
+
 ### Corregido (encontrado por las auditorías de esta iteración)
 - El gate relativo del integrado se aplicaba sobre todos los bloques y podía
   **reabrir** el gate absoluto; ahora los dos gates se acumulan (BS.1770-4 §2.4).
@@ -84,6 +96,22 @@ que la app hace.
   partir de 10 min) para no crecer con la duración de la sesión.
 - La UI protege el tick de métricas y el informe de diagnóstico: un fallo de
   instrumentación ya no puede congelar la barra ni dejar al usuario sin informe.
+
+- **Inicio decía "Detenido" con el audio activo** al cambiar de tema o de idioma:
+  la página se reconstruía con el texto fijo y el setter de `AudioState` solo
+  emite cuando el valor *cambia*, así que nadie la resincronizaba (quedaba el par
+  contradictorio botón "Detener audio" + texto "Detenido"). Ahora la página se
+  pinta desde el estado real al construirse y la reconstrucción usa una sola
+  fuente de verdad para Inicio, la barra y la página Audio.
+- La barra inferior repetía la ruta de audio dos veces (en el texto de estado y
+  en su propia etiqueta) y se quedaba con el último aviso para siempre.
+
+### En curso (PoC, no forma parte de la app todavía)
+- `audio_enhancer/process_loopback.py`: captura por aplicación con la **Process
+  Loopback API** de Windows, que eliminaría la dependencia de VB-CABLE. Verificado
+  capturando un tono de 1 kHz a -20 dBFS de un proceso aparte: pico 0,1000
+  (-20,00 dBFS exactos) y 1000,0 Hz. Todavía no está integrado en el motor ni en
+  la interfaz, así que no cambia nada de lo que el usuario ve.
 
 ## [1.6.1] — 2026-10-25
 
