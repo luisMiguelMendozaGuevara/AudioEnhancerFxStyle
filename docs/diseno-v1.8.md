@@ -62,8 +62,11 @@ contenido entre muestras: es donde más probable es que aparezca el problema.
   en la ruta del medidor, no en la del audio.
 - Ventana deslizante de pico con caída lenta (peak hold configurable, por
   defecto 1 s) más un "max since reset" que el usuario puede poner a cero.
-- Coste objetivo: **< 1,5 % del bloque** de 21,3 ms. Si no cabe, se baja a 4×
-  (que es el mínimo de la norma) y se documenta la diferencia medida.
+- Coste objetivo: **< 1,5 % del bloque** de 21,3 ms. **Medido y no cumplido**:
+  el suelo real es ~3,2 % (ver `docs/verificacion-v1.8.md` §A1); se aplicó el plan
+  B (bajar a 4×, el mínimo de la norma) y aun así no baja de 3 %, porque el coste
+  está en la llamada al filtro, no en la aritmética. Queda documentado y la
+  palanca, si molesta, es medir cada dos bloques.
 - **Sin cambios en el sonido**: con el medidor activo, la salida debe ser
   **bit-exacta** respecto de la 1.7. Es un test, no una promesa.
 
@@ -189,7 +192,8 @@ AutoEQ es MIT, pero las **mediciones crudas** que procesa vienen de terceros
 Cada paso termina en verde (tests + ruff + mypy) y con una medida anotada en
 `docs/verificacion-v1.8.md`:
 
-1. **A1 — medidor de true-peak** con su banco de señales. No toca el audio.
+1. ~~**A1 — medidor de true-peak** con su banco de señales~~ **HECHO**
+   (`audio_enhancer/true_peak.py`, 32 tests, error 0,000 dB; coste 3,2 %).
 2. **A4 — true-peak en la interfaz** (cuarta columna del panel).
 3. **B1 — medir si el de-esser hace falta**. Si no lo hace, se documenta y se
    salta el paso 4.
