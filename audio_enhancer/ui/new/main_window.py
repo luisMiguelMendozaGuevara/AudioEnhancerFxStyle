@@ -483,6 +483,7 @@ class NewMainWindow(QMainWindow):
         home.preset_selected.connect(self._on_preset_selected)
         home.ab_toggled.connect(self.toggle_ab)
         home.volume_edited.connect(self._on_volume_slider)
+        self._pages["equalizer"].true_peak_toggled.connect(self._on_true_peak_toggle)
         audio_page = self._pages["audio"]
         audio_page.input_selected.connect(self._route_guard)
         audio_page.output_selected.connect(self._on_output_device_selected)
@@ -1170,6 +1171,14 @@ class NewMainWindow(QMainWindow):
 
     # ---------- slots de señales del AudioController ----------
 
+    def _on_true_peak_toggle(self, activo: bool) -> None:
+        """Enciende/apaga la medición de pico real (no toca el audio)."""
+        self.engine.set_medir_true_peak(activo)
+        self._status_bar.set_status_text(
+            self._t("Medición de pico real: %s") % (self._t("activada") if activo else self._t("desactivada")),
+            OK if activo else WARN,
+        )
+
     def _on_audio_started(self, src_name: str, out_name: str, rate: int) -> None:
         """Captura abierta: reflejar el estado ACTIVO en la interfaz."""
         self._spectrum_worker.set_active(True)
@@ -1279,6 +1288,7 @@ class NewMainWindow(QMainWindow):
                     latencia = self.engine.latency_breakdown()
                     dsp = self.engine.timing_snapshot()
                     sonoridad = self.engine.loudness_snapshot()
+                    picos = self.engine.true_peak_snapshot()
                     tasa = max(int(self.engine.rate or 48000), 1)
                     self._pages["equalizer"].set_metrics(
                         underruns=s["output_underruns"],
@@ -1294,6 +1304,11 @@ class NewMainWindow(QMainWindow):
                         lufs=sonoridad.get("momentary_lufs", -1000.0),
                         lra=sonoridad.get("lra_lu", 0.0),
                         frecuencia=float(tasa),
+                        pico=picos.get("sample_peak_dbfs", -1000.0),
+                        true_peak=picos.get("true_peak_dbtp", -1000.0),
+                        # Reducción del limitador: el DSP la publica en dB y ya
+                        # viene con signo negativo (0 = sin actuar).
+                        reduccion=float(getattr(self.enhancer, "level_gr", 0.0) or 0.0),
                     )
                 else:
                     self._pages["equalizer"].clear_metrics()

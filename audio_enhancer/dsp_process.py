@@ -38,6 +38,7 @@ from .constants import CHUNK
 from .diagnostics import RollingStats
 from .loudness import LoudnessMeter
 from .rt_priority import mmcss_pro_audio
+from .true_peak import TruePeakMeter
 
 logger = logging.getLogger("audio_enhancer.dsp_process")
 
@@ -316,6 +317,7 @@ def child_main(
     spec_needed=None,
     child_stats=None,
     child_timing=None,
+    true_peak_flag=None,
 ) -> None:
     """Bucle del proceso hijo: crudo -> DSP -> procesado.
 
@@ -325,8 +327,10 @@ def child_main(
     principal, donde competiría con el callback de salida):
     - ``gr_value``: gain reduction del limitador.
     - ``telemetry``: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr] y, si la
-      malla compartida tiene 11 huecos, también [lufs_m, lufs_s, lufs_i, lra].
-      Sonoridad medida segun ITU-R BS.1770 / EBU R 128 sobre la salida.
+      malla compartida tiene 11 huecos, también [lufs_m, lufs_s, lufs_i, lra];
+      con 14, además [pico_muestra_dbfs, true_peak_dbtp, diferencia_db].
+    - ``true_peak_flag``: bandera (padre -> hijo) de si medir el pico real. Es
+      medición pura: apagarla NO cambia ni un bit del audio, solo ahorra CPU.
     - ``spectrum_buf``: 64 barras de espectro (dB), escritas por el hilo visual.
     - ``spec_needed``: bandera (padre -> hijo) de si la UI mira el espectro.
     - ``child_stats``: [raw_empty, blocks, backlog_sum, clipped] (diagnóstico).
@@ -340,6 +344,9 @@ def child_main(
     # no la entrada, para que sirva de referencia y de base al AGC futuro.
     # Coste medido: ~0.13 ms por bloque de 1024 (0.6 % del presupuesto).
     medidor = LoudnessMeter(sample_rate=enhancer.sample_rate or 48000, channels=2)
+    # Medidor de pico real (BS.1770-4 anexo 2). Se crea aparte del de sonoridad
+    # porque cuesta ~3 % del bloque y el usuario puede apagarlo.
+    medidor_tp = TruePeakMeter(sample_rate=enhancer.sample_rate or 48000, canales=2)
     # Pre-importar scipy AQUÍ, antes del primer bloque: si no, la primera
     # llamada a process() importa scipy.signal/ndimage DENTRO del bucle de
     # audio y retrasa el primer bloque varios segundos (huecos al iniciar).
@@ -410,6 +417,7 @@ def child_main(
                 tasa_actual = int(enhancer.sample_rate or 48000)
                 if medidor.sample_rate != tasa_actual:
                     medidor = LoudnessMeter(sample_rate=tasa_actual, channels=2)
+                    medidor_tp = TruePeakMeter(sample_rate=tasa_actual, canales=2)
             except Exception:
                 # Un snapshot de parámetros inválido no debe matar el audio: se
                 # avisa y se sigue con los parámetros anteriores.
@@ -458,6 +466,16 @@ def child_main(
                 if not meter_error_logged:
                     meter_error_logged = True
                     logger.exception("El medidor de sonoridad fallo (se desactiva el diagnostico LUFS)")
+            # Pico real: también DESPUÉS de publicar, y en su propio try.
+            medidas_tp = None
+            if true_peak_flag is None or true_peak_flag.value:
+                try:
+                    medidor_tp.process(y)
+                    medidas_tp = medidor_tp.snapshot()
+                except Exception:
+                    if not meter_error_logged:
+                        meter_error_logged = True
+                        logger.exception("El medidor de pico real fallo (se desactiva el true-peak)")
             if telemetry is not None:
                 with contextlib.suppress(Exception), telemetry.get_lock():
                     telemetry[0] = enhancer.level_rms
@@ -481,6 +499,16 @@ def child_main(
                         telemetry[8] = _finito(medidas["short_term_lufs"])
                         telemetry[9] = _finito(medidas["integrated_lufs"])
                         telemetry[10] = _finito(medidas["lra_lu"], defecto=0.0)
+                    if len(telemetry) >= 14:
+                        if medidas_tp is None:
+                            medidas_tp = {
+                                "sample_peak_dbfs": -1000.0,
+                                "true_peak_dbtp": -1000.0,
+                                "difference_db": 0.0,
+                            }
+                        telemetry[11] = _finito(medidas_tp["sample_peak_dbfs"])
+                        telemetry[12] = _finito(medidas_tp["true_peak_dbtp"])
+                        telemetry[13] = _finito(medidas_tp["difference_db"], defecto=0.0)
             if child_stats is not None:
                 with contextlib.suppress(Exception), child_stats.get_lock():
                     child_stats[0] = raw_empty

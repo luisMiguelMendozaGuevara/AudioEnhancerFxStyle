@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPen,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -340,12 +341,15 @@ class EQCurveWidget(QWidget):
 
 
 class MetricsPanel(QFrame):
+    #: El usuario enciende o apaga la medición de pico real (cuesta ~3 % de CPU).
+    medir_pico_real_changed = Signal(bool)
+
     """Métricas en vivo del motor, todas en una sola vista.
 
     Antes vivían en la barra inferior, donde solo cabía una línea de texto y se
     cortaba con nombres de dispositivo largos. Aquí se muestran como campos
     independientes, cada uno con su unidad, en una rejilla de tres por tres
-    ordenada por tema (columna = qué está pasando):
+    ordenada por tema (columna = cortes / tiempos / nivel / picos):
 
     - Underruns: veces que la salida se quedó sin datos (cortes).
     - Huecos: bloques en los que hubo que insertar silencio.
@@ -356,6 +360,10 @@ class MetricsPanel(QFrame):
     - LUFS: sonoridad momentánea de la salida (ITU-R BS.1770).
     - LRA: rango de sonoridad (lo que varía el nivel dentro del material).
     - Frecuencia: frecuencia de muestreo del ring (antes en la barra inferior).
+    - Pico: pico de muestra de la salida (dBFS).
+    - True peak: pico real entre muestras (dBTP, ITU-R BS.1770-4 anexo 2). La
+      diferencia con el pico de muestra es lo que un limitador de muestras no ve.
+    - Reducción: cuánto está bajando el limitador (dB).
 
     Las filas van: cortes, tiempos, nivel. Es de solo lectura: no toca el DSP,
     solo pinta números que ya calcula el motor.
@@ -367,16 +375,19 @@ class MetricsPanel(QFrame):
             ("underruns", "Underruns", "%d"),
             ("latencia", "Latencia", "%.0f ms"),
             ("lufs", "LUFS", "%.1f"),
+            ("pico", "Pico", "%.1f dBFS"),
         ),
         (
             ("huecos", "Huecos", "%d"),
             ("objetivo", "Objetivo", "%.0f ms"),
             ("lra", "LRA", "%.1f LU"),
+            ("true_peak", "True peak", "%+.1f dBTP"),
         ),
         (
             ("deriva", "Deriva", "%d fr"),
             ("dsp_p99", "DSP p99", "%.1f ms"),
             ("frecuencia", "Frecuencia", "%s"),
+            ("reduccion", "Reducción", "%.1f dB"),
         ),
     )
     _CAMPOS = tuple(campo for fila in _FILAS for campo in fila)
@@ -384,6 +395,8 @@ class MetricsPanel(QFrame):
     # Umbral de aviso del coste del DSP: la mitad del bloque de 21,3 ms. A partir
     # de ahí un pico de CPU empieza a acercarse a los 21,3 ms que dura el bloque.
     _DSP_P99_AVISO_MS = 10.66
+    #: Un pico real por encima de 0 dBTP recorta en el convertidor del altavoz.
+    _TRUE_PEAK_AVISO_DBTP = 0.0
 
     def __init__(self, t=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -414,8 +427,20 @@ class MetricsPanel(QFrame):
                 self._valores[clave] = valor
         # Las tres columnas se reparten el ancho del panel por igual (antes
         # quedaban amontonadas a la izquierda y sobraba medio panel vacío).
-        for columna in range(len(self._FILAS[0])):
+        for columna in range(4):
             grid.setColumnStretch(columna, 1)
+        # Interruptor de la medición: apagarla no cambia el audio, solo ahorra
+        # CPU. Se dice el coste para que la decisión sea informada.
+        self._medir_pico_real = QCheckBox(self._t("Medir pico real (~3 % CPU)"))
+        self._medir_pico_real.setChecked(True)
+        self._medir_pico_real.setToolTip(
+            self._t("Mide el pico entre muestras (ITU-R BS.1770-4). Solo diagnóstico: apagarlo no cambia el sonido.")
+        )
+        self._medir_pico_real.setStyleSheet(
+            f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; background: transparent;"
+        )
+        self._medir_pico_real.toggled.connect(self.medir_pico_real_changed)
+        grid.addWidget(self._medir_pico_real, len(self._FILAS) * 2, 0, 1, 2)
 
     def set_metrics(self, **valores: float | None) -> None:
         """Actualiza los campos indicados; ``None`` o no finito deja ``--``.
@@ -435,7 +460,7 @@ class MetricsPanel(QFrame):
             if not math.isfinite(valor):
                 etiqueta.setText(self._VACIO)
                 continue
-            if clave == "lufs" and not (-100.0 < valor < 10.0):
+            if clave in ("lufs", "pico", "true_peak") and not (-100.0 < valor < 30.0):
                 # -1000 = silencio o ventana incompleta (centinela del motor).
                 etiqueta.setText(self._VACIO)
                 continue
@@ -468,6 +493,8 @@ class MetricsPanel(QFrame):
             return valor > 0
         if clave == "dsp_p99":
             return valor > cls._DSP_P99_AVISO_MS
+        if clave == "true_peak":
+            return valor > cls._TRUE_PEAK_AVISO_DBTP
         return False
 
     @staticmethod
@@ -484,6 +511,16 @@ class MetricsPanel(QFrame):
             etiqueta.setText(self._VACIO)
             etiqueta.setStyleSheet(self._estilo(False))
 
+    def medir_pico_real_activo(self) -> bool:
+        """Estado del interruptor (para tests e informes)."""
+        return bool(self._medir_pico_real.isChecked())
+
+    def set_medir_pico_real(self, activo: bool) -> None:
+        """Cambia el interruptor sin re-emitir (sincronización programática)."""
+        self._medir_pico_real.blockSignals(True)
+        self._medir_pico_real.setChecked(bool(activo))
+        self._medir_pico_real.blockSignals(False)
+
     def text_of(self, clave: str) -> str:
         """Texto visible de un campo (para tests y para el informe)."""
         etiqueta = self._valores.get(clave)
@@ -495,6 +532,8 @@ class EqualizerPage(QWidget):
 
     band_count_selected = Signal(int)
     freq_selected = Signal(int, float)
+    #: El usuario apaga/enciende la medición de pico real (solo diagnóstico).
+    true_peak_toggled = Signal(bool)
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -545,6 +584,7 @@ class EqualizerPage(QWidget):
         # Métricas del motor: viven aquí (antes en la barra inferior, donde solo
         # cabía una línea y se cortaba con rutas de dispositivo largas).
         self._metrics = MetricsPanel(self._t)
+        self._metrics.medir_pico_real_changed.connect(self.true_peak_toggled)
         layout.addWidget(self._metrics)
 
         btn_row = QHBoxLayout()

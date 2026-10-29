@@ -344,3 +344,32 @@ def test_la_barra_se_traduce_al_estado_en_ingles(window):
         assert window._status_bar.estado_visible == "Inactive"
     finally:
         window._apply_language(anterior)
+
+
+def test_un_pico_real_por_encima_de_cero_avisa_en_el_panel(window):
+    """El panel marca en color de aviso un true-peak que recortaría el DAC."""
+    panel = window._pages["equalizer"]._metrics
+
+    panel.set_metrics(pico=-1.2, true_peak=0.4, reduccion=-0.5, latencia=81.0)
+
+    assert panel.text_of("pico") == "-1.2 dBFS"
+    assert panel.text_of("true_peak") == "+0.4 dBTP"
+    assert panel.text_of("reduccion") == "-0.5 dB"
+    assert panel._en_aviso("true_peak", 0.4) is True
+    assert panel._en_aviso("true_peak", -0.4) is False
+
+
+def test_el_interruptor_de_pico_real_apaga_la_medicion(window):
+    """Apagar la medición no toca el audio, pero deja de medir (y ahorra CPU)."""
+    panel = window._pages["equalizer"]._metrics
+    assert panel.medir_pico_real_activo() is True
+    assert window.engine.medir_true_peak is True
+
+    panel._medir_pico_real.setChecked(False)
+
+    assert window.engine.medir_true_peak is False
+    picos = window.engine.true_peak_snapshot()
+    assert picos["true_peak_dbtp"] == -1000.0
+
+    panel._medir_pico_real.setChecked(True)
+    assert window.engine.medir_true_peak is True

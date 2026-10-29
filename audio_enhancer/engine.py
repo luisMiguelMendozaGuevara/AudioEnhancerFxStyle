@@ -25,6 +25,7 @@ from .diagnostics import RollingStats
 from .diagnostics import latency_breakdown as _latency_breakdown
 from .loudness import LoudnessMeter
 from .rt_priority import AVRT_PRIORITY_HIGH, mmcss_pro_audio
+from .true_peak import TruePeakMeter
 
 logger = logging.getLogger("audio_enhancer.engine")
 
@@ -182,6 +183,11 @@ class AudioEngine:
         # Medidor de sonoridad local: solo se usa en el camino sin proceso hijo
         # (tests y AUDIO_ENHANCER_NO_DSP_PROCESS). En producción mide el hijo.
         self._local_meter = LoudnessMeter(sample_rate=SAMPLE_RATE, channels=2)
+        # Medidor de pico real: solo diagnóstico. `medir_true_peak` permite
+        # apagarlo (cuesta ~3 % del bloque) sin tocar el audio.
+        self._local_true_peak = TruePeakMeter(sample_rate=SAMPLE_RATE, canales=2)
+        self._child_true_peak: dict[str, float] = {}
+        self.medir_true_peak: bool = True
         # Registro MMCSS del hilo que alimenta la salida (se revierte al parar).
         self._pump_mmcss: Any = None
         # Evita inundar el log si el medidor de sonoridad falla en cada bloque.
@@ -292,6 +298,39 @@ class AudioEngine:
         salida["lra_lu"] = lra if math.isfinite(lra) else 0.0
         return salida
 
+    def set_medir_true_peak(self, activo: bool) -> None:
+        """Enciende o apaga la medición de pico real (no toca el audio).
+
+        El cambio llega al proceso hijo por la bandera compartida; apagarlo
+        devuelve el coste al camino de antes (~3 % del bloque menos).
+        """
+        self.medir_true_peak = bool(activo)
+        bandera = getattr(self, "_true_peak_flag", None)
+        if bandera is not None:
+            with contextlib.suppress(Exception):
+                bandera.value = 1 if self.medir_true_peak else 0
+        if not self.medir_true_peak:
+            self._local_true_peak.reset()
+            self._child_true_peak = {}
+
+    def true_peak_snapshot(self) -> dict[str, float]:
+        """Pico de muestra, pico real (dBTP) y su diferencia.
+
+        Mismo contrato en los dos caminos (hijo y local) y con ``-1000.0`` como
+        'sin medida', igual que ``loudness_snapshot``. Con la medición apagada
+        devuelve ``-1000.0`` en todo, que la UI muestra como ``--``.
+        """
+        if not self.medir_true_peak:
+            return {"sample_peak_dbfs": -1000.0, "true_peak_dbtp": -1000.0, "difference_db": 0.0}
+        datos = self._child_true_peak or self._local_true_peak.snapshot()
+        salida: dict[str, float] = {}
+        for clave in ("sample_peak_dbfs", "true_peak_dbtp"):
+            valor = float(datos.get(clave, -1000.0))
+            salida[clave] = valor if math.isfinite(valor) and valor > -100.0 else -1000.0
+        diferencia = float(datos.get("difference_db", 0.0) or 0.0)
+        salida["difference_db"] = diferencia if math.isfinite(diferencia) else 0.0
+        return salida
+
     def latency_breakdown(self) -> dict[str, float]:
         """Desglose de la latencia del pipeline en ms (diagnóstico de la UI).
 
@@ -328,6 +367,8 @@ class AudioEngine:
         # recalculan por fórmula, así que a 44,1 kHz no se mide con los de 48.
         if int(self._local_meter.sample_rate) != int(rate):
             self._local_meter = LoudnessMeter(sample_rate=int(rate), channels=2)
+        if int(self._local_true_peak.sample_rate) != int(rate):
+            self._local_true_peak = TruePeakMeter(sample_rate=int(rate), canales=2)
         self.ring = np.zeros((nframes, 2), dtype=np.float32)
         # Ring de ENTRADA crudo (captura -> hilo DSP): ~1 s de margen. Absorbe
         # los tirones del callback y los picos del DSP sin descartar audio.
@@ -570,7 +611,9 @@ class AudioEngine:
         # hijo.
         self._child_dsp_ms = {}
         self._child_loudness = {}
+        self._child_true_peak = {}
         self._local_meter.reset()
+        self._local_true_peak.reset()
         self._stop_capture_process()
         for s in (self.stream, self.out_stream):
             if s is not None:
@@ -813,9 +856,13 @@ class AudioEngine:
         # dañan el audio justo cuando el espectro está visible.
         # 11 huecos: [rms, peak, rms_l, rms_r, peak_l, peak_r, gr, lufs_m, lufs_s, lufs_i, lra].
         # Los cuatro últimos son sonoridad BS.1770 de la salida (medidor EBU).
-        self._telemetry = ctx.Array("f", 11)
+        # 11 huecos de niveles/sonoridad + 3 de pico real (11..13).
+        self._telemetry = ctx.Array("f", 14)
         self._spectrum_buf = ctx.Array("f", 64)
         self._spec_needed = ctx.Value("b", 0)
+        # Bandera (padre -> hijo): medir el pico real cuesta ~3 % del bloque y el
+        # usuario puede apagarlo desde la interfaz.
+        self._true_peak_flag = ctx.Value("b", 1 if self.medir_true_peak else 0)
         # Diagnóstico (Paso 0) del hijo: [raw_empty, blocks, backlog_sum,
         # clipped_samples]. "d" (double) para acumular sin desbordar.
         self._child_stats = ctx.Array("d", 4)
@@ -835,6 +882,7 @@ class AudioEngine:
                 self._spec_needed,
                 self._child_stats,
                 self._child_timing,
+                self._true_peak_flag,
             ),
             name="dsp-proc",
             daemon=True,
@@ -1023,6 +1071,12 @@ class AudioEngine:
             # leen DENTRO del lock: un Array('f') compartido no garantiza
             # lectura atómica de un float fuera de él. (Antes este bloque estaba
             # DUPLICADO fuera del lock, deshaciendo la garantía.)
+            if len(t) >= 14:
+                self._child_true_peak = {
+                    "sample_peak_dbfs": float(t[11]),
+                    "true_peak_dbtp": float(t[12]),
+                    "difference_db": float(t[13]),
+                }
             if len(t) >= 11:
                 self._child_loudness = {
                     "momentary_lufs": float(t[7]),
@@ -1135,6 +1189,13 @@ class AudioEngine:
             # Sonoridad de la salida, igual que en el proceso hijo, aislada.
             try:
                 self._local_meter.process(y)
+                if self.medir_true_peak:
+                    # Mismo contrato que en el hijo: medir NUNCA puede afectar
+                    # al audio, así que va en su propio try y después de poner.
+                    try:
+                        self._local_true_peak.process(y)
+                    except Exception:
+                        logger.debug("Fallo el medidor de pico real local", exc_info=True)
             except Exception:
                 if not self._meter_error_logged:
                     self._meter_error_logged = True

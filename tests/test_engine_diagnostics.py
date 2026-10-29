@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 import audio_enhancer.dsp_process as dsp_process_mod
+import audio_enhancer.engine as engine_mod
 from audio_enhancer.constants import CHUNK, RING_SECONDS, SAMPLE_RATE
 from audio_enhancer.engine import AudioEngine
 
@@ -462,3 +463,49 @@ def test_la_telemetria_se_lee_con_el_lock_tomado(engine):
     engine._sync_telemetry()
 
     assert engine.loudness_snapshot()["lra_lu"] == pytest.approx(3.0)
+
+
+def test_el_medidor_de_pico_real_no_cambia_ni_un_bit(engine, monkeypatch):
+    """Medir es pasivo: la salida con y sin medidor tiene que ser idéntica.
+
+    Es la condición que hace aceptable un medidor que cuesta ~3 % del bloque.
+    Se compara byte a byte el bloque de salida del camino local (sin hijo).
+    """
+    from audio_enhancer.true_peak import SIN_MEDIDA
+
+    pa_mod = SimpleNamespace(paFloat32=0x1002, paContinue=0)
+    monkeypatch.setattr(engine_mod, "_pa", lambda: pa_mod)
+    x = np.random.default_rng(11).normal(0, 0.3, (1024, 2)).astype(np.float32)
+
+    salidas = {}
+    for activo in (True, False):
+        eng = engine_mod.AudioEngine(SimpleNamespace(process=lambda b: np.asarray(b, dtype=np.float32)))
+        eng.configure_ring(48000, drift_target_ms=60)
+        eng.set_medir_true_peak(activo)
+        assert eng.medir_true_peak is activo
+        eng._put_raw(x)
+        salidas[activo] = eng._read(1024).tobytes()
+        eng.stop()
+
+    assert salidas[True] == salidas[False], "el medidor alteró el audio"
+
+    # Con la medición apagada el snapshot no inventa cifras.
+    apagado = engine_mod.AudioEngine(SimpleNamespace(process=lambda b: b))
+    apagado.configure_ring(48000, drift_target_ms=60)
+    apagado.set_medir_true_peak(False)
+    picos = apagado.true_peak_snapshot()
+    apagado.stop()
+    assert picos == {"sample_peak_dbfs": SIN_MEDIDA, "true_peak_dbtp": SIN_MEDIDA, "difference_db": 0.0}
+
+
+def test_la_telemetria_del_hijo_trae_el_pico_real(engine):
+    """Con 14 huecos, el hijo publica pico de muestra, pico real y diferencia."""
+    engine.configure_ring(48000)
+    engine._telemetry = _FakeSharedArray([0.0] * 11 + [-3.0, 0.12, 3.12])
+
+    engine._sync_telemetry()
+
+    picos = engine.true_peak_snapshot()
+    assert picos["sample_peak_dbfs"] == pytest.approx(-3.0)
+    assert picos["true_peak_dbtp"] == pytest.approx(0.12)
+    assert picos["difference_db"] == pytest.approx(3.12)

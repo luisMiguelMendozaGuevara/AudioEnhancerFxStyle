@@ -97,9 +97,40 @@ tiene un punto ciego real de más de 1 dB en contenido cerca de Nyquist. El erro
 del camino con true-peak es de 0,01 dB, así que el filtro 4× del limitador no se
 queda corto frente al del medidor.
 
-### Estado
+### Estado (A1)
 
-Medidor terminado y probado; **todavía no está conectado al motor**, así que la
-salida de audio es idéntica a la de la 1.7.1 (no hay nada que pueda cambiarla).
+Medidor terminado y probado. Conectado al motor en A4.
 
-**596 tests** en total, ruff/format/mypy limpios.
+## A4 — Conectado al motor y en la interfaz (cerrado)
+
+- **Motor**: el medidor mide la **salida** en los dos caminos, en su propio
+  `try` y **después** de publicar el bloque (la misma regla que el medidor de
+  sonoridad: un fallo del medidor no puede silenciar el audio). En el proceso
+  hijo los valores viajan por la memoria compartida como huecos 11..13 de la
+  telemetría (`pico`, `true_peak`, `diferencia`); en el camino local se miden en
+  el hilo de DSP. Contrato único: `engine.true_peak_snapshot()` con `-1000.0`
+  como "sin medida".
+- **Interruptor**: casilla "Medir pico real (~3 % CPU)" en el panel del
+  Ecualizador. Apagarla **no cambia el audio** (solo deja de medir y ahorra el
+  coste); la bandera viaja al proceso hijo por memoria compartida.
+- **Interfaz**: cuarta columna del panel — `Pico` (dBFS), `True peak` (dBTP) y
+  `Reducción` (dB del limitador). El true peak se pinta en color de aviso cuando
+  pasa de 0 dBTP, que es cuando el convertidor del altavoz recorta.
+
+### Verificación
+
+| criterio | resultado |
+|---|---|
+| **bit-exactitud**: salida con y sin medidor | **idéntica byte a byte** (test) |
+| medición apagada | `true_peak_snapshot()` devuelve `-1000.0` → la UI muestra `--` |
+| telemetría del hijo (14 huecos) | pico de muestra, pico real y diferencia llegan al padre |
+| interruptor | apaga y enciende la medición del motor, y no toca el audio |
+| aviso visual | `+0,4 dBTP` se pinta en aviso; `−0,4 dBTP` no |
+
+**600 tests** en total, ruff/format/mypy limpios.
+
+### Coste real en la app
+
+El medidor añade 0,69 ms por bloque de 1024 frames, el 3,2 % del bloque. La
+telemetría del motor en marcha lo confirma con `dsp p99` dentro de lo que ya
+había: no aparece ningún pico nuevo atribuible al medidor.
