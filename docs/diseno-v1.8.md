@@ -70,12 +70,23 @@ contenido entre muestras: es donde más probable es que aparezca el problema.
 - **Sin cambios en el sonido**: con el medidor activo, la salida debe ser
   **bit-exacta** respecto de la 1.7. Es un test, no una promesa.
 
-**Fase A2 — techo por true-peak en el limitador (opt-in, apagado por defecto).**
-- El limitador actual pasa a mirar el pico real con lookahead de 1 ms (48
-  muestras) en vez del pico de muestra, y el techo se expresa en dBTP
-  (por defecto −1,0 dBTP).
-- Motivo de que sea opt-in: cambia el sonido (más reducción de ganancia en
-  material ya caliente). Quien no lo active no debe notar nada.
+**Fase A2 — techo por true-peak en el limitador: YA EXISTE.**
+
+Corrección al redactar este diseño: el limitador **ya** mide el pico real cuando
+la casilla "True peak" de la página Efectos está activa (viene activada), con
+sobremuestreo 4× y look-ahead de 3 ms (`dsp.py`, `_true_peak_oversample`). No hay
+que añadirlo, hay que **verificarlo** — y el medidor de A1 es justo la
+herramienta que faltaba para hacerlo.
+
+Verificado (ver `docs/verificacion-v1.8.md` §A1.5): con un seno de 12 kHz que
+rebasa el techo (+1,21 dBTP real pero solo −1,80 dBFS de muestra), el limitador
+con "True peak" **lo deja en −0,46 dBTP** (el techo), y sin esa casilla **pasa
+tal cual a +1,22 dBTP**: 1,2 dB de recorte en el convertidor. El limitador de
+muestras no interviene porque nunca ve ese pico. La casilla no es cosmética.
+
+Queda pendiente para A2 solo el ajuste fino: elegir el techo explícito en dBTP y
+comprobar que el filtro 4× del limitador (Kaiser 5) no se queda corto frente al
+del medidor (Kaiser 8).
 
 ### A.4 Dónde se ve
 

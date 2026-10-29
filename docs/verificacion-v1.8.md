@@ -78,6 +78,25 @@ el error a 20 kHz de 0,135 dB a 0,001 dB.
 (A4) molesta, la palanca es medir cada dos bloques y sumar los dos, no bajar la
 calidad del filtro.
 
+### A1.5 — El limitador que ya existe, medido con el medidor nuevo
+
+La app ya traía limitador por true-peak (casilla "True peak" en Efectos, activa
+por defecto). El medidor permite por fin comprobar si cumple. Señal de prueba:
+seno de 12 kHz con fase de 45° y amplitud 1,15, que tiene **pico de muestra
+−1,80 dBFS pero pico real +1,21 dBTP**.
+
+| configuración | pico de muestra | pico real | veredicto |
+|---|---|---|---|
+| entrada | −1,80 dBFS | **+1,21 dBTP** | 1,2 dB por encima del techo |
+| limitador apagado | −1,77 dBFS | +1,22 dBTP | pasa tal cual |
+| limitador encendido, "True peak" **desactivado** | −1,77 dBFS | **+1,22 dBTP** | **no hace nada**: el pico de muestra está por debajo del umbral y nunca lo ve |
+| limitador encendido, "True peak" **activado** | −3,47 dBFS | **−0,46 dBTP** | ✅ lo deja en el techo (−0,45) |
+
+Conclusión: la casilla funciona y no es cosmética, y el limitador de muestras
+tiene un punto ciego real de más de 1 dB en contenido cerca de Nyquist. El error
+del camino con true-peak es de 0,01 dB, así que el filtro 4× del limitador no se
+queda corto frente al del medidor.
+
 ### Estado
 
 Medidor terminado y probado; **todavía no está conectado al motor**, así que la
