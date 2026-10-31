@@ -102,7 +102,7 @@ La rejilla pasa a 4×3 con la misma lógica: columna = qué está pasando.
 
 ---
 
-## B. De-esser tras Clarity
+## B. De-esser tras Clarity — **CERRADO: no hace falta** (ver §B1 de la verificación)
 
 ### B.1 El problema: hay que medirlo antes de escribirlo
 
@@ -206,9 +206,10 @@ Cada paso termina en verde (tests + ruff + mypy) y con una medida anotada en
 1. ~~**A1 — medidor de true-peak** con su banco de señales~~ **HECHO**
    (`audio_enhancer/true_peak.py`, 32 tests, error 0,000 dB; coste 3,2 %).
 2. **A4 — true-peak en la interfaz** (cuarta columna del panel).
-3. **B1 — medir si el de-esser hace falta**. Si no lo hace, se documenta y se
-   salta el paso 4.
-4. **B2 — de-esser**, solo si B1 lo justifica.
+3. ~~**B1 — medir si el de-esser hace falta**~~ **HECHO: no hace falta**
+   (`benchmarks/medir_sibilancia.py`: Clarity sube la banda 12-18 kHz +18,7 dB y
+   deja la de la sibilante en −0,04 dB; el preset de fábrica la BAJA 2,87 dB).
+4. ~~**B2 — de-esser**~~ **NO SE HACE**: B1 lo descartó con número.
 5. **A2 — limitador por true-peak** (opt-in, apagado por defecto).
 6. **C — importador AutoEQ**, con previsualización.
 

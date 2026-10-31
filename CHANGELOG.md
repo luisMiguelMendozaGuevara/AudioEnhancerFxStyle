@@ -31,7 +31,13 @@ funciones que la 1.7.1 no tiene.
   muestras no interviene porque nunca ve ese pico: el punto ciego es de más de
   1 dB.
 
-### Descartado tras medir
+### Descartado tras medir (con número)
+- **De-esser**: el diseño de la 1.8 lo condicionaba a demostrar el problema. Medido
+  con `benchmarks/medir_sibilancia.py`: Clarity genera armónicos **por encima** de
+  la banda sibilante (+18,7 dB en 12-18 kHz) pero deja esa banda igual (−0,04 dB),
+  y el preset de fábrica incluso baja la relación sibilante/cuerpo 2,87 dB. Con los
+  controles de sensibilidad (+4,3 y +6,8 dB al subir agudos) la medida es fiable.
+  **No se implementa**: no habría nada que arreglar.
 - Medir de dos en dos bloques para ahorrar CPU: el ahorro real es del **11-14 %**
   (el coste es por muestra, no por llamada), no el 44 % que se supuso. No
   compensa el código extra; queda un test que lo vigila.

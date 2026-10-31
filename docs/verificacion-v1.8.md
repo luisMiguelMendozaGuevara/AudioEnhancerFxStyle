@@ -138,3 +138,50 @@ Medidor terminado y probado. Conectado al motor en A4.
 El medidor añade 0,69 ms por bloque de 1024 frames, el 3,2 % del bloque. La
 telemetría del motor en marcha lo confirma con `dsp p99` dentro de lo que ya
 había: no aparece ningún pico nuevo atribuible al medidor.
+
+## B1 — ¿Hace falta un de-esser? (cerrado: NO)
+
+Herramienta: `benchmarks/medir_sibilancia.py` (reproducible). Señal: tren de
+sibilantes (ruido 6-9 kHz, 120 ms cada 400 ms, −12 dBFS) sobre un cuerpo tonal
+de 250 Hz, pasado por la cadena real.
+
+Se mide la energía de la banda 6-9 kHz **respecto al cuerpo** (no en absoluto:
+la nivelación cambia el volumen y con él todos los niveles).
+
+| configuración | sibilante/cuerpo | diferencia vs neutro |
+|---|---|---|
+neutro | +1,68 dB | — |
+**CONTROL: agudos +6 dB** | +6,02 dB | **+4,34 dB** |
+**CONTROL: EQ +6 dB en 8k/12k** | +8,48 dB | **+6,80 dB** |
+solo Clarity (`fidelity=4`) | +1,64 dB | **−0,04 dB** |
+solo Bass exciter (`bass=3`) | +1,60 dB | **−0,09 dB** |
+preset de fábrica "Recomendado (altavoces)" | −1,18 dB | **−2,87 dB** |
+
+Los dos controles son la parte importante: **la herramienta sí detecta** un
+aumento de agudos (+4,3 y +6,8 dB). Sin ellos, un resultado de −0,04 dB no
+significaría nada.
+
+### Qué hace Clarity de verdad (y por qué no es el problema)
+
+| configuración | armónicos 12-18 kHz vs neutro |
+|---|---|
+solo Clarity | **+18,73 dB** |
+preset de fábrica | **+24,78 dB** |
+Bass exciter | 0,00 dB |
+
+Clarity funciona: rectifica los agudos y genera armónicos **por encima** de la
+banda original. Lo que **no** hace es endurecer la banda de la sibilante
+(−0,04 dB), que es justo donde actuaría un de-esser. Confundir "no toca la banda"
+con "no hace nada" habría llevado a implementar un de-esser que no arregla nada.
+
+### Veredicto
+
+El criterio estaba fijado de antemano: **< 1 dB → no entra**. Medido −0,04 dB
+(Clarity) y −2,87 dB (preset completo, donde el realce del cuerpo gana más que el
+de los agudos). **El de-esser no entra en la 1.8.** Punto cerrado con número, no
+con opinión, y con la herramienta lista para repetir la medida si algún día
+cambia Clarity, el EQ de fábrica o se sube el realce de agudos.
+
+Nota de lectura: la sibilante **absoluta** sube +6,24 dB con el preset, pero eso
+es el `dynamic_boost` y la nivelación subiendo todo el material, no un
+endurecimiento del timbre. Por eso la medida se hace contra el cuerpo.
