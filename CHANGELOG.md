@@ -4,11 +4,11 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
-## [1.8.0] — en curso (no publicar todavía)
+## [1.8.0] — 2026-10-31
 
-Diagnóstico de picos y limpieza de la 1.8. La versión sube para que un binario
-compilado desde `main` no se confunda con la 1.7.1 publicada: `main` ya tiene
-funciones que la 1.7.1 no tiene.
+Diagnóstico de picos, techo en dBTP y perfiles de AutoEQ. Todo lo que entra aquí
+se decidió **midiendo antes de escribir**: lo que no pasó la medición, no entró
+(ver `docs/verificacion-v1.8.md`).
 
 ### Añadido — pico real (true peak) medido y visible
 - Medidor de **pico entre muestras** según ITU-R BS.1770-4 anexo 2: sobremuestreo
