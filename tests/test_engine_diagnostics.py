@@ -495,7 +495,12 @@ def test_el_medidor_de_pico_real_no_cambia_ni_un_bit(engine, monkeypatch):
     apagado.set_medir_true_peak(False)
     picos = apagado.true_peak_snapshot()
     apagado.stop()
-    assert picos == {"sample_peak_dbfs": SIN_MEDIDA, "true_peak_dbtp": SIN_MEDIDA, "difference_db": 0.0}
+    assert picos == {
+        "sample_peak_dbfs": SIN_MEDIDA,
+        "true_peak_dbtp": SIN_MEDIDA,
+        "hold_dbtp": SIN_MEDIDA,
+        "difference_db": 0.0,
+    }
 
 
 def test_la_telemetria_del_hijo_trae_el_pico_real(engine):

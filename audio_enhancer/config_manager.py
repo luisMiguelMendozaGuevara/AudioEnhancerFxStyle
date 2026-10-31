@@ -304,6 +304,8 @@ class ConfigManager:
             "limiter": self.as_bool(raw.get("limiter"), True),
             "compressor": self.as_bool(raw.get("compressor"), True),
             "true_peak": self.as_bool(raw.get("true_peak"), True),
+            # Medición de pico real (solo diagnóstico; no afecta al audio).
+            "medir_true_peak": self.as_bool(raw.get("medir_true_peak"), True),
             "safety_ceiling": self.as_bool(raw.get("safety_ceiling"), True),
             "final_clip": self.as_bool(raw.get("final_clip"), True),
             "crossfeed": self.as_bool(raw.get("crossfeed"), False),

@@ -4,6 +4,38 @@ Todas las versiones notables de **Audio Enhancer FxStyle**.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y versionado [SemVer](https://semver.org/lang/es/).
 
+## [1.8.0] — en curso (no publicar todavía)
+
+Diagnóstico de picos y limpieza de la 1.8. La versión sube para que un binario
+compilado desde `main` no se confunda con la 1.7.1 publicada: `main` ya tiene
+funciones que la 1.7.1 no tiene.
+
+### Añadido — pico real (true peak) medido y visible
+- Medidor de **pico entre muestras** según ITU-R BS.1770-4 anexo 2: sobremuestreo
+  4× con FIR polifásico (Kaiser β=8, 32 taps por fase). Exactitud medida contra la
+  verdad analítica: **0,000 dB** en el caso de referencia (`fs/4` a 45°, donde el
+  pico de muestra es −3,01 dBFS y el real 0 dBTP).
+- El panel del Ecualizador pasa a rejilla 3×5 y muestra **Pico** (dBFS),
+  **True peak** (dBTP), **Máximo** desde el último reinicio, **Entre muestras**
+  (la diferencia, que es justo lo que un limitador de muestras no ve) y
+  **Reducción** del limitador. El true peak se pinta en aviso cuando pasa de
+  0 dBTP, que es cuando el convertidor del altavoz recorta.
+- Botón **Reiniciar máximo** y casilla **Medir pico real (~3 % CPU)**, con la
+  preferencia guardada en la configuración. Apagar la medición no cambia el
+  audio: la salida con y sin medidor es **idéntica byte a byte** (test).
+
+### Verificado — el limitador por true-peak que ya existía
+- Con un seno de 12 kHz que rebasa el techo (−1,80 dBFS de muestra, **+1,21
+  dBTP** real): con la casilla "True peak" activa la salida queda en **−0,46
+  dBTP** (el techo); desactivada pasa tal cual a **+1,22 dBTP**. El limitador de
+  muestras no interviene porque nunca ve ese pico: el punto ciego es de más de
+  1 dB.
+
+### Descartado tras medir
+- Medir de dos en dos bloques para ahorrar CPU: el ahorro real es del **11-14 %**
+  (el coste es por muestra, no por llamada), no el 44 % que se supuso. No
+  compensa el código extra; queda un test que lo vigila.
+
 ## [1.7.1] — 2026-10-28
 
 Cumplimiento de licencias de terceros. No cambia nada del audio ni de la

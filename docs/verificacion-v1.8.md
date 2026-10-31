@@ -74,9 +74,13 @@ salida, no la aritmética (se probó con `float32` y con búfer preasignado: 0,6
 0,84 ms, sin mejora). Se elige 4×/32 porque con el mismo coste que 4×/24 reduce
 el error a 20 kHz de 0,135 dB a 0,001 dB.
 
-**Decisión**: el medidor entra con 3,2 % documentado. Si en la integración
-(A4) molesta, la palanca es medir cada dos bloques y sumar los dos, no bajar la
-calidad del filtro.
+**Decisión**: el medidor entra con 3,2 % documentado.
+
+**La palanca de medir cada dos bloques se probó y se descartó**: ahorra solo el
+11-14 % (2,11 % → 1,87 % del bloque), no la mitad, porque el coste es por muestra
+procesada y no por llamada. La medida sale idéntica (< 0,001 dB), así que no era
+un problema de exactitud sino de que no compensa. Hay un test que vigila que el
+ahorro siga siendo marginal; si algún día crece, el test avisa.
 
 ### A1.5 — El limitador que ya existe, medido con el medidor nuevo
 

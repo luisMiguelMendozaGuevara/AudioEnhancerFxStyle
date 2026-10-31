@@ -484,6 +484,7 @@ class NewMainWindow(QMainWindow):
         home.ab_toggled.connect(self.toggle_ab)
         home.volume_edited.connect(self._on_volume_slider)
         self._pages["equalizer"].true_peak_toggled.connect(self._on_true_peak_toggle)
+        self._pages["equalizer"].reiniciar_picos.connect(self._on_reiniciar_picos)
         audio_page = self._pages["audio"]
         audio_page.input_selected.connect(self._route_guard)
         audio_page.output_selected.connect(self._on_output_device_selected)
@@ -1171,9 +1172,16 @@ class NewMainWindow(QMainWindow):
 
     # ---------- slots de señales del AudioController ----------
 
+    def _on_reiniciar_picos(self) -> None:
+        """Pone a cero el pico máximo medido (no toca el audio)."""
+        self.engine.reiniciar_pico_maximo()
+        self._status_bar.set_status_text(self._t("Pico máximo reiniciado"), OK)
+
     def _on_true_peak_toggle(self, activo: bool) -> None:
         """Enciende/apaga la medición de pico real (no toca el audio)."""
         self.engine.set_medir_true_peak(activo)
+        # Se recuerda: si no, el usuario lo apaga y al reiniciar reaparece solo.
+        self._save_config()
         self._status_bar.set_status_text(
             self._t("Medición de pico real: %s") % (self._t("activada") if activo else self._t("desactivada")),
             OK if activo else WARN,
@@ -1306,6 +1314,8 @@ class NewMainWindow(QMainWindow):
                         frecuencia=float(tasa),
                         pico=picos.get("sample_peak_dbfs", -1000.0),
                         true_peak=picos.get("true_peak_dbtp", -1000.0),
+                        pico_max=picos.get("hold_dbtp", -1000.0),
+                        diferencia=picos.get("difference_db", 0.0),
                         # Reducción del limitador: el DSP la publica en dB y ya
                         # viene con signo negativo (0 = sin actuar).
                         reduccion=float(getattr(self.enhancer, "level_gr", 0.0) or 0.0),
@@ -1378,6 +1388,9 @@ class NewMainWindow(QMainWindow):
         self._keep_out = cfg["output"]
         self.custom_presets = dict(cfg["custom_presets"])
         self.device_presets = dict(cfg.get("device_presets") or {})
+        # Preferencia de medición de pico real (solo diagnóstico).
+        self.engine.set_medir_true_peak(bool(cfg.get("medir_true_peak", True)))
+        self._pages["equalizer"].set_medir_pico_real(self.engine.medir_true_peak)
         self.enhancer.apply_params(
             EnhancerParams(
                 volume=cfg["volume"],
@@ -1443,6 +1456,7 @@ class NewMainWindow(QMainWindow):
             "limiter": bool(self.enhancer.limiter),
             "compressor": bool(self.enhancer.compressor),
             "true_peak": bool(self.enhancer.true_peak),
+            "medir_true_peak": bool(self.engine.medir_true_peak),
             "safety_ceiling": bool(self.enhancer.safety_ceiling_enabled),
             "final_clip": bool(self.enhancer.final_clip_enabled),
             "crossfeed": bool(self.enhancer.crossfeed),

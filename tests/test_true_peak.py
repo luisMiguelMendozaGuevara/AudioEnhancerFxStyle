@@ -236,3 +236,52 @@ class TestCoste:
 def test_factor_por_defecto_es_el_minimo_de_la_norma():
     """BS.1770-4 anexo 2 exige al menos 4×; usar menos invalidaría la medida."""
     assert FACTOR_SOBREMUESTREO >= 4
+
+
+class TestCadenciaDeMedicion:
+    """¿Compensa medir varios bloques de golpe para ahorrar CPU?
+
+    Se comprobó porque la sospecha razonable era que sí. La medida dice que no:
+    el coste es por muestra procesada, no por llamada, así que juntar bloques
+    ahorra ~11 % y complica el código. El test fija las dos verdades: la medida
+    es idéntica y el ahorro es pequeño.
+    """
+
+    def _medir(self, señal: np.ndarray, cada: int) -> dict:
+        medidor = TruePeakMeter(sample_rate=FS)
+        pendientes = []
+        for inicio in range(0, len(señal), 1024):
+            pendientes.append(señal[inicio : inicio + 1024])
+            if len(pendientes) == cada:
+                medidor.process(np.concatenate(pendientes))
+                pendientes = []
+        if pendientes:
+            medidor.process(np.concatenate(pendientes))
+        return medidor.snapshot()
+
+    def test_medir_de_dos_en_dos_da_el_mismo_numero(self):
+        señal = np.repeat(_seno(12000.0, 45.0, segundos=2.0)[:, None], 2, axis=1)
+
+        uno = self._medir(señal, 1)
+        dos = self._medir(señal, 2)
+        cuatro = self._medir(señal, 4)
+
+        assert abs(dos["true_peak_dbtp"] - uno["true_peak_dbtp"]) < 0.001
+        assert abs(cuatro["true_peak_dbtp"] - uno["true_peak_dbtp"]) < 0.001
+
+    def test_el_ahorro_de_juntar_bloques_es_marginal(self):
+        """Si algún día el ahorro fuera grande, este test avisaría para revisarlo."""
+        señal = np.repeat(_seno(12000.0, 45.0, segundos=2.0)[:, None], 2, axis=1)
+
+        def coste(cada: int) -> float:
+            inicio = time.perf_counter()
+            self._medir(señal, cada)
+            return time.perf_counter() - inicio
+
+        coste(1)  # calentar
+        uno = min(coste(1) for _ in range(3))
+        dos = min(coste(2) for _ in range(3))
+        ahorro = (uno - dos) / uno * 100
+
+        print(f"\n  ahorro al medir de dos en dos: {ahorro:.1f} %")
+        assert ahorro < 40, f"el ahorro ({ahorro:.0f} %) justificaría cambiar la cadencia"

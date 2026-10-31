@@ -10,7 +10,7 @@
 ; La version se toma de audio_enhancer/constants.py (APP_VERSION) por el
 ; workflow (ISCC /DAppVersion=...); este default es solo para builds locales.
 #ifndef AppVersion
-  #define AppVersion "1.7.1"
+  #define AppVersion "1.8.0"
 #endif
 
 #define AppName "Audio Enhancer FxStyle"

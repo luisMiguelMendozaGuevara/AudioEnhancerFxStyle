@@ -298,6 +298,15 @@ class AudioEngine:
         salida["lra_lu"] = lra if math.isfinite(lra) else 0.0
         return salida
 
+    def reiniciar_pico_maximo(self) -> None:
+        """Pone a cero el máximo de pico real (botón del panel).
+
+        En el proceso hijo la telemetría se reescribe cada bloque, así que basta
+        con descartar lo publicado; en el camino local se reinicia el medidor.
+        """
+        self._child_true_peak = {}
+        self._local_true_peak.reiniciar_maximo()
+
     def set_medir_true_peak(self, activo: bool) -> None:
         """Enciende o apaga la medición de pico real (no toca el audio).
 
@@ -321,10 +330,15 @@ class AudioEngine:
         devuelve ``-1000.0`` en todo, que la UI muestra como ``--``.
         """
         if not self.medir_true_peak:
-            return {"sample_peak_dbfs": -1000.0, "true_peak_dbtp": -1000.0, "difference_db": 0.0}
+            return {
+                "sample_peak_dbfs": -1000.0,
+                "true_peak_dbtp": -1000.0,
+                "hold_dbtp": -1000.0,
+                "difference_db": 0.0,
+            }
         datos = self._child_true_peak or self._local_true_peak.snapshot()
         salida: dict[str, float] = {}
-        for clave in ("sample_peak_dbfs", "true_peak_dbtp"):
+        for clave in ("sample_peak_dbfs", "true_peak_dbtp", "hold_dbtp"):
             valor = float(datos.get(clave, -1000.0))
             salida[clave] = valor if math.isfinite(valor) and valor > -100.0 else -1000.0
         diferencia = float(datos.get("difference_db", 0.0) or 0.0)

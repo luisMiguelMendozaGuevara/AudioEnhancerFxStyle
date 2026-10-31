@@ -343,6 +343,8 @@ class EQCurveWidget(QWidget):
 class MetricsPanel(QFrame):
     #: El usuario enciende o apaga la medición de pico real (cuesta ~3 % de CPU).
     medir_pico_real_changed = Signal(bool)
+    #: El usuario pide poner a cero el pico máximo medido.
+    reiniciar_maximo_clicked = Signal()
 
     """Métricas en vivo del motor, todas en una sola vista.
 
@@ -373,21 +375,23 @@ class MetricsPanel(QFrame):
     _FILAS = (
         (
             ("underruns", "Underruns", "%d"),
+            ("huecos", "Huecos", "%d"),
             ("latencia", "Latencia", "%.0f ms"),
             ("lufs", "LUFS", "%.1f"),
             ("pico", "Pico", "%.1f dBFS"),
         ),
         (
-            ("huecos", "Huecos", "%d"),
+            ("deriva", "Deriva", "%d fr"),
             ("objetivo", "Objetivo", "%.0f ms"),
+            ("dsp_p99", "DSP p99", "%.1f ms"),
             ("lra", "LRA", "%.1f LU"),
             ("true_peak", "True peak", "%+.1f dBTP"),
         ),
         (
-            ("deriva", "Deriva", "%d fr"),
-            ("dsp_p99", "DSP p99", "%.1f ms"),
             ("frecuencia", "Frecuencia", "%s"),
             ("reduccion", "Reducción", "%.1f dB"),
+            ("pico_max", "Máximo", "%+.1f dBTP"),
+            ("diferencia", "Entre muestras", "%.1f dB"),
         ),
     )
     _CAMPOS = tuple(campo for fila in _FILAS for campo in fila)
@@ -427,7 +431,7 @@ class MetricsPanel(QFrame):
                 self._valores[clave] = valor
         # Las tres columnas se reparten el ancho del panel por igual (antes
         # quedaban amontonadas a la izquierda y sobraba medio panel vacío).
-        for columna in range(4):
+        for columna in range(len(self._FILAS[0])):
             grid.setColumnStretch(columna, 1)
         # Interruptor de la medición: apagarla no cambia el audio, solo ahorra
         # CPU. Se dice el coste para que la decisión sea informada.
@@ -441,6 +445,16 @@ class MetricsPanel(QFrame):
         )
         self._medir_pico_real.toggled.connect(self.medir_pico_real_changed)
         grid.addWidget(self._medir_pico_real, len(self._FILAS) * 2, 0, 1, 2)
+        # Botón para poner a cero el máximo: sin él, "Máximo" no sirve de nada.
+        self._reset_picos = QPushButton(self._t("Reiniciar máximo"))
+        self._reset_picos.setToolTip(self._t("Pone a cero el pico máximo medido."))
+        self._reset_picos.setStyleSheet(
+            f"color: {Theme.TEXT_MUTED}; font-size: {Theme.FONT_SIZE_XS}px; "
+            f"background: transparent; border: 1px solid {Theme.BORDER}; "
+            f"border-radius: {Theme.RADIUS_SM}px; padding: 2px 8px;"
+        )
+        self._reset_picos.clicked.connect(self.reiniciar_maximo_clicked)
+        grid.addWidget(self._reset_picos, len(self._FILAS) * 2, 4)
 
     def set_metrics(self, **valores: float | None) -> None:
         """Actualiza los campos indicados; ``None`` o no finito deja ``--``.
@@ -511,6 +525,10 @@ class MetricsPanel(QFrame):
             etiqueta.setText(self._VACIO)
             etiqueta.setStyleSheet(self._estilo(False))
 
+    def tiene_boton_de_reinicio(self) -> bool:
+        """El botón de reinicio existe y está habilitado (para tests)."""
+        return bool(self._reset_picos.isEnabled())
+
     def medir_pico_real_activo(self) -> bool:
         """Estado del interruptor (para tests e informes)."""
         return bool(self._medir_pico_real.isChecked())
@@ -534,6 +552,7 @@ class EqualizerPage(QWidget):
     freq_selected = Signal(int, float)
     #: El usuario apaga/enciende la medición de pico real (solo diagnóstico).
     true_peak_toggled = Signal(bool)
+    reiniciar_picos = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -585,6 +604,7 @@ class EqualizerPage(QWidget):
         # cabía una línea y se cortaba con rutas de dispositivo largas).
         self._metrics = MetricsPanel(self._t)
         self._metrics.medir_pico_real_changed.connect(self.true_peak_toggled)
+        self._metrics.reiniciar_maximo_clicked.connect(self.reiniciar_picos)
         layout.addWidget(self._metrics)
 
         btn_row = QHBoxLayout()
@@ -635,6 +655,10 @@ class EqualizerPage(QWidget):
     def clear_metrics(self) -> None:
         """Motor parado: todos los campos a ``--``."""
         self._metrics.clear()
+
+    def set_medir_pico_real(self, activo: bool) -> None:
+        """Sincroniza el interruptor sin re-emitir (al cargar la config)."""
+        self._metrics.set_medir_pico_real(activo)
 
     def metric_text(self, clave: str) -> str:
         """Texto de un campo de métricas (para tests)."""

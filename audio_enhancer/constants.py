@@ -11,7 +11,7 @@ import sys
 logger = logging.getLogger("audio_enhancer.constants")
 
 APP_NAME = "Audio Enhancer FxStyle"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
 # (C4) APP_DIR eliminado: duplicaba EXE_DIR y nadie lo usaba.
 
 # Título de ventana/bandeja. Se usa también en "traer al frente" de instancia
