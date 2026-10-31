@@ -220,7 +220,9 @@ el limitador al final porque es el único que altera el nivel.
 ## E. Qué NO entra en la 1.8
 
 - Latencia baja con `IAudioClient3` (medida en 2,67 ms de suelo, pero es otra
-  iteración: toca el motor, no el DSP).
+  iteración: toca el motor, no el DSP). **Análisis hecho**: ver
+  `docs/analisis-latencia.md` (desglose medido, palancas, triángulo latencia ↔
+  aislamiento y fases L0-L5 con sus puertas).
 - Integración de la captura por aplicación (aparcada, ver
   `docs/verificacion-v1.7.md` §12.3).
 - Compresor multibanda y convolución: siguen en el backlog.
