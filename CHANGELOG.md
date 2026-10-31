@@ -24,6 +24,19 @@ funciones que la 1.7.1 no tiene.
   preferencia guardada en la configuración. Apagar la medición no cambia el
   audio: la salida con y sin medidor es **idéntica byte a byte** (test).
 
+### Añadido — techo del limitador en dBTP
+- El techo deja de ser el `0,95` heredado y se expresa en **dBTP** (por defecto
+  −0,45 dBTP, exactamente el mismo valor de antes: la conversión es de unidades,
+  no de sonido). Se acota de −6 a 0 dBTP, se guarda en la configuración y aparece
+  en el informe de diagnóstico.
+
+### Añadido — importación de perfiles AutoEQ
+- Botón **Importar AutoEQ…** en el Ecualizador, que lee `ParametricEQ.txt` y
+  `GraphicEQ.txt`, interpola la curva a las bandas activas, recorta a ±12 dB y
+  **avisa** de la pérdida al pasar de muchas bandas a pocas. Previsualiza antes de
+  aplicar y **no empaqueta ningún perfil**: solo lee archivos del usuario, que es
+  lo que evita el problema de licencias de las mediciones de terceros.
+
 ### Verificado — el limitador por true-peak que ya existía
 - Con un seno de 12 kHz que rebasa el techo (−1,80 dBFS de muestra, **+1,21
   dBTP** real): con la casilla "True peak" activa la salida queda en **−0,46

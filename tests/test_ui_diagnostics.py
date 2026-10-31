@@ -373,3 +373,51 @@ def test_el_interruptor_de_pico_real_apaga_la_medicion(window):
 
     panel._medir_pico_real.setChecked(True)
     assert window.engine.medir_true_peak is True
+
+
+GRAFICO_AUTOEQ = "100 4.5; 1000 -2.0; 3000 -3.5; 8000 2.0; 12000 3.0"
+
+
+class TestFlujoEnLaInterfaz:
+    """El importador conectado a la ventana: diálogo simulado, sin tocar el EQ
+    si el usuario cancela."""
+
+    def test_cancelar_el_dialogo_no_cambia_el_eq(self, window, monkeypatch):
+        from PySide6.QtWidgets import QFileDialog
+
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))
+        antes = list(window.state.eq_gains)
+
+        window._on_importar_autoeq()
+
+        assert list(window.state.eq_gains) == antes
+
+    def test_aceptar_aplica_las_ganancias_del_perfil(self, window, monkeypatch, tmp_path):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        ruta = tmp_path / "auriculares.txt"
+        ruta.write_text(GRAFICO_AUTOEQ, encoding="utf-8")
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(ruta), ""))
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+        bandas = list(window.state.eq_bands)
+
+        window._on_importar_autoeq()
+
+        ganancias = list(window.state.eq_gains)
+        assert len(ganancias) == len(bandas)
+        assert any(abs(g) > 0.05 for g in ganancias), "no se aplicó ninguna curva"
+
+    def test_un_archivo_invalido_avisa_y_no_toca_el_eq(self, window, monkeypatch, tmp_path):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        ruta = tmp_path / "basura.txt"
+        ruta.write_text("esto no es un perfil", encoding="utf-8")
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(ruta), ""))
+        avisos = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: avisos.append(a[2]))
+        antes = list(window.state.eq_gains)
+
+        window._on_importar_autoeq()
+
+        assert avisos, "no se avisó del archivo inválido"
+        assert list(window.state.eq_gains) == antes

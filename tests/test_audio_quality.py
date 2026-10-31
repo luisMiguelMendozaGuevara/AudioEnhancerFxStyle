@@ -593,3 +593,40 @@ def test_el_techo_del_limitador_por_defecto_esta_fijado():
     pico = _true_peak_dbtp(salida)
 
     assert pico <= 20.0 * math.log10(0.95) + 0.2, f"true-peak {pico:.2f} dBTP supera el techo"
+
+
+class TestTechoEnDbtp:
+    """El techo del limitador se expresa en dBTP, no en el 0,95 heredado."""
+
+    def test_el_valor_por_defecto_es_exactamente_el_de_antes(self):
+        """Pasar a dBTP no puede cambiar el sonido: 0,95 y -0,4455 dBTP son lo mismo."""
+        from audio_enhancer.dsp import LIMITER_CEILING_DBTP, dbtp_a_lineal
+
+        assert dbtp_a_lineal(LIMITER_CEILING_DBTP) == pytest.approx(0.95, abs=1e-12)
+
+    def test_ida_y_vuelta_entre_dbtp_y_lineal(self):
+        from audio_enhancer.dsp import dbtp_a_lineal, lineal_a_dbtp
+
+        for techo in (-6.0, -3.0, -1.0, 0.0):
+            assert lineal_a_dbtp(dbtp_a_lineal(techo)) == pytest.approx(techo, abs=1e-9)
+
+    def test_un_techo_de_menos_tres_dbtp_se_respeta(self):
+        """Con techo -3 dBTP, la salida no puede pasar de -3 dBTP (+-0,1)."""
+        from audio_enhancer.dsp import Enhancer
+        from audio_enhancer.true_peak import TruePeakMeter
+
+        tasa = 48000
+        t = np.arange(tasa) / tasa
+        senal = np.repeat((1.15 * np.sin(2 * np.pi * 12000 * t + np.deg2rad(45)))[:, None], 2, axis=1)
+        enh = Enhancer()
+        enh.limiter = True
+        enh.true_peak = True
+        enh.limiter_ceiling_dbtp = -3.0
+        enh.limiter_threshold = 10.0 ** (-3.0 / 20.0)
+        salida = np.concatenate([enh.process(senal[i : i + 1024]) for i in range(0, len(senal), 1024)])
+
+        medidor = TruePeakMeter(sample_rate=tasa)
+        for i in range(0, len(salida), 1024):
+            medidor.process(salida[i : i + 1024])
+
+        assert medidor.snapshot()["true_peak_dbtp"] <= -3.0 + 0.1

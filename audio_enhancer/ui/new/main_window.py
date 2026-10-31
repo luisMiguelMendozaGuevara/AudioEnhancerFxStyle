@@ -485,6 +485,7 @@ class NewMainWindow(QMainWindow):
         home.volume_edited.connect(self._on_volume_slider)
         self._pages["equalizer"].true_peak_toggled.connect(self._on_true_peak_toggle)
         self._pages["equalizer"].reiniciar_picos.connect(self._on_reiniciar_picos)
+        self._pages["equalizer"].autoeq_requested.connect(self._on_importar_autoeq)
         audio_page = self._pages["audio"]
         audio_page.input_selected.connect(self._route_guard)
         audio_page.output_selected.connect(self._on_output_device_selected)
@@ -587,6 +588,14 @@ class NewMainWindow(QMainWindow):
         lines += [f"- {d.get('name')} @ {d.get('defaultSampleRate')} Hz" for d in self.loopbacks]
         lines.append("== Dispositivos (salidas) ==")
         lines += [f"- {d.get('name')} @ {d.get('defaultSampleRate')} Hz" for d in self.speakers]
+        lines.append(
+            "- techo: %.2f dBTP (limitador %s, true-peak %s)"
+            % (
+                float(getattr(self.enhancer, "limiter_ceiling_dbtp", -0.4455)),
+                "on" if self.enhancer.limiter else "off",
+                "on" if self.enhancer.true_peak else "off",
+            )
+        )
         lines += ["", "== Motor ==", f"running={self.running}"]
         if self.running:
             # Bloque protegido: este botón lo pulsa un usuario CON problemas; un
@@ -1172,6 +1181,49 @@ class NewMainWindow(QMainWindow):
 
     # ---------- slots de señales del AudioController ----------
 
+    def _on_importar_autoeq(self) -> None:
+        """Lee un perfil de AutoEQ, lo previsualiza y lo aplica si el usuario acepta.
+
+        No se empaqueta ningún perfil: solo se leen archivos que aporte el
+        usuario (ver `docs/diseno-v1.8.md` §C, decisión que evita el problema de
+        licencias de las mediciones de terceros).
+        """
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from ...autoeq import leer_archivo, preparar_importacion
+
+        ruta, _filtro = QFileDialog.getOpenFileName(
+            self,
+            self._t("Elegir perfil de AutoEQ"),
+            "",
+            "AutoEQ (*.txt);;Todos los archivos (*)",
+        )
+        if not ruta:
+            return
+        try:
+            perfil = leer_archivo(ruta)
+            bandas = list(self.state.eq_bands) or list(self.enhancer.eq_bands)
+            resultado = preparar_importacion(perfil, bandas)
+        except ValueError as exc:
+            QMessageBox.warning(self, self._t("Perfil no válido"), str(exc))
+            return
+        actuales = list(self.state.eq_gains)
+        texto = resultado.resumen()
+        if len(actuales) == len(resultado.ganancias):
+            cambios = max(abs(n - v) for n, v in zip(resultado.ganancias, actuales, strict=False))
+            texto += "\n" + (self._t("Cambio máximo: %.1f dB") % cambios)
+        pregunta = QMessageBox.question(
+            self,
+            self._t("Aplicar perfil"),
+            texto + "\n\n" + self._t("¿Aplicar esta curva al ecualizador?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if pregunta != QMessageBox.StandardButton.Yes:
+            return
+        self.state.eq_gains = list(resultado.ganancias)
+        self._save_config()
+        self._status_bar.set_status_text(self._t("Perfil aplicado: %s") % resultado.perfil.nombre, OK)
+
     def _on_reiniciar_picos(self) -> None:
         """Pone a cero el pico máximo medido (no toca el audio)."""
         self.engine.reiniciar_pico_maximo()
@@ -1402,6 +1454,7 @@ class NewMainWindow(QMainWindow):
                 limiter=cfg["limiter"],
                 compressor=cfg["compressor"],
                 true_peak=cfg["true_peak"],
+                limiter_ceiling_dbtp=float(cfg.get("limiter_ceiling_dbtp", -0.4455)),
                 blend=float(self.enhancer.blend),
             )
         )
@@ -1457,6 +1510,7 @@ class NewMainWindow(QMainWindow):
             "compressor": bool(self.enhancer.compressor),
             "true_peak": bool(self.enhancer.true_peak),
             "medir_true_peak": bool(self.engine.medir_true_peak),
+            "limiter_ceiling_dbtp": float(getattr(self.enhancer, "limiter_ceiling_dbtp", -0.4455)),
             "safety_ceiling": bool(self.enhancer.safety_ceiling_enabled),
             "final_clip": bool(self.enhancer.final_clip_enabled),
             "crossfeed": bool(self.enhancer.crossfeed),

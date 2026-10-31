@@ -28,6 +28,9 @@ from .dsp import (
     EQ_BAND_SETS,
     EQ_FREQ_MAX,
     EQ_FREQ_MIN,
+    LIMITER_CEILING_DBTP,
+    LIMITER_CEILING_MAX_DBTP,
+    LIMITER_CEILING_MIN_DBTP,
     MASTER_DB_MAX,
     MASTER_DB_MIN,
 )
@@ -306,6 +309,15 @@ class ConfigManager:
             "true_peak": self.as_bool(raw.get("true_peak"), True),
             # Medición de pico real (solo diagnóstico; no afecta al audio).
             "medir_true_peak": self.as_bool(raw.get("medir_true_peak"), True),
+            # Techo del limitador en dBTP (pico real): fuera de rango se acota,
+            # no se descarta (un -8 dBTP guardado por error pasa a -6, no a 0).
+            "limiter_ceiling_dbtp": min(
+                LIMITER_CEILING_MAX_DBTP,
+                max(
+                    LIMITER_CEILING_MIN_DBTP,
+                    self.as_float(raw.get("limiter_ceiling_dbtp"), LIMITER_CEILING_DBTP),
+                ),
+            ),
             "safety_ceiling": self.as_bool(raw.get("safety_ceiling"), True),
             "final_clip": self.as_bool(raw.get("final_clip"), True),
             "crossfeed": self.as_bool(raw.get("crossfeed"), False),

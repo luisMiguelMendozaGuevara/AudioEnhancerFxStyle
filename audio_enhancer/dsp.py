@@ -158,6 +158,26 @@ MASTER_DB_MIN, MASTER_DB_MAX = -20.0, 20.0
 # DC blocker al inicio de la cadena: paso-alto de 1 polo a ~10 Hz.
 DC_BLOCK_HZ = 10.0
 
+# Techo del limitador en dBTP. Es el 0,95 heredado (pico de muestra) expresado en
+# pico real: 20*log10(0,95) = -0,4455 dBTP. Se define así para que la ida y la
+# vuelta (dBTP -> lineal -> dBTP) den exactamente el valor de siempre y el sonido
+# NO cambie al pasar de "0,95" a "-0,45 dBTP".
+LIMITER_CEILING_DBTP = 20.0 * math.log10(0.95)
+# Rango admitido: por debajo de -6 dBTP se pierde demasiado nivel; por encima de
+# 0 dBTP se recorta en el convertidor del altavoz.
+LIMITER_CEILING_MIN_DBTP = -6.0
+LIMITER_CEILING_MAX_DBTP = 0.0
+
+
+def dbtp_a_lineal(techo_dbtp: float) -> float:
+    """Convierte un techo en dBTP a amplitud lineal (la que usa el limitador)."""
+    return float(10.0 ** (float(techo_dbtp) / 20.0))
+
+
+def lineal_a_dbtp(amplitud: float) -> float:
+    """Convierte una amplitud lineal a dBTP (0 si no hay señal)."""
+    return 20.0 * math.log10(amplitud) if amplitud > 0 else -200.0
+
 
 def default_effects() -> dict[str, float]:
     """Efectos nuevos a 0 (apagados): la cadena suena igual que antes."""
@@ -374,6 +394,8 @@ class EnhancerParams:
     limiter: bool = True
     compressor: bool = True
     true_peak: bool = True
+    #: Techo del limitador en dBTP (ver LIMITER_CEILING_DBTP).
+    limiter_ceiling_dbtp: float = LIMITER_CEILING_DBTP
     blend: float = 1.0
     crossfeed: bool = False
     crossfeed_preset: str = "Natural"
@@ -408,7 +430,9 @@ class Enhancer:
         self.eq_q_values: list[float] = [1.4] * len(self.eq_bands)
         # Limitador brickwall con look-ahead (seguridad a nivel final)
         self.limiter: bool = True
-        self.limiter_threshold: float = 0.95  # techo (pico de salida)
+        self.limiter_ceiling_dbtp: float = LIMITER_CEILING_DBTP
+        # Derivado del techo en dBTP: nunca se asigna a mano (ver el setter).
+        self.limiter_threshold: float = dbtp_a_lineal(LIMITER_CEILING_DBTP)
         # Techo de seguridad para cuando el limitador musical está APAGADO:
         # sin él, el único techo de la cadena era np.clip (recorte duro:
         # muestras clavadas a +-1.0 = flat-top audible, ~62% del bloque con
@@ -717,6 +741,10 @@ class Enhancer:
         self.limiter = bool(params.limiter)
         self.compressor = bool(params.compressor)
         self.true_peak = bool(params.true_peak)
+        self.limiter_ceiling_dbtp = float(
+            min(LIMITER_CEILING_MAX_DBTP, max(LIMITER_CEILING_MIN_DBTP, float(params.limiter_ceiling_dbtp)))
+        )
+        self.limiter_threshold = dbtp_a_lineal(self.limiter_ceiling_dbtp)
         self.blend = float(params.blend)
         self.crossfeed = bool(params.crossfeed)
         self.crossfeed_preset = str(params.crossfeed_preset)

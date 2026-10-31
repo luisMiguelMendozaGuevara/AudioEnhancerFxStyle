@@ -185,3 +185,44 @@ cambia Clarity, el EQ de fábrica o se sube el realce de agudos.
 Nota de lectura: la sibilante **absoluta** sube +6,24 dB con el preset, pero eso
 es el `dynamic_boost` y la nivelación subiendo todo el material, no un
 endurecimiento del timbre. Por eso la medida se hace contra el cuerpo.
+
+## A2 — Techo del limitador en dBTP (cerrado)
+
+Antes el techo era el número heredado `limiter_threshold = 0,95`, que en términos
+de pico real son **−0,4455 dBTP** por casualidad aritmética. Ahora el techo se
+expresa como tal:
+
+- `LIMITER_CEILING_DBTP = 20·log10(0,95) = −0,4455 dBTP`, y el umbral lineal se
+  **deriva** de él (`dbtp_a_lineal`). La ida y la vuelta dan 0,95 exacto
+  (diferencia < 1e-12), así que **el sonido no cambia** al pasar de un número al
+  otro: es un cambio de unidades, no de comportamiento.
+- Rango admitido: −6 a 0 dBTP. Se acota en la configuración (un −8 guardado por
+  error pasa a −6, no a 0).
+- Se guarda en `config.json` como `limiter_ceiling_dbtp` y aparece en el informe
+  de diagnóstico (`- techo: -0.45 dBTP (limitador on, true-peak on)`), que es
+  donde hace falta saberlo cuando alguien reporta recortes.
+- Verificado con techo −3 dBTP: la salida no pasa de −2,9 dBTP.
+
+## C — Importador de AutoEQ (cerrado)
+
+Módulo `audio_enhancer/autoeq.py` (18 tests) + botón **Importar AutoEQ…** en la
+página del Ecualizador.
+
+**Decisión que resuelve el problema legal**: no se empaqueta ningún perfil. Se
+leen archivos que aporte el usuario (`ParametricEQ.txt` y `GraphicEQ.txt`), y se
+guarda la procedencia (nombre del archivo). Así el MIT del repositorio de AutoEQ y
+la licencia de las mediciones de terceros dejan de ser un bloqueador: **no se
+redistribuye nada**.
+
+| criterio | resultado |
+|---|---|
+`ParametricEQ.txt` | lee los filtros `ON`; descarta `OFF`, `LP/HP/BP` y frecuencias fuera de 20 Hz-20 kHz |
+`GraphicEQ.txt` | pares frecuencia/ganancia, hasta 127 puntos |
+Formato desconocido | mensaje claro, sin excepción, y **el EQ no se toca** |
+Interpolación | log-frecuencia; fuera del rango del archivo se usa el valor del extremo (no se extrapola) |
+Límites | ganancias recortadas a ±12 dB, con aviso |
+Avisos | pérdida al pasar de N puntos a 9 bandas, y si el perfil no cubre toda la banda |
+Previsualización | el diálogo dice formato, puntos y ganancia máxima **antes** de aplicar |
+Cancelar | no cambia ni una banda del EQ (test) |
+
+**626 tests** en total · ruff/format/mypy limpios.

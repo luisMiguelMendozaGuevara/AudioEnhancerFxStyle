@@ -210,8 +210,8 @@ Cada paso termina en verde (tests + ruff + mypy) y con una medida anotada en
    (`benchmarks/medir_sibilancia.py`: Clarity sube la banda 12-18 kHz +18,7 dB y
    deja la de la sibilante en −0,04 dB; el preset de fábrica la BAJA 2,87 dB).
 4. ~~**B2 — de-esser**~~ **NO SE HACE**: B1 lo descartó con número.
-5. **A2 — limitador por true-peak** (opt-in, apagado por defecto).
-6. **C — importador AutoEQ**, con previsualización.
+5. ~~**A2 — techo en dBTP**~~ **HECHO** (`LIMITER_CEILING_DBTP`, ida y vuelta exacta con el 0,95 de siempre).
+6. ~~**C — importador AutoEQ**~~ **HECHO** (`audio_enhancer/autoeq.py` + botón en el Ecualizador; no se empaqueta ningún perfil).
 
 Motivo del orden: los dos primeros **no cambian el sonido** y son los que dan la
 información para decidir el resto. El de-esser va después de su propia medición y

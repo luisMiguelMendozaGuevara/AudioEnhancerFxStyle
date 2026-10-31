@@ -553,6 +553,8 @@ class EqualizerPage(QWidget):
     #: El usuario apaga/enciende la medición de pico real (solo diagnóstico).
     true_peak_toggled = Signal(bool)
     reiniciar_picos = Signal()
+    #: El usuario quiere importar un perfil de AutoEQ (la ventana abre el diálogo).
+    autoeq_requested = Signal()
 
     def __init__(self, state: AudioState, t=None, parent=None) -> None:
         super().__init__(parent)
@@ -614,6 +616,15 @@ class EqualizerPage(QWidget):
         self._reset_btn.setMinimumWidth(100)
         self._reset_btn.clicked.connect(self._reset_all)
         btn_row.addWidget(self._reset_btn)
+        # Importar un perfil de AutoEQ: lo lee la ventana (necesita diálogo), así
+        # que la página solo pide.
+        self._autoeq_btn = QPushButton(self._t("Importar AutoEQ…"))
+        self._autoeq_btn.setMinimumWidth(140)
+        self._autoeq_btn.setToolTip(
+            self._t("Carga un archivo ParametricEQ.txt o GraphicEQ.txt y aplica su curva al ecualizador.")
+        )
+        self._autoeq_btn.clicked.connect(self.autoeq_requested)
+        btn_row.addWidget(self._autoeq_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 

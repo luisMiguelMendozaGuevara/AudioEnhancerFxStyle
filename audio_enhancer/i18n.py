@@ -45,6 +45,16 @@ TRANSLATIONS = {
     "Frecuencia": "Sample rate",
     "Medir pico real (~3 % CPU)": "Measure true peak (~3% CPU)",
     "Pico": "Peak",
+    "Perfil aplicado: %s": "Profile applied: %s",
+    "Cambio máximo: %.1f dB": "Max change: %.1f dB",
+    "¿Aplicar esta curva al ecualizador?": "Apply this curve to the equalizer?",
+    "Aplicar perfil": "Apply profile",
+    "Perfil no válido": "Invalid profile",
+    "Elegir perfil de AutoEQ": "Choose an AutoEQ profile",
+    "Carga un archivo ParametricEQ.txt o GraphicEQ.txt y aplica su curva al ecualizador.": (
+        "Load a ParametricEQ.txt or GraphicEQ.txt file and apply its curve to the equalizer."
+    ),
+    "Importar AutoEQ…": "Import AutoEQ…",
     "Pico máximo reiniciado": "Peak max reset",
     "Pone a cero el pico máximo medido.": "Resets the measured peak max.",
     "Reiniciar máximo": "Reset max",
